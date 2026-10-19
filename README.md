@@ -70,7 +70,7 @@ docker compose logs -f bot
 ```text
 http://服务器IP:8080/admin/
 ```
-使用 `.env` 中的 `ADMIN_WEB_USER / ADMIN_WEB_PASSWORD` 登录。
+首次使用 `.env` 中的 `ADMIN_WEB_USER / ADMIN_WEB_PASSWORD` 登录（首次启动时自动创建为超级管理员），之后可在后台添加更多账号。
 健康检查：
 ```bash
 curl http://127.0.0.1:8080/healthz
@@ -295,7 +295,7 @@ DELETE   /admin/api/pushes/:id
 - 同一个周期不重叠执行。发送耗时过长或服务停机时，不逐轮补发积压：恢复服务后最多处理一轮到期消息，后续回到原时间间隔。暂停尚未开始的任务，恢复时跳过已错过的时间点；暂停发送中的任务，恢复时继续未完成的用户。
 - 暂停、恢复、取消作用于原周期任务。取消后重试失败用户仅补发本轮，不恢复周期。历史记录可独立重试、删除；删除历史不会停止原周期，停止周期请取消原任务。发送准备失败会终止该任务并显示原因，修正配置后可重新创建。
 - 所有选择框使用统一的自定义菜单，支持方向键、Home/End、Enter、Escape 和首字母定位。业务类型保留自由输入，并提供常用类型快捷按钮。
-- 后台使用 `/admin/login` 登录，账号密码仍来自 `ADMIN_WEB_USER / ADMIN_WEB_PASSWORD`。左下角「退出」撤销 Redis 中当前会话；有效期为 12 小时，更改配置中的凭据并重启后旧会话失效。
+- 后台支持多账号，账号存于 `admin_users` 表。首次启动且没有任何账号时，用 `.env` 的 `ADMIN_WEB_USER / ADMIN_WEB_PASSWORD` 创建第一个超级管理员；之后修改 `.env` 不再影响登录，账号在后台「系统设置 → 后台账号」维护。超级管理员拥有全部权限并可管理账号与角色；普通管理员的可访问页面由所属「角色权限」决定（未分配角色则没有页面权限），后台接口同样按角色校验，角色修改立即生效；系统始终保留至少一个启用的超级管理员。任何账号可在左下角「改密」修改自己的密码。左下角「退出」撤销 Redis 中当前会话；有效期为 12 小时，账号被停用、删除或修改密码后其会话立即失效。提现审核、工单回复、推送创建记录实际操作账号。
 - 后台 API 不再接受 HTTP Basic Auth。脚本需先 `POST /admin/login`，提交 JSON `username`、`password` 并保存响应 Cookie；之后携带 Cookie 访问。所有写入请求（含登录、退出、上传）必须带 `X-Requested-With: admin-console`。退出接口为 `POST /admin/logout`。使用 HTTPS 时会设置 Secure Cookie。
 
 升级时先停止旧版本，启动新版本自动增加 `push_campaigns.repeat_seconds` 和 `parent_id` 字段，已有任务仍为单次推送。无需修改原有管理员账号，但需在新登录页重新登录。

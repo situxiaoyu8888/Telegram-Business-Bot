@@ -70,6 +70,9 @@ func New(cfg config.Config, logger *zap.Logger) (*App, error) {
 		"/uploads",
 		cfg.UploadDir,
 	)
+	if err := admin.Bootstrap(st.DB, cfg.AdminWebUser, cfg.AdminWebPassword); err != nil {
+		return nil, fmt.Errorf("bootstrap admin account: %w", err)
+	}
 	bots := business.New(st, tg, cfg.BusinessBotKey, cfg.TelegramBotToken, cfg.AdminTelegramBotToken)
 	bots.Router = func(id uint64, client *telegram.Client) *telegram.Router {
 		return telegram.NewRouter(client, st, sessions.WithNamespace(fmt.Sprintf("business:%d", id)), walletSvc, menuSvc, supportSvc, refSvc, cfg.AdminIDs, "", false, logger).WithBotID(id)
@@ -83,8 +86,6 @@ func New(cfg config.Config, logger *zap.Logger) (*App, error) {
 		supportSvc,
 		tg,
 		pushSvc,
-		cfg.AdminWebUser,
-		cfg.AdminWebPassword,
 		cfg.UploadDir,
 		cfg.UploadPublicBaseURL,
 		cfg.UploadMaxImageMB,

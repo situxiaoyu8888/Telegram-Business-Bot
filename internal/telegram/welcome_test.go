@@ -1,0 +1,63 @@
+package telegram
+
+import (
+	"context"
+	"database/sql/driver"
+	"io"
+	"net/http"
+	"strings"
+	"testing"
+
+	"telegram-business-bot/internal/testutil"
+)
+
+func TestWelcomeUsesConfiguredTextEscaped(t *testing.T) {
+	r, tr := merchantRouter(t, testutil.Step{Contains: "system_configs", Columns: []string{"key", "value"}, Rows: [][]driver.Value{{"welcome_text", "欢迎 <VIP>"}}})
+	r.sendWelcome(context.Background(), 5)
+	if !strings.HasSuffix(tr.method, "/sendMessage") || tr.payload["text"] != "欢迎 &lt;VIP&gt;" {
+		t.Fatal(tr.method, tr.payload)
+	}
+}
+
+func TestWelcomeEmptyTextDisabled(t *testing.T) {
+	r, tr := merchantRouter(t, testutil.Step{Contains: "system_configs", Columns: []string{"key", "value"}, Rows: [][]driver.Value{{"welcome_text", "  "}}})
+	r.sendWelcome(context.Background(), 5)
+	if tr.method != "" {
+		t.Fatal("sent welcome with empty text", tr.payload)
+	}
+}
+
+func TestHomeWithOnlyInlineMenusSendsSingleMessage(t *testing.T) {
+	r, tr := merchantRouter(t,
+		testutil.Step{Contains: "system_configs", Columns: []string{"value"}, Rows: [][]driver.Value{{"SKK百事通"}}},
+		testutil.Step{Contains: "placement=?", Columns: []string{"id"}},
+		testutil.Step{Contains: "placement<>?", Columns: []string{"id", "code", "title", "action_type", "action_value", "row_no", "sort", "enabled", "role"}, Rows: [][]driver.Value{{int64(1), "wallet", "我的钱包", "builtin", "wallet", int64(1), int64(1), true, "user"}}},
+	)
+	tr.calls = 0
+	r.sendHome(context.Background(), 5, 5)
+	text, _ := tr.payload["text"].(string)
+	if tr.calls != 1 || !strings.Contains(text, "SKK百事通") || strings.Contains(text, "更多功能") || tr.payload["reply_markup"].(map[string]any)["inline_keyboard"] == nil {
+		t.Fatal(tr.calls, tr.payload)
+	}
+}
+
+func TestUsernameIsCachedAfterSuccess(t *testing.T) {
+	tr := &usernameTransport{}
+	c := NewClient("test")
+	c.http = &http.Client{Transport: tr}
+	for i := 0; i < 2; i++ {
+		if name, err := c.Username(context.Background()); err != nil || name != "skk_bot" {
+			t.Fatal(name, err)
+		}
+	}
+	if tr.calls != 1 {
+		t.Fatal("getMe calls", tr.calls)
+	}
+}
+
+type usernameTransport struct{ calls int }
+
+func (u *usernameTransport) RoundTrip(*http.Request) (*http.Response, error) {
+	u.calls++
+	return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"ok":true,"result":{"id":1,"username":"skk_bot"}}`))}, nil
+}

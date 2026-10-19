@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -17,6 +18,24 @@ type Client struct {
 	token string
 	base  string
 	http  *http.Client
+
+	mu       sync.Mutex
+	username string // cached from getMe
+}
+
+// Username returns this bot's @username, calling getMe once and caching the success.
+func (c *Client) Username(ctx context.Context) (string, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.username != "" {
+		return c.username, nil
+	}
+	me, err := c.GetMe(ctx)
+	if err != nil {
+		return "", err
+	}
+	c.username = me.Username
+	return c.username, nil
 }
 
 func NewClient(token string) *Client {

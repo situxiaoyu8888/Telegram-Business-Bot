@@ -133,6 +133,32 @@ type MenuItem struct {
 	UpdatedAt   time.Time `json:"updated_at"`
 }
 
+// AdminUser is a web console account. Role is "super" (manages accounts) or "admin".
+type AdminUser struct {
+	ID           uint64     `gorm:"primaryKey" json:"id"`
+	Username     string     `gorm:"size:64;uniqueIndex;not null" json:"username"`
+	PasswordHash string     `gorm:"size:100;not null" json:"-"`
+	Role         string     `gorm:"size:16;not null" json:"role"`
+	RoleID       uint64     `gorm:"not null;default:0;index" json:"role_id"` // AdminRole for role "admin"; ignored for "super"
+	Enabled      bool       `gorm:"not null" json:"enabled"`
+	LastLoginAt  *time.Time `json:"last_login_at"`
+	CreatedAt    time.Time  `json:"created_at"`
+	UpdatedAt    time.Time  `json:"updated_at"`
+}
+
+// AdminRole is a permission template: the console pages its accounts may use.
+type AdminRole struct {
+	ID          uint64    `gorm:"primaryKey" json:"id"`
+	Name        string    `gorm:"size:64;uniqueIndex;not null" json:"name"`
+	Permissions string    `gorm:"type:text" json:"permissions"` // comma-separated page keys
+	Remark      string    `gorm:"size:255" json:"remark"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
+}
+
+// DefaultWelcomeText is sent when a user activates a bot for the first time.
+const DefaultWelcomeText = "👋 欢迎使用！点击下方菜单即可开始。"
+
 type SystemConfig struct {
 	ID        uint64    `gorm:"primaryKey" json:"id"`
 	Key       string    `gorm:"size:128;uniqueIndex;not null" json:"key"`

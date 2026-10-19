@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -12,6 +13,9 @@ import (
 
 	"telegram-business-bot/internal/app"
 	"telegram-business-bot/internal/config"
+	"telegram-business-bot/internal/logging"
+
+	"github.com/gin-gonic/gin"
 
 	"go.uber.org/zap"
 )
@@ -22,14 +26,23 @@ func main() {
 		log.Fatal(err)
 	}
 
-	logger, err := zap.NewProduction()
-	if cfg.AppEnv == "dev" {
-		logger, err = zap.NewDevelopment()
-	}
+	logger, logFile, err := logging.New(logging.Options{
+		Dev:        cfg.AppEnv == "dev",
+		Dir:        cfg.LogDir,
+		MaxSizeMB:  cfg.LogMaxSizeMB,
+		MaxBackups: cfg.LogMaxBackups,
+		MaxAgeDays: cfg.LogMaxAgeDays,
+	})
 	if err != nil {
 		log.Fatal(err)
 	}
 	defer logger.Sync()
+	if logFile != nil {
+		defer logFile.Close()
+		// HTTP panic stacks from gin.Recovery go to the log file as well.
+		gin.DefaultErrorWriter = io.MultiWriter(os.Stderr, logFile)
+		logger.Info("file logging enabled", zap.String("dir", cfg.LogDir))
+	}
 
 	application, err := app.New(cfg, logger)
 	if err != nil {

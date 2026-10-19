@@ -28,7 +28,7 @@ func New(mysqlDSN, redisAddr, redisPassword string, redisDB int) (*Store, error)
 	if err := db.AutoMigrate(
 		&model.TelegramUser{}, &model.WalletAccount{}, &model.WalletTransaction{}, &model.DepositAddress{}, &model.DepositOrder{},
 		&model.WithdrawalOrder{}, &model.ReferralCommission{}, &model.SupportTicket{}, &model.MenuItem{}, &model.SystemConfig{}, &model.ActionLog{},
-		&model.Merchant{}, &model.BusinessBot{}, &model.BotSubscription{}, &model.PushRoute{}, &model.PushCampaign{}, &model.PushRecipient{}, &model.ReferralGrant{}, &model.SeedMigration{},
+		&model.Merchant{}, &model.BusinessBot{}, &model.BotSubscription{}, &model.PushRoute{}, &model.PushCampaign{}, &model.PushRecipient{}, &model.ReferralGrant{}, &model.SeedMigration{}, &model.AdminUser{}, &model.AdminRole{},
 	); err != nil {
 		return nil, fmt.Errorf("auto migrate: %w", err)
 	}
@@ -41,6 +41,10 @@ func New(mysqlDSN, redisAddr, redisPassword string, redisDB int) (*Store, error)
 		return nil, err
 	}
 	if err := s.seedSubscriptions(); err != nil {
+		return nil, err
+	}
+	// Added after defaults_v1; the unique key makes this a no-op once present.
+	if err := db.Clauses(clause.OnConflict{DoNothing: true}).Create(&model.SystemConfig{Key: "welcome_text", Value: model.DefaultWelcomeText, Remark: "首次激活欢迎语（留空则不发送）"}).Error; err != nil {
 		return nil, err
 	}
 	return s, nil

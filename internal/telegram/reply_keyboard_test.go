@@ -25,10 +25,12 @@ type menuTransport struct {
 	t       *testing.T
 	method  string
 	payload map[string]any
+	calls   int
 }
 
 func (m *menuTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	m.method = req.URL.Path
+	m.calls++
 	if err := json.NewDecoder(req.Body).Decode(&m.payload); err != nil {
 		m.t.Fatal(err)
 	}

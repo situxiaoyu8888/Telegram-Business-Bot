@@ -27,15 +27,13 @@ import (
 
 type Handler struct {
 	sessionBackend sessionStore
+	accountBackend accountStore
 	bots           *business.Service
 	st             *store.Store
 	wallet         *wallet.Service
 	support        *support.Service
 	tg             *telegram.Client
 	push           *push.Service
-
-	user string
-	pass string
 
 	uploadDir           string
 	uploadPublicBaseURL string
@@ -49,8 +47,6 @@ func New(
 	s *support.Service,
 	tg *telegram.Client,
 	pushSvc *push.Service,
-	user string,
-	pass string,
 	uploadDir string,
 	uploadPublicBaseURL string,
 	uploadMaxImageMB int64,
@@ -62,8 +58,6 @@ func New(
 		support:             s,
 		tg:                  tg,
 		push:                pushSvc,
-		user:                user,
-		pass:                pass,
 		uploadDir:           uploadDir,
 		uploadPublicBaseURL: uploadPublicBaseURL,
 		uploadMaxImageMB:    uploadMaxImageMB,
@@ -76,25 +70,27 @@ func (h *Handler) Register(r *gin.Engine) {
 	r.POST("/admin/login", h.login)
 	r.POST("/admin/logout", h.logout)
 	g := r.Group("/admin", h.requireSession)
-	g.GET("/api/session", func(c *gin.Context) { c.JSON(200, gin.H{"ok": true}) })
+	g.GET("/api/session", h.session)
 
 	g.GET("/", h.page)
 
 	api := g.Group("/api")
+	// Each route names the pages that may use it; super administrators pass every check.
+	can := requirePermission
 
 	api.GET("/dashboard", h.dashboard)
-	api.GET("/users", h.users)
+	api.GET("/users", can("users"), h.users)
 
-	api.GET("/withdrawals", h.withdrawals)
-	api.POST("/withdrawals/:id/approve", h.approve)
-	api.POST("/withdrawals/:id/reject", h.reject)
-	api.POST("/withdrawals/:id/complete", h.complete)
+	api.GET("/withdrawals", can("withdrawals"), h.withdrawals)
+	api.POST("/withdrawals/:id/approve", can("withdrawals"), h.approve)
+	api.POST("/withdrawals/:id/reject", can("withdrawals"), h.reject)
+	api.POST("/withdrawals/:id/complete", can("withdrawals"), h.complete)
 
-	api.GET("/deposits", h.deposits)
+	api.GET("/deposits", can("deposits"), h.deposits)
 
-	api.GET("/addresses", h.addresses)
-	api.POST("/addresses", h.saveAddress)
-	api.POST("/addresses/:id/rescan", func(c *gin.Context) {
+	api.GET("/addresses", can("addresses"), h.addresses)
+	api.POST("/addresses", can("addresses"), h.saveAddress)
+	api.POST("/addresses/:id/rescan", can("addresses"), func(c *gin.Context) {
 		id, ok := idParam(c)
 		if !ok {
 			return
@@ -111,34 +107,46 @@ func (h *Handler) Register(r *gin.Engine) {
 		c.JSON(200, gin.H{"ok": true})
 	})
 
-	api.GET("/tickets", h.tickets)
-	api.POST("/tickets/:id/reply", h.replyTicket)
+	api.GET("/tickets", can("tickets"), h.tickets)
+	api.POST("/tickets/:id/reply", can("tickets"), h.replyTicket)
 
-	api.GET("/merchants", h.merchants)
-	api.POST("/merchants", h.saveMerchant)
-	api.DELETE("/merchants/:id", h.deleteMerchant)
-	api.GET("/menus", h.menus)
-	api.POST("/menus", h.saveMenu)
-	api.DELETE("/menus/:id", h.deleteMenu)
+	api.GET("/merchants", can("merchants"), h.merchants)
+	api.POST("/merchants", can("merchants"), h.saveMerchant)
+	api.DELETE("/merchants/:id", can("merchants"), h.deleteMerchant)
+	// The merchant form picks its category from the menu list.
+	api.GET("/menus", can("menus", "merchants"), h.menus)
+	api.POST("/menus", can("menus"), h.saveMenu)
+	api.DELETE("/menus/:id", can("menus"), h.deleteMenu)
 
-	api.GET("/configs", h.configs)
-	api.POST("/configs", h.saveConfig)
+	api.GET("/configs", can("configs"), h.configs)
+	api.POST("/configs", can("configs"), h.saveConfig)
 
-	api.POST("/upload", h.uploadMedia)
+	api.POST("/upload", can("pushes", "menus"), h.uploadMedia)
 
-	api.GET("/pushes", h.pushes)
-	api.POST("/pushes", h.createPush)
-	api.GET("/pushes/:id/recipients", h.pushRecipients)
-	api.POST("/pushes/:id/cancel", h.cancelPush)
-	api.POST("/pushes/:id/retry", h.retryPush)
-	api.POST("/pushes/:id/pause", h.pausePush)
-	api.POST("/pushes/:id/resume", h.resumePush)
-	api.DELETE("/pushes/:id", h.deletePush)
-	api.GET("/bots", h.listBots)
-	api.POST("/bots", h.saveBot)
-	api.GET("/routes", h.listRoutes)
-	api.POST("/routes", h.saveRoute)
-	api.DELETE("/routes/:id", h.deleteRoute)
+	api.GET("/pushes", can("pushes"), h.pushes)
+	api.POST("/pushes", can("pushes"), h.createPush)
+	api.GET("/pushes/:id/recipients", can("pushes"), h.pushRecipients)
+	api.POST("/pushes/:id/cancel", can("pushes"), h.cancelPush)
+	api.POST("/pushes/:id/retry", can("pushes"), h.retryPush)
+	api.POST("/pushes/:id/pause", can("pushes"), h.pausePush)
+	api.POST("/pushes/:id/resume", can("pushes"), h.resumePush)
+	api.DELETE("/pushes/:id", can("pushes"), h.deletePush)
+	// Push and route pages show bot names and the route table.
+	api.GET("/bots", can("bots", "pushes", "routes"), h.listBots)
+	api.POST("/bots", can("bots"), h.saveBot)
+	api.GET("/routes", can("routes", "pushes"), h.listRoutes)
+	api.POST("/routes", can("routes"), h.saveRoute)
+	api.DELETE("/routes/:id", can("routes"), h.deleteRoute)
+
+	api.POST("/account/password", h.changePassword)
+	accounts := api.Group("/accounts", requireSuper)
+	accounts.GET("", h.listAccounts)
+	accounts.POST("", h.saveAccount)
+	accounts.DELETE("/:id", h.deleteAccount)
+	roles := api.Group("/roles", requireSuper)
+	roles.GET("", h.listRoles)
+	roles.POST("", h.saveRole)
+	roles.DELETE("/:id", h.deleteRole)
 }
 
 func (h *Handler) page(c *gin.Context) {
@@ -234,7 +242,7 @@ func (h *Handler) approve(c *gin.Context) {
 		Note string `json:"note"`
 	}
 	_ = c.ShouldBindJSON(&b)
-	if err := h.wallet.ApproveWithdrawal(id, h.user, b.Note); err != nil {
+	if err := h.wallet.ApproveWithdrawal(id, operator(c), b.Note); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
@@ -250,7 +258,7 @@ func (h *Handler) reject(c *gin.Context) {
 		Note string `json:"note"`
 	}
 	_ = c.ShouldBindJSON(&b)
-	if err := h.wallet.RejectWithdrawal(id, h.user, b.Note); err != nil {
+	if err := h.wallet.RejectWithdrawal(id, operator(c), b.Note); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
@@ -269,7 +277,7 @@ func (h *Handler) complete(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "txid required"})
 		return
 	}
-	if err := h.wallet.CompleteWithdrawal(id, b.TxID, h.user); err != nil {
+	if err := h.wallet.CompleteWithdrawal(id, b.TxID, operator(c)); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
@@ -288,7 +296,7 @@ func (h *Handler) replyTicket(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "reply required"})
 		return
 	}
-	if err := h.support.Reply(c.Request.Context(), id, h.user, b.Reply, func(ctx context.Context, tgID int64, reply string) error {
+	if err := h.support.Reply(c.Request.Context(), id, operator(c), b.Reply, func(ctx context.Context, tgID int64, reply string) error {
 		var source model.SupportTicket
 		if err := h.st.DB.Select("bot_id").First(&source, id).Error; err != nil {
 			return err
@@ -620,7 +628,7 @@ func (h *Handler) createPush(c *gin.Context) {
 			TargetValue: b.TargetValue,
 			ScheduledAt: scheduled,
 		},
-		h.user,
+		operator(c),
 	)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})

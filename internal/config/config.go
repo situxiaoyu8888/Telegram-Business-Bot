@@ -49,6 +49,11 @@ type Config struct {
 	UploadPublicBaseURL string
 	UploadMaxImageMB    int64
 	UploadMaxVideoMB    int64
+
+	LogDir        string
+	LogMaxSizeMB  int
+	LogMaxBackups int
+	LogMaxAgeDays int
 }
 
 func Load() (Config, error) {
@@ -134,6 +139,28 @@ func load(path string) (Config, error) {
 	cfg.UploadMaxVideoMB, err = strconv.ParseInt(mustEnv("UPLOAD_MAX_VIDEO_MB"), 10, 64)
 	if err != nil || cfg.UploadMaxVideoMB <= 0 {
 		return Config{}, fmt.Errorf("UPLOAD_MAX_VIDEO_MB invalid")
+	}
+
+	// Log settings are optional so existing .env files keep working; LOG_DIR=off disables file output.
+	cfg.LogDir = mustEnv("LOG_DIR")
+	if cfg.LogDir == "" {
+		cfg.LogDir = "./logs"
+	} else if cfg.LogDir == "off" {
+		cfg.LogDir = ""
+	}
+	for _, v := range []struct {
+		key string
+		def int
+		dst *int
+	}{{"LOG_MAX_SIZE_MB", 100, &cfg.LogMaxSizeMB}, {"LOG_MAX_BACKUPS", 30, &cfg.LogMaxBackups}, {"LOG_MAX_AGE_DAYS", 30, &cfg.LogMaxAgeDays}} {
+		*v.dst = v.def
+		if raw := mustEnv(v.key); raw != "" {
+			n, err := strconv.Atoi(raw)
+			if err != nil || n <= 0 {
+				return Config{}, fmt.Errorf("%s must be positive", v.key)
+			}
+			*v.dst = n
+		}
 	}
 
 	if cfg.TelegramMode != "polling" && cfg.TelegramMode != "webhook" {

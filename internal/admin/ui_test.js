@@ -125,3 +125,22 @@ test('photo menu submits image and contact button settings',async()=>{
  const payload=JSON.parse(h.requests.find(r=>r.options.method==='POST').options.body);
  assert.equal(payload.action_type,'photo');assert.equal(payload.image_url,'https://example.com/contact.png');assert.equal(payload.button_text,'联系客服');assert.equal(payload.action_value,'https://t.me/contact');
 });
+test('account management is only listed for super administrators',()=>{
+ const h=harness();
+ h.run("me={id:2,role:'admin'};nav()");
+ assert.ok(!h.elements.get('navigation').innerHTML.includes('data-nav="accounts"'));
+ h.run("me={id:1,role:'super'};nav()");
+ assert.ok(h.elements.get('navigation').innerHTML.includes('data-nav="accounts"'));
+ h.run("current='accounts'");
+ assert.ok(!h.run("rowActions({id:1})").includes('data-action="delete"'),'own account must not be deletable');
+ assert.ok(h.run("rowActions({id:3})").includes('data-action="delete"'));
+});
+test('navigation lists only pages granted by the account role',()=>{
+ const h=harness();
+ h.run("me={id:2,role:'admin',permissions:['withdrawals','deposits']};nav()");
+ const html=h.elements.get('navigation').innerHTML;
+ assert.ok(html.includes('data-nav="withdrawals"')&&html.includes('data-nav="deposits"'));
+ for(const page of ['pushes','configs','accounts','roles'])assert.ok(!html.includes(`data-nav="${page}"`),page);
+ h.run("me={id:1,role:'super',permissions:[]};nav()");
+ assert.ok(h.elements.get('navigation').innerHTML.includes('data-nav="roles"'));
+});

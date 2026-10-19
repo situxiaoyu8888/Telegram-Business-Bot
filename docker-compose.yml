@@ -44,8 +44,10 @@ services:
       MYSQL_DSN: bot:bot_password@tcp(mariadb:3306)/telegram_bot?charset=utf8mb4&parseTime=True&loc=Local
       REDIS_ADDR: redis:6379
       UPLOAD_DIR: /app/uploads
+      LOG_DIR: /app/logs
     volumes:
       - bot_uploads:/app/uploads
+      - ./logs:/app/logs
     ports:
       - "8080:8080"
     depends_on:

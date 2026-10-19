@@ -51,18 +51,22 @@ func (r *Router) Handle(ctx context.Context, u Update) error {
 	}
 	return lease.Run(ctx, r.store.Redis, fmt.Sprintf("tg:lock:%t:%d:%d", r.adminOnly, r.botID, userID), func(ctx context.Context) error {
 		private := u.Message != nil && u.Message.Chat.ID == userID || u.CallbackQuery != nil && u.CallbackQuery.Message != nil && u.CallbackQuery.Message.Chat.ID == userID
+		first := false
 		if private && !r.adminOnly {
-			if err := r.store.DB.Clauses(clause.OnConflict{DoNothing: true}).Create(&model.BotSubscription{BotID: r.botID, TelegramUserID: userID}).Error; err != nil {
-				return err
+			res := r.store.DB.Clauses(clause.OnConflict{DoNothing: true}).Create(&model.BotSubscription{BotID: r.botID, TelegramUserID: userID})
+			if res.Error != nil {
+				return res.Error
 			}
+			// A new subscription row means this user is activating this bot for the first time.
+			first = res.RowsAffected == 1
 		}
-		r.handle(ctx, u)
+		r.handle(ctx, u, first)
 		return ctx.Err()
 	})
 }
-func (r *Router) handle(ctx context.Context, u Update) {
+func (r *Router) handle(ctx context.Context, u Update, first bool) {
 	if u.Message != nil {
-		r.handleMessage(ctx, u.Message)
+		r.handleMessage(ctx, u.Message, first)
 	} else if u.CallbackQuery != nil {
 		r.handleCallback(ctx, u.CallbackQuery)
 	}
@@ -109,7 +113,7 @@ func buttonsToKB(bs []menu.Button, back bool) *InlineKeyboardMarkup {
 	return &InlineKeyboardMarkup{InlineKeyboard: rows}
 }
 
-func (r *Router) handleMessage(ctx context.Context, m *Message) {
+func (r *Router) handleMessage(ctx context.Context, m *Message, first bool) {
 	u := r.saveUser(m.From)
 	if u == nil || u.Status != 1 || m.Chat.ID != m.From.ID {
 		return
@@ -117,6 +121,9 @@ func (r *Router) handleMessage(ctx context.Context, m *Message) {
 	if r.adminOnly && !r.isAdmin(m.From.ID) {
 		_ = r.client.SendMessage(ctx, m.Chat.ID, "无管理员权限。", nil)
 		return
+	}
+	if first {
+		r.sendWelcome(ctx, m.Chat.ID)
 	}
 	text := strings.TrimSpace(m.Text)
 	command := commandName(text)
@@ -362,7 +369,14 @@ func (r *Router) dispatchMenu(ctx context.Context, cb *CallbackQuery, u *model.T
 		_ = r.menuResponse(ctx, chatID, msgID, b.String(), ptrKB(BackHomeKeyboard()))
 	case "referral":
 		count, total, _ := r.referral.Stats(u.ID)
-		_ = r.menuResponse(ctx, chatID, msgID, fmt.Sprintf("<b>🎁 推广代理</b>\n\n推广码：<code>%s</code>\n下级人数：<code>%d</code>\n累计佣金：<code>%s USDT</code>\n\n邀请链接格式：<code>https://t.me/&lt;bot_username&gt;?start=%s</code>", u.ReferralCode, count, total.StringFixed(6), u.ReferralCode), ptrKB(BackHomeKeyboard()))
+		// The link names the bot the user is talking to, so business bots invite to themselves.
+		link := "邀请链接格式：<code>https://t.me/&lt;bot_username&gt;?start=" + htmlEscape(u.ReferralCode) + "</code>"
+		if name, err := r.client.Username(ctx); err == nil && name != "" {
+			link = "邀请链接：" + htmlEscape("https://t.me/"+name+"?start="+u.ReferralCode)
+		} else if r.logger != nil {
+			r.logger.Warn("referral link: bot username unavailable", zap.Error(err))
+		}
+		_ = r.menuResponse(ctx, chatID, msgID, fmt.Sprintf("<b>🎁 推广代理</b>\n\n推广码：<code>%s</code>\n下级人数：<code>%d</code>\n累计佣金：<code>%s USDT</code>\n\n%s", u.ReferralCode, count, total.StringFixed(6), link), ptrKB(BackHomeKeyboard()))
 	case "support":
 		if err := r.sessions.Set(ctx, u.TelegramUserID, session.Session{Scene: "support", Step: "input_content"}); err != nil {
 			_ = r.menuResponse(ctx, chatID, msgID, "客服暂不可用，请稍后重试。", nil)
@@ -458,6 +472,15 @@ func (r *Router) handleSessionInput(ctx context.Context, m *Message, u *model.Te
 		}
 	}
 }
+
+// sendWelcome greets a user on first activation; an empty welcome_text disables it.
+func (r *Router) sendWelcome(ctx context.Context, chatID int64) {
+	text := strings.TrimSpace(r.menus.Config("welcome_text", model.DefaultWelcomeText))
+	if text == "" {
+		return
+	}
+	_ = r.client.SendMessage(ctx, chatID, htmlEscape(text), nil)
+}
 func (r *Router) sendHome(ctx context.Context, chatID, userID int64) {
 	name := r.menus.Config("site_name", "Telegram Business Bot")
 	items, err := r.menus.ReplyItems(r.isAdmin(userID), r.adminOnly)
@@ -465,12 +488,20 @@ func (r *Router) sendHome(ctx context.Context, chatID, userID int64) {
 		_ = r.client.SendMessage(ctx, chatID, "菜单加载失败，请稍后发送 /menu 重试。", nil)
 		return
 	}
-	if err = r.client.SendReplyKeyboard(ctx, chatID, "<b>"+htmlEscape(name)+"</b>\n\n请选择功能：", items); err != nil {
-		return
-	}
+	title := "<b>" + htmlEscape(name) + "</b>"
 	kb := r.homeKeyboard(r.isAdmin(userID))
-	if kb != nil && len(kb.InlineKeyboard) > 0 {
-		_ = r.client.SendMessage(ctx, chatID, "更多功能：", kb)
+	hasInline := kb != nil && len(kb.InlineKeyboard) > 0
+	switch {
+	case len(items) == 0 && hasInline:
+		// Inline buttons alone fit in one message.
+		_ = r.client.SendMessage(ctx, chatID, title+"\n\n请选择功能：", kb)
+	case !hasInline:
+		_ = r.client.SendReplyKeyboard(ctx, chatID, title+"\n\n请选择功能：", items)
+	default:
+		// A message carries one reply_markup, so the reply keyboard and inline buttons need separate messages.
+		if r.client.SendReplyKeyboard(ctx, chatID, title, items) == nil {
+			_ = r.client.SendMessage(ctx, chatID, "请选择功能：", kb)
+		}
 	}
 }
 
