@@ -1,0 +1,60 @@
+services:
+  mariadb:
+    image: mariadb:11.4
+    container_name: tg-bot-mariadb
+    restart: unless-stopped
+    environment:
+      MARIADB_DATABASE: telegram_bot
+      MARIADB_USER: bot
+      MARIADB_PASSWORD: bot_password
+      MARIADB_ROOT_PASSWORD: root_password
+      TZ: Asia/Bangkok
+    ports:
+      - "3306:3306"
+    volumes:
+      - mariadb_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  redis:
+    image: redis:7.4-alpine
+    container_name: tg-bot-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  bot:
+    build: .
+    container_name: telegram-business-bot
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      MYSQL_DSN: bot:bot_password@tcp(mariadb:3306)/telegram_bot?charset=utf8mb4&parseTime=True&loc=Local
+      REDIS_ADDR: redis:6379
+      UPLOAD_DIR: /app/uploads
+    volumes:
+      - bot_uploads:/app/uploads
+    ports:
+      - "8080:8080"
+    depends_on:
+      mariadb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+volumes:
+  mariadb_data:
+  redis_data:
+  bot_uploads:

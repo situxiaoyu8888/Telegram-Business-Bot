@@ -1,0 +1,46 @@
+在 internal/app/app.go 中做 2 处修改。
+
+1）engine 初始化之后暴露上传目录：
+
+engine := gin.New()
+engine.Use(gin.Recovery())
+
+if err := os.MkdirAll(cfg.UploadDir, 0755); err != nil {
+    return nil, fmt.Errorf("create upload dir: %w", err)
+}
+
+engine.Static("/uploads", cfg.UploadDir)
+
+注意 imports 增加：
+    "fmt"
+    "os"
+
+2）原来的：
+
+admin.New(
+    st,
+    walletSvc,
+    supportSvc,
+    tg,
+    pushSvc,
+    cfg.AdminWebUser,
+    cfg.AdminWebPassword,
+).Register(engine)
+
+替换为：
+
+admin.New(
+    st,
+    walletSvc,
+    supportSvc,
+    tg,
+    pushSvc,
+    cfg.AdminWebUser,
+    cfg.AdminWebPassword,
+    cfg.UploadDir,
+    cfg.UploadPublicBaseURL,
+    cfg.UploadMaxImageMB,
+    cfg.UploadMaxVideoMB,
+).Register(engine)
+
+生产环境建议 Nginx 直接对 UPLOAD_DIR 做 alias，不建议让 Gin 长期承担视频静态下载。

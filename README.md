@@ -1,0 +1,396 @@
+# Telegram Business Bot
+可直接启动的 Go Telegram 业务机器人开发工程，包含：用户机器人、可选独立管理机器人、USDT TRC20 充值监听、钱包账本、提现审核、推广代理、客服工单、Web 管理后台、后台动态配置菜单。
+
+需要 Go 1.24.0 或更新版本；Docker 使用 Go 1.25 构建。
+## 功能
+- 用户 Bot：个人中心、钱包余额、USDT TRC20 充值、提现、资金记录、推广代理、客服
+- 管理 Bot：独立 Token 可选，仅允许 `ADMIN_IDS` 进入
+- 钱包：available/frozen 双余额、充值入账、提现冻结/解冻/完成、账变记录
+- TRC20：TronGrid 已确认交易监听、txid 幂等、按充值地址归属用户
+- 推广：`/start <referral_code>` 绑定直属上级；充值成功按比例发佣金
+- 客服：Telegram 创建工单，Web 后台查看和回复状态
+- Web 管理后台：用户、提现、充值、充值地址、工单、菜单、系统配置
+- 动态菜单：菜单标题、排序、角色、URL、子菜单、内置 Action 均由数据库控制
+- Redis：用户会话状态机
+- MariaDB：业务数据
+- Telegram：Long Polling / Webhook 双模式
+- Docker Compose：MariaDB + Redis + Bot 一键启动
+## 目录
+```text
+cmd/bot/main.go
+internal/
+  admin/       Web 管理后台
+  app/         应用装配
+  config/      环境配置
+  menu/        动态菜单
+  model/       数据模型
+  referral/    推广代理
+  session/     Redis 状态机
+  store/       MariaDB/Redis
+  support/     客服工单
+  telegram/    Telegram API/路由
+  trongrid/    TRC20 查询与充值监听
+  wallet/      钱包账本/提现
+docs/
+  ARCHITECTURE.md
+  PRODUCTION.md
+```
+## 快速启动
+### 1. 创建 Bot
+在 `@BotFather` 创建用户 Bot，获取 Token。若要独立管理 Bot，再创建第二个 Bot。
+### 2. 配置
+```bash
+cp .env.example .env
+vim .env
+```
+最少设置：
+```dotenv
+TELEGRAM_BOT_TOKEN=xxxx
+ADMIN_IDS=123456789
+ADMIN_WEB_PASSWORD=换成强密码
+```
+可选独立管理 Bot：
+```dotenv
+ADMIN_TELEGRAM_BOT_TOKEN=yyyy
+```
+### 3. Docker 一键启动
+```bash
+docker compose up -d --build
+```
+查看：
+```bash
+docker compose ps
+docker compose logs -f bot
+```
+用户 Bot 发送：
+```text
+/start
+```
+管理后台：
+```text
+http://服务器IP:8080/admin/
+```
+使用 `.env` 中的 `ADMIN_WEB_USER / ADMIN_WEB_PASSWORD` 登录。
+健康检查：
+```bash
+curl http://127.0.0.1:8080/healthz
+```
+## 本机 Go 启动
+只启动基础设施：
+```bash
+docker compose up -d mariadb redis
+set -a
+source .env
+set +a
+go mod tidy
+go run ./cmd/bot
+```
+## TRC20 充值
+开发默认关闭：
+```dotenv
+TRON_WATCH_ENABLED=false
+```
+配置 TronGrid 和目标 USDT 合约后开启：
+```dotenv
+TRONGRID_BASE_URL=https://api.shasta.trongrid.io
+TRONGRID_API_KEY=你的Key
+TRON_USDT_CONTRACT=与你当前网络匹配的TRC20合约地址
+TRON_CONFIRM_ONLY=true
+TRON_WATCH_ENABLED=true
+TRON_WATCH_INTERVAL_SECONDS=30
+```
+然后在 Web 后台“充值地址”给每个用户绑定唯一 TRC20 地址。Watcher 会查询该地址的已确认 TRC20 入账，按 txid 幂等入账。
+> 不要把主网 USDT 合约地址直接复制到 Shasta 测试网。网络、合约和充值地址必须属于同一链环境。
+## 提现流程
+```text
+用户点击提现
+ -> 输入金额
+ -> 输入 TRON 地址
+ -> 余额 available 转 frozen
+ -> withdrawal_orders=pending
+ -> Web 后台审核
+ -> approved
+ -> 独立钱包/Signer 广播链上交易
+ -> 后台录入 TxID/回调
+ -> completed，扣减 frozen
+```
+本工程故意不保存 TRON 私钥，也不在 Bot 内直接签名。这是生产设计边界，不是缺少功能。
+## 推广代理
+每个 Telegram 用户首次创建时生成推广码：
+```text
+TG<telegram id hex>
+```
+邀请格式：
+```text
+https://t.me/<bot_username>?start=<referral_code>
+```
+首次绑定后不可自行修改上级。充值成功后按：
+```dotenv
+REFERRAL_RATE=0.005
+```
+计算直属推广佣金并进入上级 USDT 钱包。
+## 后台动态菜单
+Web 后台进入“动态菜单”，可以新增/修改：
+- code
+- 标题
+- action_type
+- action_value
+- role
+- row_no
+- sort
+支持：
+```text
+builtin -> profile / wallet / deposit / withdraw / records / referral / support / admin
+url     -> https://example.com
+submenu -> 子菜单
+```
+菜单每次打开时从数据库读取，不需要重新编译/重启。
+## Webhook
+用户 Bot：
+```dotenv
+TELEGRAM_MODE=webhook
+TELEGRAM_WEBHOOK_URL=https://bot.example.com/telegram/webhook
+TELEGRAM_WEBHOOK_SECRET=随机长字符串
+```
+独立管理 Bot：
+```dotenv
+ADMIN_TELEGRAM_WEBHOOK_URL=https://bot.example.com/telegram/admin/webhook
+ADMIN_TELEGRAM_WEBHOOK_SECRET=另一个随机长字符串
+```
+## 当前安全边界
+已实现：Webhook secret、管理员 Telegram ID 白名单、Web 会话登录（支持退出）、余额冻结、txid 幂等、数据库事务、审计日志入口。
+生产必须继续强化：KMS/HSM/Signer、提现 API 签名与幂等、限流、2FA/SSO、风控、不可变审计、链上广播 Worker、监控告警。
+详见 `docs/PRODUCTION.md`。
+
+## 消息推送
+
+管理后台新增 **消息推送** 页面，支持：
+
+- 全部正常用户推送
+- 指定 Telegram User ID 推送
+- 按 `language_code` 筛选用户
+- 立即发送 / 定时发送
+- Telegram HTML 富文本
+- 可选 URL 按钮
+- 推送任务状态与成功/失败统计
+- 单用户发送明细
+- 自动失败重试（最多 3 次）
+- 已完成/已取消任务可手动重试失败用户
+- 发送中取消
+- 发送限速（当前 Worker 默认约 20 条/秒）
+
+### 数据表
+
+启动时 AutoMigrate 会自动增加：
+
+```text
+push_campaigns
+push_recipients
+```
+
+`push_campaigns` 保存一次运营推送任务；`push_recipients` 保存每个 Telegram 用户的投递状态，从而可以审计成功、失败和重试情况。
+
+### 后台 API
+
+```text
+GET  /admin/api/pushes
+POST /admin/api/pushes
+GET  /admin/api/pushes/:id/recipients
+POST /admin/api/pushes/:id/cancel
+POST /admin/api/pushes/:id/retry
+```
+
+创建示例：
+
+```json
+{
+  "title": "系统维护通知",
+  "content": "<b>系统通知</b>\n今晚 02:00 将进行维护。",
+  "parse_mode": "HTML",
+  "button_text": "查看详情",
+  "button_url": "https://example.com/notice",
+  "target_type": "all",
+  "target_value": "",
+  "scheduled_at": "2026-10-06T02:00:00+07:00"
+}
+```
+
+指定 Telegram ID：
+
+```json
+{
+  "title": "指定用户通知",
+  "content": "你的申请已处理。",
+  "parse_mode": "HTML",
+  "target_type": "telegram_ids",
+  "target_value": "123456789,987654321"
+}
+```
+
+按语言推送：
+
+```json
+{
+  "title": "中文用户通知",
+  "content": "<b>公告</b>：新活动已上线。",
+  "parse_mode": "HTML",
+  "target_type": "language",
+  "target_value": "zh-hans"
+}
+```
+
+### 生产部署注意
+
+当前推送 Worker 随 Bot 服务启动，使用可续租的 Redis 任务锁避免多个实例同时处理同一任务。终态任务可以重试失败用户；取消时未发送的用户保持取消。升级须先停止旧 Worker，详见 `docs/PRODUCTION.md`。
+
+Telegram Bot 只能主动发送给已经与机器人建立过会话且没有屏蔽机器人的用户，因此全量推送的实际可达人数可能小于数据库用户数。
+
+## 多机器人与个性化推送
+
+后台 `/admin/` 新增「业务机器人」「消息路由」，支持不重启添加、编辑、启停业务机器人。
+
+1. **添加机器人**：填写名称和 BotFather Token，保存时验证身份。Token 加密保存，不返回浏览器。默认机器人仍使用 `TELEGRAM_BOT_TOKEN`，独立管理机器人不作为推送渠道。
+2. **配置路由**：例如 `招聘通知 → 招聘机器人`、`活动通知 → 活动机器人`。新建推送时选择业务类型，也可手动覆盖发送机器人。渠道在创建时固定，后续路由修改不会改变旧任务。
+3. **用户建立会话**：每个业务机器人独立记录订阅用户。用户需要先向对应机器人发送 `/start`；全量/语言推送仅匹配该机器人的用户，指定 ID 未订阅时任务失败并展示原因。升级时已有用户归入原默认机器人。
+4. **自动称呼**：新任务默认在正文首行添加 `亲爱的Redis:`。优先使用 FirstName + LastName，其次 Username，无可用姓名时使用「朋友」。姓名会进行 HTML 转义；可在编辑窗口关闭自动称呼。旧任务保持原正文。
+5. **暂停/恢复**：定时、排队及发送中任务可暂停。恢复未来任务仍等待原定时间；已过时任务开始排队，部分发送任务接着投递未发送用户。暂停不会将用户标记取消。暂停时已在 Telegram 请求中的消息可能仍送达。
+6. **删除历史任务**：可删除已完成、已取消或失败任务及明细；进行中和暂停任务需先取消。删除后台记录不撤回 Telegram 聊天中的消息。
+
+新增业务机器人使用独立 Long Polling，原有默认机器人仍按 `TELEGRAM_MODE` 工作。不要让其他程序同时轮询新增机器人；启用时系统会清除该新增机器人的旧 Webhook（保留待处理更新）。客服工单回复会使用工单所属机器人。
+
+建议在首次添加机器人之前设置固定的 `BUSINESS_BOT_KEY`（32 位以上随机字符串）。不设置时使用主机器人 Token 派生加密密钥；此时更换主 Token 后需重新填写其他机器人的 Token。改变加密密钥不会自动迁移旧密文。
+
+新增接口：
+
+```text
+GET/POST /admin/api/bots
+GET/POST /admin/api/routes
+DELETE   /admin/api/routes/:id
+POST     /admin/api/pushes/:id/pause
+POST     /admin/api/pushes/:id/resume
+DELETE   /admin/api/pushes/:id
+```
+
+创建推送新增参数：
+
+```json
+{
+  "title": "本周岗位推荐",
+  "category": "招聘通知",
+  "personalize": true,
+  "message_type": "text",
+  "content": "新的岗位已经发布，欢迎查看。",
+  "target_type": "all"
+}
+```
+
+`bot_id` 省略时按 `category` 查找路由；`bot_id: 0` 明确选择默认机器人。`category` 省略时使用 `message_type`（text/photo/video）作为路由类型。媒体 `file_id` 必须属于选中的机器人，跨机器人可使用公网媒体 URL。
+
+前端逻辑测试（Node.js）：`node --test internal/admin/ui_test.js`。
+
+### 周期推送、选择菜单与退出登录
+
+- 新建消息时选择「周期发送」，设置首次发送时间及每隔多少分钟、小时、天或周执行。采用固定间隔：一天为 24 小时，一周为 7 天；首次时间按浏览器本机时区输入。API 使用 `scheduled_at`（RFC3339）和 `repeat_seconds`（60～31622400，0 表示单次）。
+- 每轮结束后生成标记为「周期 #任务编号 历史」的记录，保存本轮收件人、发送状态和重试进度；原任务显示下一次执行时间。每轮重新筛选该机器人的订阅用户。路由及内容沿用创建时的配置。
+- 同一个周期不重叠执行。发送耗时过长或服务停机时，不逐轮补发积压：恢复服务后最多处理一轮到期消息，后续回到原时间间隔。暂停尚未开始的任务，恢复时跳过已错过的时间点；暂停发送中的任务，恢复时继续未完成的用户。
+- 暂停、恢复、取消作用于原周期任务。取消后重试失败用户仅补发本轮，不恢复周期。历史记录可独立重试、删除；删除历史不会停止原周期，停止周期请取消原任务。发送准备失败会终止该任务并显示原因，修正配置后可重新创建。
+- 所有选择框使用统一的自定义菜单，支持方向键、Home/End、Enter、Escape 和首字母定位。业务类型保留自由输入，并提供常用类型快捷按钮。
+- 后台使用 `/admin/login` 登录，账号密码仍来自 `ADMIN_WEB_USER / ADMIN_WEB_PASSWORD`。左下角「退出」撤销 Redis 中当前会话；有效期为 12 小时，更改配置中的凭据并重启后旧会话失效。
+- 后台 API 不再接受 HTTP Basic Auth。脚本需先 `POST /admin/login`，提交 JSON `username`、`password` 并保存响应 Cookie；之后携带 Cookie 访问。所有写入请求（含登录、退出、上传）必须带 `X-Requested-With: admin-console`。退出接口为 `POST /admin/logout`。使用 HTTPS 时会设置 Secure Cookie。
+
+升级时先停止旧版本，启动新版本自动增加 `push_campaigns.repeat_seconds` 和 `parent_id` 字段，已有任务仍为单次推送。无需修改原有管理员账号，但需在新登录页重新登录。
+
+## 构建 Linux 二进制
+
+安装 Go 1.24.0 或更新版本及 Make 后，可在 macOS 或 Linux 上交叉编译：
+
+```bash
+make linux          # Linux x86_64 / amd64
+make linux-arm64    # Linux ARM64 / aarch64
+make linux-all      # 同时构建两种架构
+```
+
+输出文件分别为 `bin/xunzhou-amd64` 和 `bin/xunzhou-arm64`。`make linux ARCH=arm64` 与 `make linux-arm64` 等价；`make build` 仍构建当前系统版本。需要指定 Go 可执行文件时，可传入 `GO=/path/to/go`。
+
+Linux 构建关闭 CGO，后台页面已嵌入二进制，无需单独复制 HTML。将匹配服务器架构的文件与配置好的 `.env` 放到部署目录，在该目录启动，例如：
+
+```bash
+chmod +x ./xunzhou-amd64
+./xunzhou-amd64
+```
+
+运行服务器无需安装 Go，但仍需要可访问的 MySQL/MariaDB、Redis、系统 CA 证书及所需时区数据。`.env` 中的数据库、Redis 地址须为该服务器可访问的地址，`UPLOAD_DIR` 须可写；上传目录需保留。若沿用本项目 Nginx 的 `127.0.0.1:18080` 上游，直接运行二进制时设置 `HTTP_ADDR=127.0.0.1:18080`，不再使用 Docker 端口映射。
+
+## Telegram 底部快捷菜单
+
+后台「动态菜单 → 新增菜单」可选择「底部快捷菜单」，对应 Telegram 输入框下方的常驻按钮键盘。标题支持 Emoji；顶级菜单的关联父菜单选择「不关联（顶级菜单）」，同一行号的按钮排在同一行，按「显示顺序」从左到右排列。例如配置成三行四列：
+
+| 行号 | 按显示顺序排列的标题 |
+|---|---|
+| 1 | 🍴 美食、🛍 购物、🏨 酒店、🥳 娱乐 |
+| 2 | 💵 换汇、💳 签证、🚕 打车、🏥 医院 |
+| 3 | 💇 美颜、🚗 车行、⚙️ 工具、☎️ 客服 |
+
+每个按钮使用不同的菜单标识（如 `food`、`shopping`），底部菜单标题不能重名。入口类型支持：
+
+- **文本回复**：点击后发送「菜单说明 / 文本回复内容」中的文本，按纯文本展示。
+- **外部链接**：配置 HTTPS 链接；点击底部按钮后，机器人回复可打开的链接按钮。
+- **子菜单**：支持多级底部键盘。编辑子项时按名称关联父菜单，展示位置选择「底部快捷菜单」；点击父菜单后，底部键盘切换为其子项，第一行自动添加「↩️ 返回主菜单」。子项也可以继续设置为「子菜单」，实现更深层分类。若选择「消息内按钮」，则作为独立的消息内入口展示；关联父菜单不会自动修改展示位置，切换展示位置也不会清空父菜单。候选项支持名称或标识搜索，并排除自身及后代；列表直接显示关联父菜单的名称。
+- **内置功能**：沿用 `profile`、`wallet`、`deposit`、`withdraw`、`records`、`referral`、`support` 等已有功能标识（以项目内置菜单为准）。
+
+用户发送 `/start` 或 `/menu` 获取最新键盘；菜单保留在输入区，也可由 Telegram 客户端折叠。禁用/删除的按钮立即停止按菜单执行，已显示的键盘需要 `/menu` 刷新；全部停用后刷新会移除键盘。底部按钮会发送与标题相同的文字，因此手动输入同样的文字也会触发菜单；在提现或客服输入过程中点击有效菜单会退出当前输入流程，切换到所选功能。
+
+菜单配置由默认及新增业务机器人共享；普通用户看不到管理员菜单，独立管理机器人只展示管理员角色的菜单。配色、边框等原生键盘外观由 Telegram 客户端主题决定。
+
+升级启动时自动增加 `menu_items.placement` 和用于防止底部标题重名的 `reply_title` 字段。历史菜单默认保留为消息内按钮。重新构建并替换 Linux 二进制后启动即可，不需改变 Webhook 或 Nginx 配置。
+
+## 商家管理与子菜单关联
+
+后台新增「业务管理 → 商家管理」。配置示例为「🍴 美食 → 中餐 → 商家列表 → 商家详情」：
+
+1. 在「动态菜单」创建或编辑父菜单「🍴 美食」，入口类型选择「子菜单」，可放在底部快捷菜单。
+2. 新增「中餐」子菜单，关联父菜单选择「🍴 美食」，入口类型选择「商家列表」，展示位置可选择「底部快捷菜单」或「消息内按钮」，启用并保存。
+3. 在「商家管理 → 添加商家」填写名称、简介、地址、营业时间、电话及 HTTPS 联系链接（如 `https://t.me/用户名`）；按名称选择关联的「中餐」子菜单。支持配置显示顺序和启用状态。
+4. 用户向机器人发送 `/menu` 更新入口，依次点击「🍴 美食 → 中餐」即可查看商家。每页最多 10 家，点击名称查看详情及联系链接；详情可返回原列表页。
+
+每家商家关联一个子菜单，可在后台编辑迁移。候选菜单仅包含已关联父菜单且入口类型为「商家列表」的菜单；停用分类也可预先配置商家，但不会展示给用户。商家、分类或上级菜单停用后，后续点击列表和详情都会重新验证可见性；普通用户不能通过旧按钮查看管理员分类。营业时间是展示信息，不自动判断营业状态。已经发到聊天中的历史内容不会自动撤回。
+
+有商家的子菜单不能直接删除或改成其他入口类型，需先迁移或删除商家；有子菜单的父菜单也不能直接改为其他入口类型。商家配置与菜单一样由默认及新增业务机器人共享。
+
+升级启动时自动创建 `merchants` 表。需重新构建并替换 Linux 二进制，无需更改 Nginx 或 Webhook。后台 API 为 `GET/POST /admin/api/merchants` 和 `DELETE /admin/api/merchants/:id`，沿用后台会话及写请求验证。
+
+多级底部键盘示例：父菜单「🍴 美食」设为底部快捷菜单、入口类型「子菜单」；其下「餐厅 / 火锅 / 烧烤」设为行号 1，「奶茶 / 小吃 / 面食」为行号 2，「水果 / 生鲜 / 粉类」为行号 3，每个子项同样选择底部快捷菜单，按排序值从左到右排列。返回主菜单由系统自动添加并独占第一行，不需要手动创建。该按钮也会清除当前输入流程。底部按钮标题仍须全局唯一，且不能使用系统返回按钮名称。
+
+## 输入框命令菜单与键盘开关
+
+启动后，默认业务机器人及后台新增的业务机器人会自动向 Telegram 注册私聊命令：
+
+- `/start` — 开始使用：返回主菜单并显示已配置的底部键盘。
+- `/contactus` — 联系客服：进入客服输入流程，随后发送的问题会创建现有客服工单；提示文案仍由后台系统配置 `support_text` 控制。可发送 `/cancel` 取消。
+
+程序同时将输入框左侧的菜单按钮设置为命令列表。独立管理员机器人注册 `/start`、`/admin`、`/menu`、`/cancel`，仍需管理员权限。普通业务机器人也继续支持手动发送 `/menu` 和 `/cancel`。
+
+输入框右侧的键盘开关，以及命令菜单展开时左侧的关闭图标，由 Telegram 客户端自动显示；机器人不能指定它们的图案或位置。用户发送 `/start` 或 `/menu` 收到底部键盘后，即可切换键盘显示。界面颜色随客户端主题变化。
+
+命令注册在机器人启动时自动进行，失败时每 30 秒重试，不中断收发消息。更新程序并重启后可重新打开机器人聊天查看；若此前单独配置过语言或聊天专属命令，它们可能优先于通用私聊命令，需要检查对应的 Telegram 命令作用域配置。本次不会修改机器人头像。
+
+### 分类切换与商家推荐
+
+点击底部父分类后，机器人发送「请点击 👇」更新下方子菜单键盘，并从该分类可见的商家子菜单中随机推荐最多 13 家已启用商家。推荐消息使用「随机给您推荐的商铺」文案，第一家独占一行，其余每行两家；点击可查看商家详情。子菜单可以继续嵌套，推荐不会跨到其他分类，也会排除隐藏或仅管理员可见的分支。没有可推荐商家时只显示分类入口。
+
+按钮前的绿色圆点仅表示该商家已启用，不表示按营业时间判定正在营业。父分类配置了菜单说明时，说明保留在「请点击 👇」上方；已有消息内子菜单仍会作为「更多分类」显示。底部按钮仍会产生用户点击文字，不会自动删除聊天消息。
+
+在「商家管理 → 添加/编辑商家」勾选「置顶推荐」并保存，推荐第一条会从当前分类下已启用、可见的置顶商家中随机选择一家；没有置顶商家时从当前分类所有符合条件的商家中随机选择。其余最多 12 家随机展示，且不重复首条。可同时配置多家置顶，列表中会显示置顶标记。升级启动会自动新增 pinned 字段，已有商家默认不置顶。
+
+推荐列表底部提供「换一批」，点击后重新验证分类权限并刷新当前推荐消息。随机抽取可能再次选中之前的商家，尤其在商家数量较少时。
+
+底部键盘使用 `is_persistent=false` 和 `one_time_keyboard=false`：允许用户通过客户端键盘图标手动收起、展开，点击菜单后不要求自动收起。旧版本强制持续显示键盘，可能不显示切换入口；替换程序并重启后发送 /start 或 /menu 更新键盘。
+
+### 关键词搜索商家
+
+私聊发送分类名称（如「烧烤」），可随机推荐对应分类中的商家。匹配忽略装饰表情和空格，完整名称优先，没有完整匹配时按名称包含关键词匹配；多个匹配分类合并去重。支持搜索父分类并覆盖其可见商家子分类。仍遵循置顶首条、最多 13 家和「换一批」规则；刷新时重新检查权限及启用状态。分类名称直接在后台动态菜单中维护，无需单独配置关键词。关键词最多 56 个 UTF-8 字节（通常为 18 个汉字）。客服、提现等已有输入流程优先处理；搜索前可发送 /cancel 退出当前流程。
+
+### 图片链接菜单（联系客服）
+后台「动态菜单」添加或编辑菜单，展示位置选择「底部快捷菜单」，入口类型选择「图片 + 链接按钮」。上传图片或填写公网 HTTP/HTTPS 图片地址；「功能名称 / 链接」填写客服 HTTPS 链接（例如 https://t.me/客服用户名），「图片下方按钮文字」填写「联系客服」。菜单说明可留空，这样只发送图片和下方按钮；填写说明时作为图片说明发送（最多 1000 字）。图片需可被 Telegram 公网下载。也支持从消息内菜单按钮触发图片回复。升级启动自动添加图片及按钮文字字段，保存后发送 /menu 刷新。
+
+上传后的图片地址由 UPLOAD_PUBLIC_BASE_URL 生成。已配置 TLS 的上传域名建议设置为 https://up.x-shop.vip/uploads，重启后新上传会返回 HTTPS 地址；已有图片可直接将地址协议改为 HTTPS，无需重新上传。图片菜单兼容 HTTP 和 HTTPS 图片地址，按钮链接仍要求 HTTPS。

@@ -1,0 +1,190 @@
+package config
+
+import (
+	"errors"
+	"fmt"
+	"os"
+	"regexp"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/shopspring/decimal"
+
+	"github.com/joho/godotenv"
+)
+
+type Config struct {
+	BusinessBotKey             string
+	AppEnv                     string
+	HTTPAddr                   string
+	TelegramBotToken           string
+	TelegramMode               string
+	TelegramWebhookURL         string
+	TelegramWebhookSecret      string
+	AdminIDs                   map[int64]struct{}
+	AdminTelegramBotToken      string
+	AdminTelegramWebhookURL    string
+	AdminTelegramWebhookSecret string
+	AdminWebUser               string
+	AdminWebPassword           string
+	MySQLDSN                   string
+	RedisAddr                  string
+	RedisPassword              string
+	RedisDB                    int
+	SessionTTL                 time.Duration
+	WalletCurrency             string
+	WithdrawMinUSDT            string
+	WithdrawFeeUSDT            string
+	ReferralRate               string
+	TronGridBaseURL            string
+	TronGridAPIKey             string
+	TronUSDTContract           string
+	TronConfirmOnly            bool
+	TronWatchEnabled           bool
+	TronWatchInterval          time.Duration
+	TronFallbackDepositAddress string
+
+	UploadDir           string
+	UploadPublicBaseURL string
+	UploadMaxImageMB    int64
+	UploadMaxVideoMB    int64
+}
+
+func Load() (Config, error) {
+	return load(".env")
+}
+
+func load(path string) (Config, error) {
+	if err := godotenv.Load(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return Config{}, fmt.Errorf("load .env failed: %w", err)
+	}
+
+	required := []string{"APP_ENV", "HTTP_ADDR", "TELEGRAM_BOT_TOKEN", "TELEGRAM_MODE", "ADMIN_IDS", "ADMIN_WEB_USER", "ADMIN_WEB_PASSWORD", "MYSQL_DSN", "REDIS_ADDR", "WALLET_CURRENCY", "WITHDRAW_MIN_USDT", "WITHDRAW_FEE_USDT", "REFERRAL_RATE", "TRONGRID_BASE_URL", "UPLOAD_DIR", "UPLOAD_PUBLIC_BASE_URL", "REDIS_DB", "SESSION_TTL_MINUTES", "TRON_CONFIRM_ONLY", "TRON_WATCH_ENABLED", "TRON_WATCH_INTERVAL_SECONDS", "UPLOAD_MAX_IMAGE_MB", "UPLOAD_MAX_VIDEO_MB"}
+	for _, key := range required {
+		if strings.TrimSpace(os.Getenv(key)) == "" {
+			return Config{}, fmt.Errorf("required env %s is missing", key)
+		}
+	}
+	ids, err := parseIDs(os.Getenv("ADMIN_IDS"))
+	if err != nil {
+		return Config{}, err
+	}
+	cfg := Config{
+		BusinessBotKey:             strings.TrimSpace(os.Getenv("BUSINESS_BOT_KEY")),
+		AppEnv:                     mustEnv("APP_ENV"),
+		HTTPAddr:                   mustEnv("HTTP_ADDR"),
+		TelegramBotToken:           mustEnv("TELEGRAM_BOT_TOKEN"),
+		TelegramMode:               mustEnv("TELEGRAM_MODE"),
+		TelegramWebhookURL:         strings.TrimSpace(os.Getenv("TELEGRAM_WEBHOOK_URL")),
+		TelegramWebhookSecret:      strings.TrimSpace(os.Getenv("TELEGRAM_WEBHOOK_SECRET")),
+		AdminIDs:                   ids,
+		AdminTelegramBotToken:      strings.TrimSpace(os.Getenv("ADMIN_TELEGRAM_BOT_TOKEN")),
+		AdminTelegramWebhookURL:    strings.TrimSpace(os.Getenv("ADMIN_TELEGRAM_WEBHOOK_URL")),
+		AdminTelegramWebhookSecret: strings.TrimSpace(os.Getenv("ADMIN_TELEGRAM_WEBHOOK_SECRET")),
+		AdminWebUser:               mustEnv("ADMIN_WEB_USER"),
+		AdminWebPassword:           mustEnv("ADMIN_WEB_PASSWORD"),
+		MySQLDSN:                   mustEnv("MYSQL_DSN"),
+		RedisAddr:                  mustEnv("REDIS_ADDR"),
+		RedisPassword:              os.Getenv("REDIS_PASSWORD"),
+		WalletCurrency:             mustEnv("WALLET_CURRENCY"),
+		WithdrawMinUSDT:            mustEnv("WITHDRAW_MIN_USDT"),
+		WithdrawFeeUSDT:            mustEnv("WITHDRAW_FEE_USDT"),
+		ReferralRate:               mustEnv("REFERRAL_RATE"),
+		TronGridBaseURL:            mustEnv("TRONGRID_BASE_URL"),
+		TronGridAPIKey:             strings.TrimSpace(os.Getenv("TRONGRID_API_KEY")),
+		TronUSDTContract:           strings.TrimSpace(os.Getenv("TRON_USDT_CONTRACT")),
+		TronFallbackDepositAddress: strings.TrimSpace(os.Getenv("TRON_FALLBACK_DEPOSIT_ADDRESS")),
+		UploadDir:                  mustEnv("UPLOAD_DIR"),
+		UploadPublicBaseURL:        strings.TrimRight(mustEnv("UPLOAD_PUBLIC_BASE_URL"), "/"),
+	}
+
+	cfg.RedisDB, err = strconv.Atoi(mustEnv("REDIS_DB"))
+	if err != nil {
+		return Config{}, fmt.Errorf("REDIS_DB invalid: %w", err)
+	}
+
+	sessionTTLMinutes, err := strconv.Atoi(mustEnv("SESSION_TTL_MINUTES"))
+	if err != nil || sessionTTLMinutes <= 0 {
+		return Config{}, fmt.Errorf("SESSION_TTL_MINUTES must be positive")
+	}
+	cfg.SessionTTL = time.Duration(sessionTTLMinutes) * time.Minute
+
+	cfg.TronConfirmOnly, err = strconv.ParseBool(mustEnv("TRON_CONFIRM_ONLY"))
+	if err != nil {
+		return Config{}, fmt.Errorf("TRON_CONFIRM_ONLY invalid: %w", err)
+	}
+
+	cfg.TronWatchEnabled, err = strconv.ParseBool(mustEnv("TRON_WATCH_ENABLED"))
+	if err != nil {
+		return Config{}, fmt.Errorf("TRON_WATCH_ENABLED invalid: %w", err)
+	}
+
+	interval, err := strconv.Atoi(mustEnv("TRON_WATCH_INTERVAL_SECONDS"))
+	if err != nil || interval < 10 {
+		return Config{}, fmt.Errorf("TRON_WATCH_INTERVAL_SECONDS must be >= 10")
+	}
+	cfg.TronWatchInterval = time.Duration(interval) * time.Second
+
+	cfg.UploadMaxImageMB, err = strconv.ParseInt(mustEnv("UPLOAD_MAX_IMAGE_MB"), 10, 64)
+	if err != nil || cfg.UploadMaxImageMB <= 0 {
+		return Config{}, fmt.Errorf("UPLOAD_MAX_IMAGE_MB invalid")
+	}
+
+	cfg.UploadMaxVideoMB, err = strconv.ParseInt(mustEnv("UPLOAD_MAX_VIDEO_MB"), 10, 64)
+	if err != nil || cfg.UploadMaxVideoMB <= 0 {
+		return Config{}, fmt.Errorf("UPLOAD_MAX_VIDEO_MB invalid")
+	}
+
+	if cfg.TelegramMode != "polling" && cfg.TelegramMode != "webhook" {
+		return Config{}, fmt.Errorf("TELEGRAM_MODE must be polling or webhook")
+	}
+
+	if cfg.TelegramMode == "webhook" && cfg.TelegramWebhookURL == "" {
+		return Config{}, fmt.Errorf("TELEGRAM_WEBHOOK_URL is required in webhook mode")
+	}
+
+	if err := cfg.Validate(); err != nil {
+		return Config{}, err
+	}
+	return cfg, nil
+}
+
+func mustEnv(key string) string { return strings.TrimSpace(os.Getenv(key)) }
+
+func parseIDs(s string) (map[int64]struct{}, error) {
+	out := make(map[int64]struct{})
+	for _, p := range strings.Split(s, ",") {
+		id, err := strconv.ParseInt(strings.TrimSpace(p), 10, 64)
+		if err != nil || id <= 0 {
+			return nil, fmt.Errorf("invalid ADMIN_IDS value")
+		}
+		out[id] = struct{}{}
+	}
+	return out, nil
+}
+
+func (c Config) Validate() error {
+	if c.TelegramMode == "webhook" {
+		valid := regexp.MustCompile(`^[A-Za-z0-9_-]{1,256}$`)
+		if !valid.MatchString(c.TelegramWebhookSecret) {
+			return fmt.Errorf("TELEGRAM_WEBHOOK_SECRET required (1-256 letters, digits, _ or -)")
+		}
+		if c.AdminTelegramBotToken != "" && (c.AdminTelegramWebhookURL == "" || !valid.MatchString(c.AdminTelegramWebhookSecret)) {
+			return fmt.Errorf("admin webhook URL and secret required")
+		}
+	}
+	min, e1 := decimal.NewFromString(c.WithdrawMinUSDT)
+	fee, e2 := decimal.NewFromString(c.WithdrawFeeUSDT)
+	rate, e3 := decimal.NewFromString(c.ReferralRate)
+	if e1 != nil || e2 != nil || e3 != nil || !min.IsPositive() || fee.IsNegative() || rate.IsNegative() || rate.GreaterThan(decimal.NewFromInt(1)) || !min.Equal(min.Truncate(6)) || !fee.Equal(fee.Truncate(6)) {
+		return fmt.Errorf("invalid withdrawal minimum, fee or referral rate")
+	}
+	if c.WalletCurrency != "USDT" {
+		return fmt.Errorf("only USDT wallets are supported")
+	}
+	if c.TronWatchEnabled && (!c.TronConfirmOnly || c.TronUSDTContract == "") {
+		return fmt.Errorf("TRON watcher requires confirmed transactions and a token contract")
+	}
+	return nil
+}
