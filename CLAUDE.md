@@ -1,0 +1,39 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+Go (module `telegram-business-bot`, Go 1.24+) Telegram business bot: a user bot, an optional separate admin bot, extra DB-configured "business bots", a USDT TRC20 wallet ledger, referrals, support tickets, message push campaigns, merchants, and a Gin web admin. MariaDB stores the data (GORM, AutoMigrate on startup) and Redis stores sessions and locks. User-facing text and docs are mostly Chinese.
+
+## Commands
+
+```bash
+make test                      # go test ./...
+go test ./internal/push -run TestName -v   # single test
+make build                     # bin/xunzhou
+make linux ARCH=arm64          # static cross-compile (CGO_ENABLED=0)
+make dev                       # sources .env, then go run ./cmd/bot
+docker compose up -d mariadb redis   # infra only, for local `make dev`
+make up / make down / make logs      # full stack via Docker Compose
+node --test internal/admin/ui_test.js   # admin UI JS tests (no browser needed)
+TEST_MYSQL_DSN='user:pw@tcp(host:3306)/' go test ./integration/...  # real-DB financial tests
+```
+
+The integration suite is skipped unless `TEST_MYSQL_DSN` is set. The DSN must **omit the database name**: the suite creates and drops its own uniquely named database and never reads `.env`.
+
+## Architecture
+
+- **Wiring**: `cmd/bot/main.go` → `internal/app/app.go` builds every service and starts the HTTP server (`/healthz`, `/telegram/webhook`, `/telegram/admin/webhook`, `/admin/*`, `/uploads`), the background workers (push, business bots, TRON watcher), and the Telegram loops (polling or webhook, set by `TELEGRAM_MODE`).
+- **One `telegram.Router`, several bots**: the same router type serves the user bot, the admin bot (`adminOnly=true`; only `ADMIN_IDS`), and each business bot (`.WithBotID(id)`). Each one gets its own Redis session namespace (`sessions.WithNamespace(...)`). Business bots are created in `internal/business`: tokens are stored AES-GCM encrypted (key from `BUSINESS_BOT_KEY`, or the primary bot token if that is empty) and each bot is polled under a lease.
+- **`internal/lease`**: a Redis SETNX lease with renewal. It serializes per-user update handling (`tg:lock:...`), per-campaign push work, and business-bot polling across replicas. If ownership is lost, the work's context is cancelled. Use it for any new work that must not run concurrently.
+- **Update error semantics**: if `Router.Handle` returns an error, polling rewinds its offset and a webhook returns 503, so Telegram redelivers the update. Return errors only for failures where a retry is safe.
+- **Wallet ledger** (`internal/wallet`): balances are split into available and frozen. Withdrawal flow: `available→frozen→pending→approved→completed` (completion deducts frozen; rejection returns frozen to available). Deposits from `trongrid.Watcher` are idempotent by `tx_id` and credit referral commission (`REFERRAL_RATE`) to the direct upline. The bot intentionally never holds TRON private keys or signs transactions; on-chain payout belongs in a separate signer.
+- **Dynamic menus** (`internal/menu`): read from `menu_items` on every render (`builtin` / `url` / `submenu` action types), so menu changes need no restart. Default rows are seeded in `store.seedDefaults`.
+- **Push** (`internal/push`): `push_campaigns` are expanded into `push_recipients` and sent with rate limiting and retries. Supports scheduled, recurring, pause/resume/cancel/retry, and per-category bot routing through `business.Resolve`.
+- **Web admin** (`internal/admin`): Gin JSON API plus single-file `index.html` / `login.html` embedded via `go:embed`. All frontend JS is inline in `index.html`, and `ui_test.js` loads it into a `vm` sandbox. Login sessions are stored in Redis.
+- **Schema changes**: add the model in `internal/model/models.go` and register it in the `AutoMigrate` list in `internal/store/store.go`.
+
+## Testing conventions
+
+Service unit tests use `internal/testutil.DB(t, steps...)`, a scripted fake SQL driver. Each `Step` must match the next query in order (`Contains` substring, optional `Args`), and any unexecuted steps fail the test. When you change a service's queries, update the step scripts to match. Redis-dependent code takes small interfaces (e.g. `lease.Client`) so tests can fake it.
+
+`internal/app/app_media_integration.go.txt` is a patch note, not compiled code.
