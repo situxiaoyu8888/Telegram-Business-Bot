@@ -16,10 +16,12 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/redis/go-redis/v9"
+	"go.uber.org/zap"
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
 
 	"telegram-business-bot/internal/model"
+	"telegram-business-bot/internal/ratelimit"
 )
 
 const sessionCookie = "admin_session"
@@ -160,7 +162,19 @@ func (h *Handler) login(c *gin.Context) {
 		c.JSON(400, gin.H{"error": "请填写用户名和密码"})
 		return
 	}
-	u, err := h.accounts().ByUsername(c.Request.Context(), strings.TrimSpace(b.Username))
+	name := strings.TrimSpace(b.Username)
+	limiter := h.loginLimiter()
+	keys := loginKeys(c.ClientIP(), name)
+	if limiter != nil {
+		// Count failed attempts per username and per IP; reads fail open so Redis trouble never locks everyone out.
+		nUser, _ := ratelimit.Count(c.Request.Context(), limiter, keys[0])
+		nIP, _ := ratelimit.Count(c.Request.Context(), limiter, keys[1])
+		if nUser >= maxLoginFailuresPerUser || nIP >= maxLoginFailuresPerIP {
+			c.JSON(429, gin.H{"error": "登录失败次数过多，请 15 分钟后再试"})
+			return
+		}
+	}
+	u, err := h.accounts().ByUsername(c.Request.Context(), name)
 	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 		c.JSON(503, gin.H{"error": "账号服务暂不可用"})
 		return
@@ -170,6 +184,14 @@ func (h *Handler) login(c *gin.Context) {
 		hash = []byte(u.PasswordHash)
 	}
 	if bcrypt.CompareHashAndPassword(hash, []byte(b.Password)) != nil || u == nil {
+		if limiter != nil {
+			for _, k := range keys {
+				_, _ = ratelimit.Hit(c.Request.Context(), limiter, k, loginWindow)
+			}
+		}
+		if h.logger != nil {
+			h.logger.Warn("admin login failed", zap.String("username", name), zap.String("ip", c.ClientIP()))
+		}
 		c.JSON(401, gin.H{"error": "用户名或密码错误"})
 		return
 	}
@@ -350,6 +372,38 @@ func platformOnly(c *gin.Context) {
 		return
 	}
 	c.Next()
+}
+
+const (
+	loginWindow             = 15 * time.Minute
+	maxLoginFailuresPerUser = 10
+	maxLoginFailuresPerIP   = 30
+)
+
+func (h *Handler) loginLimiter() ratelimit.Store {
+	if h.limiter != nil {
+		return h.limiter
+	}
+	if h.st != nil && h.st.Redis != nil {
+		return h.st.Redis
+	}
+	return nil
+}
+
+// loginKeys are the failure counters for a username (hashed, case-insensitive) and a client IP.
+func loginKeys(ip, username string) [2]string {
+	sum := sha256.Sum256([]byte(strings.ToLower(username)))
+	return [2]string{"rl:login:user:" + hex.EncodeToString(sum[:8]), "rl:login:ip:" + ip}
+}
+
+// accessLog records console writes and failed requests with the acting account.
+func (h *Handler) accessLog(c *gin.Context) {
+	start := time.Now()
+	c.Next()
+	if h.logger == nil || (c.Request.Method == http.MethodGet && c.Writer.Status() < 400) {
+		return
+	}
+	h.logger.Info("admin request", zap.String("method", c.Request.Method), zap.String("path", c.Request.URL.Path), zap.Int("status", c.Writer.Status()), zap.Duration("took", time.Since(start)), zap.String("account", operator(c)), zap.String("ip", c.ClientIP()))
 }
 
 func requireSuper(c *gin.Context) {

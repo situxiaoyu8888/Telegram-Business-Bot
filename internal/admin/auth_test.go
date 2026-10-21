@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql/driver"
 	"errors"
+	"fmt"
 	"github.com/gin-gonic/gin"
 	"github.com/redis/go-redis/v9"
 	"golang.org/x/crypto/bcrypt"
@@ -389,5 +390,42 @@ func TestMerchantAccountGetsOnlyScopedShopPages(t *testing.T) {
 	m.MerchantID = 0
 	if w := authRequest(r, "GET", "/admin/api/session", "", cookie, false); !strings.Contains(w.Body.String(), `"permissions":[]`) {
 		t.Fatal(w.Body.String())
+	}
+}
+
+type memoryLimiter struct{ n map[string]int64 }
+
+func (m *memoryLimiter) Incr(_ context.Context, key string) *redis.IntCmd {
+	m.n[key]++
+	return redis.NewIntResult(m.n[key], nil)
+}
+func (m *memoryLimiter) Expire(context.Context, string, time.Duration) *redis.BoolCmd {
+	return redis.NewBoolResult(true, nil)
+}
+func (m *memoryLimiter) Get(_ context.Context, key string) *redis.StringCmd {
+	v, ok := m.n[key]
+	if !ok {
+		return redis.NewStringResult("", redis.Nil)
+	}
+	return redis.NewStringResult(fmt.Sprint(v), nil)
+}
+
+func TestRepeatedLoginFailuresAreThrottled(t *testing.T) {
+	h, _, _, _ := accountFixture(t)
+	h.limiter = &memoryLimiter{n: map[string]int64{}}
+	r := gin.New()
+	h.Register(r)
+	for i := 0; i < maxLoginFailuresPerUser; i++ {
+		if w := authRequest(r, "POST", "/admin/login", `{"username":"admin","password":"wrong"}`, nil, true); w.Code != 401 {
+			t.Fatal(i, w.Code)
+		}
+	}
+	// Even the right password is refused while the account is throttled.
+	if w := authRequest(r, "POST", "/admin/login", `{"username":"admin","password":"test-password"}`, nil, true); w.Code != 429 {
+		t.Fatal("not throttled", w.Code)
+	}
+	// Another account from the same address is still allowed (under the per-IP limit).
+	if w := authRequest(r, "POST", "/admin/login", `{"username":"staff","password":"staff-password"}`, nil, true); w.Code != 200 {
+		t.Fatal(w.Code)
 	}
 }

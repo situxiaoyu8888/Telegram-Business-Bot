@@ -50,6 +50,9 @@ func (h *Handler) registerShop(api *gin.RouterGroup, can func(...string) gin.Han
 	api.POST("/shop-settlements", can("shop_settlements"), platformOnly, h.createShopSettlement)
 	api.POST("/shop-settlements/:id/paid", can("shop_settlements"), platformOnly, h.payShopSettlement)
 
+	api.GET("/shop-members", can("shop_members"), h.shopMembers)
+	api.POST("/shop-members/adjust", can("shop_members"), platformOnly, h.adjustShopPoints)
+
 	api.GET("/shop-coupons", can("shop_coupons"), h.shopCoupons)
 	api.POST("/shop-coupons", can("shop_coupons"), h.saveShopCoupon)
 	api.POST("/shop-coupons/:id/issue", can("shop_coupons"), h.issueShopCoupon)
@@ -403,6 +406,24 @@ func (h *Handler) payShopSettlement(c *gin.Context) {
 	}
 	_ = c.ShouldBindJSON(&b)
 	respond(c, h.shop.MarkSettlementPaid(id, b.PayRef, b.Note, operator(c)))
+}
+
+func (h *Handler) shopMembers(c *gin.Context) {
+	rows, err := h.shop.AdminMembers()
+	listOrError(c, rows, err)
+}
+
+func (h *Handler) adjustShopPoints(c *gin.Context) {
+	var b struct {
+		TelegramUserID int64  `json:"telegram_user_id"`
+		Delta          int64  `json:"delta"`
+		Reason         string `json:"reason"`
+	}
+	if err := c.ShouldBindJSON(&b); err != nil || b.TelegramUserID <= 0 {
+		c.JSON(400, gin.H{"error": "请填写 Telegram ID"})
+		return
+	}
+	respond(c, h.shop.AdjustPoints(b.TelegramUserID, b.Delta, b.Reason, operator(c)))
 }
 
 func listOrError(c *gin.Context, rows any, err error) {

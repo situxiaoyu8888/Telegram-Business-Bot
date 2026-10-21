@@ -114,7 +114,7 @@ func New(cfg config.Config, logger *zap.Logger) (*App, error) {
 		cfg.UploadPublicBaseURL,
 		cfg.UploadMaxImageMB,
 		cfg.UploadMaxVideoMB,
-	).WithBots(bots).WithShop(shopSvc).Register(engine)
+	).WithBots(bots).WithShop(shopSvc).WithLogger(logger).Register(engine)
 	tronClient := trongrid.New(cfg.TronGridBaseURL, cfg.TronGridAPIKey)
 	a.tronWatcher = trongrid.NewWatcher(st, walletSvc, refSvc, tronClient, cfg.TronUSDTContract, cfg.TronConfirmOnly, cfg.TronWatchInterval, logger)
 	return a, nil

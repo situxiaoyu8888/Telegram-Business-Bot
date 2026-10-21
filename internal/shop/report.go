@@ -132,7 +132,7 @@ func (s *Service) SalesReport(merchantID uint64, from, to time.Time) (*Report, e
 	return r, nil
 }
 
-var statusNames = map[string]string{StatusPaid: "待处理", StatusShipped: "已发货", StatusReady: "待自提", StatusCompleted: "已完成", StatusCanceled: "已取消"}
+var statusNames = map[string]string{StatusGrouping: "拼团中", StatusPaid: "待处理", StatusShipped: "已发货", StatusReady: "待自提", StatusCompleted: "已完成", StatusCanceled: "已取消"}
 
 // ExportOrders writes orders placed in [from, to) as CSV with a UTF-8 BOM so Excel shows Chinese correctly.
 func (s *Service) ExportOrders(w io.Writer, merchantID uint64, status string, from, to time.Time) error {

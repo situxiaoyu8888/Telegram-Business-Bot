@@ -49,6 +49,9 @@ type line struct {
 	PromoStartsAt   *time.Time
 	PromoEndsAt     *time.Time
 	LimitPerUser    int64
+	GroupSize       int
+	GroupHours      int
+	GroupRate       string
 	// ListPrice is the regular price; Price is what the buyer pays now (see effectivePrice).
 	ListPrice string
 	OnPromo   bool
@@ -61,7 +64,7 @@ func (s *Service) lines(db *gorm.DB, skuIDs []uint64) (map[uint64]line, error) {
 	}
 	var rows []line
 	err := db.Table("shop_skus").
-		Select("shop_skus.*, shop_products.name AS product_name, shop_products.enabled AS product_enabled, shop_products.images, shop_products.kind, shop_products.allow_express, shop_products.allow_pickup, merchants.id AS merchant_id, merchants.name AS merchant_name, merchants.enabled AS merchant_enabled, merchants.address AS merchant_address, shop_products.promo_starts_at, shop_products.promo_ends_at, shop_products.limit_per_user").
+		Select("shop_skus.*, shop_products.name AS product_name, shop_products.enabled AS product_enabled, shop_products.images, shop_products.kind, shop_products.allow_express, shop_products.allow_pickup, merchants.id AS merchant_id, merchants.name AS merchant_name, merchants.enabled AS merchant_enabled, merchants.address AS merchant_address, shop_products.promo_starts_at, shop_products.promo_ends_at, shop_products.limit_per_user, shop_products.group_size, shop_products.group_hours, shop_products.group_rate").
 		Joins("JOIN shop_products ON shop_products.id = shop_skus.product_id").
 		Joins("JOIN merchants ON merchants.id = shop_products.merchant_id").
 		Where("shop_skus.id IN ?", skuIDs).Scan(&rows).Error

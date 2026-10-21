@@ -132,19 +132,23 @@ func (r *Router) handleMessage(ctx context.Context, m *Message, first bool) {
 	if command == "/start" {
 		_ = r.sessions.Clear(ctx, m.From.ID)
 		parts := strings.Fields(text)
-		var sharedProduct string
+		var shared []string
 		if len(parts) > 1 {
 			code := parts[1]
-			// Shop share links carry "p<productID>_<referral code>".
+			// Shop share links carry "p<productID>_<code>" (a product) or "g<groupID>_<code>" (a group buy).
 			if m := sharePayload.FindStringSubmatch(code); m != nil {
-				sharedProduct, code = m[1], m[2]
+				shared, code = m[1:3], m[3]
 			}
 			_ = r.referral.BindByCode(u.ID, code)
 		}
 		r.sendHome(ctx, m.Chat.ID, m.From.ID)
-		if sharedProduct != "" && r.menuButton.URL != "" && !r.adminOnly {
-			kb := &InlineKeyboardMarkup{InlineKeyboard: [][]InlineKeyboardButton{{ShopButton("🛍 查看商品", r.menuButton.URL, "/product/"+sharedProduct)}}}
-			_ = r.client.SendMessage(ctx, m.Chat.ID, "好友给你分享了一个商品，点击下方按钮查看：", kb)
+		if shared != nil && r.menuButton.URL != "" && !r.adminOnly {
+			text, button, fragment := "好友给你分享了一个商品，点击下方按钮查看：", "🛍 查看商品", "/product/"+shared[1]
+			if shared[0] == "g" {
+				text, button, fragment = "好友邀请你一起拼团，点击下方按钮参团：", "👥 去参团", "/group/"+shared[1]
+			}
+			kb := &InlineKeyboardMarkup{InlineKeyboard: [][]InlineKeyboardButton{{ShopButton(button, r.menuButton.URL, fragment)}}}
+			_ = r.client.SendMessage(ctx, m.Chat.ID, text, kb)
 		}
 		return
 	}
@@ -490,9 +494,9 @@ func (r *Router) handleSessionInput(ctx context.Context, m *Message, u *model.Te
 	}
 }
 
-var sharePayload = regexp.MustCompile(`^p(\d{1,18})_([A-Za-z0-9]{1,40})$`)
+var sharePayload = regexp.MustCompile(`^([pg])(\d{1,18})_([A-Za-z0-9]{1,40})$`)
 
-var shopStatusNames = map[string]string{"paid": "待处理", "shipped": "已发货", "ready": "待自提", "completed": "已完成", "canceled": "已取消"}
+var shopStatusNames = map[string]string{"grouping": "拼团中", "paid": "待处理", "shipped": "已发货", "ready": "待自提", "completed": "已完成", "canceled": "已取消"}
 
 // sendShopOrders lists the user's latest shop orders, with buttons that open each in the shop.
 func (r *Router) sendShopOrders(ctx context.Context, chatID int64, userID uint64) {

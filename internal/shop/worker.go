@@ -10,7 +10,8 @@ import (
 	"telegram-business-bot/internal/model"
 )
 
-const workerInterval = 10 * time.Minute
+// workerInterval is short enough that expired group-buying groups are refunded promptly.
+const workerInterval = 2 * time.Minute
 
 // Run auto-completes express orders that were shipped shop_auto_complete_days ago and then pays
 // due referral commissions (see GrantCommissions). Pickup orders
@@ -22,6 +23,9 @@ func (s *Service) Run(ctx context.Context) {
 	for {
 		if err := lease.Run(ctx, s.st.Redis, "shop:auto-complete", func(ctx context.Context) error {
 			if err := s.AutoComplete(ctx, time.Now()); err != nil {
+				return err
+			}
+			if err := s.ExpireGroups(ctx, time.Now()); err != nil {
 				return err
 			}
 			return s.GrantCommissions(ctx, time.Now())

@@ -11,10 +11,10 @@ import (
 	"telegram-business-bot/internal/model"
 )
 
-// GrantCommissions pays shop referral commissions to the direct referrer of each buyer, once an
-// order has completed and its after-sale period has passed, so the amount (paid minus refunds)
-// can no longer change. Orders are marked done whether or not a commission was due, so turning
-// the rate on later does not pay for old orders.
+// GrantCommissions settles the rewards of each order that has completed and passed its after-sale
+// period, so the amount (paid minus refunds) can no longer change: the buyer's member spend and
+// points, and the shop referral commission for their direct referrer. Orders are marked done
+// whether or not anything was due, so changing the settings later does not reach old orders.
 func (s *Service) GrantCommissions(ctx context.Context, now time.Time) error {
 	rate, err := decimal.NewFromString(s.configString("shop_referral_rate"))
 	if err != nil || rate.IsNegative() || rate.GreaterThanOrEqual(decimal.NewFromInt(1)) {
@@ -57,10 +57,25 @@ func (s *Service) grantCommission(orderID uint64, rate decimal.Decimal) error {
 		if err := tx.First(&buyer, o.UserID).Error; err != nil {
 			return err
 		}
+		net := amount(o.PayAmount).Sub(amount(o.RefundedAmount))
+		if net.IsPositive() {
+			m, err := lockMember(tx, buyer.ID)
+			if err != nil {
+				return err
+			}
+			if err := tx.Model(&model.ShopMember{}).Where("user_id = ?", buyer.ID).Update("spent", amount(m.Spent).Add(net).StringFixed(6)).Error; err != nil {
+				return err
+			}
+			if earned := net.Mul(decimal.NewFromInt(int64(s.configInt("shop_points_per_usdt", 10)))).Floor().IntPart(); earned > 0 {
+				if err := addPoints(tx, buyer.ID, earned, PointsEarn, o.ID, "商城订单 "+o.OrderNo, ""); err != nil {
+					return err
+				}
+			}
+		}
 		if buyer.ParentUserID == nil || !rate.IsPositive() {
 			return nil
 		}
-		commission = amount(o.PayAmount).Sub(amount(o.RefundedAmount)).Mul(rate).Truncate(6)
+		commission = net.Mul(rate).Truncate(6)
 		if !commission.IsPositive() {
 			return nil
 		}

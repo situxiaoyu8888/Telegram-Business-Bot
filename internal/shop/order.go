@@ -28,6 +28,9 @@ type CheckoutGroup struct {
 	DeliveryType string         `json:"delivery_type"`
 	UserCouponID uint64         `json:"user_coupon_id"`
 	Remark       string         `json:"remark"`
+	UsePoints    bool           `json:"use_points"`
+	GroupMode    string         `json:"group_mode"` // "start" or "join" for group buying
+	GroupID      uint64         `json:"group_id"`   // the group to join
 }
 
 // CheckoutRequest pays for one group (the top-level fields) or several (Groups), e.g. a cart
@@ -40,6 +43,9 @@ type CheckoutRequest struct {
 	UserCouponID uint64          `json:"user_coupon_id"`
 	Remark       string          `json:"remark"`
 	FromCart     bool            `json:"from_cart"`
+	UsePoints    bool            `json:"use_points"`
+	GroupMode    string          `json:"group_mode"`
+	GroupID      uint64          `json:"group_id"`
 	Groups       []CheckoutGroup `json:"groups"`
 }
 
@@ -56,6 +62,11 @@ type Quote struct {
 	PayAmount       string       `json:"pay_amount"`
 	Coupons         []UserCoupon `json:"coupons"`
 	Balance         string       `json:"balance"`
+	MemberLevel     string       `json:"member_level"`
+	MemberDiscount  string       `json:"member_discount"`
+	Points          int64        `json:"points"`      // the buyer's balance
+	PointsUsed      int64        `json:"points_used"` // points this checkout would spend
+	PointsDiscount  string       `json:"points_discount"`
 }
 
 type pricedItem struct {
@@ -161,6 +172,11 @@ func (s *Service) Preview(userID uint64, req CheckoutRequest) (*Quote, error) {
 	if err != nil {
 		return nil, err
 	}
+	if req.GroupMode != "" {
+		if goods, err = applyGroupPrice(items); err != nil {
+			return nil, err
+		}
+	}
 	merchant := items[0].line
 	q := &Quote{MerchantID: merchant.MerchantID, MerchantName: merchant.MerchantName, MerchantAddress: merchant.MerchantAddress, DeliveryTypes: types, GoodsAmount: goods.StringFixed(6), Coupons: []UserCoupon{}}
 	held, err := s.MyCoupons(userID)
@@ -183,8 +199,14 @@ func (s *Service) Preview(userID uint64, req CheckoutRequest) (*Quote, error) {
 	if req.UserCouponID != 0 && discount.IsZero() {
 		return nil, userErr("所选优惠券不可用")
 	}
-	q.Discount = discount.StringFixed(6)
-	q.PayAmount = goods.Sub(discount).StringFixed(6)
+	m, err := s.member(s.st.DB, userID)
+	if err != nil {
+		return nil, err
+	}
+	level, member, pointsUsed, pointsDiscount := s.orderDiscounts(amount(m.Spent), m.Points, goods, discount, req.UsePoints)
+	q.Discount, q.MemberLevel, q.MemberDiscount = discount.StringFixed(6), level, member.StringFixed(6)
+	q.Points, q.PointsUsed, q.PointsDiscount = m.Points, pointsUsed, pointsDiscount.StringFixed(6)
+	q.PayAmount = goods.Sub(discount).Sub(member).Sub(pointsDiscount).StringFixed(6)
 	available, _, err := s.wallet.Balance(userID)
 	if err != nil {
 		return nil, err
@@ -224,7 +246,7 @@ func (s *Service) CreateOrders(b Buyer, req CheckoutRequest) ([]model.ShopOrder,
 	}
 	groups := req.Groups
 	if len(groups) == 0 {
-		groups = []CheckoutGroup{{Items: req.Items, DeliveryType: req.DeliveryType, UserCouponID: req.UserCouponID, Remark: req.Remark}}
+		groups = []CheckoutGroup{{Items: req.Items, DeliveryType: req.DeliveryType, UserCouponID: req.UserCouponID, Remark: req.Remark, UsePoints: req.UsePoints, GroupMode: req.GroupMode, GroupID: req.GroupID}}
 	}
 	if len(groups) > maxCheckoutGroups {
 		return nil, userErr("一次最多结算 %d 个商家", maxCheckoutGroups)
@@ -239,6 +261,7 @@ func (s *Service) CreateOrders(b Buyer, req CheckoutRequest) ([]model.ShopOrder,
 	}
 	var orders []model.ShopOrder
 	var existing bool
+	var filledGroups []uint64
 	err := s.st.DB.Transaction(func(tx *gorm.DB) error {
 		// One checkout per buyer at a time, so purchase limits hold under concurrent taps. This
 		// must be the first statement: under REPEATABLE READ the first plain read fixes the
@@ -255,7 +278,7 @@ func (s *Service) CreateOrders(b Buyer, req CheckoutRequest) ([]model.ShopOrder,
 		}
 		var cartSKUs []uint64
 		for i, g := range groups {
-			o, skus, err := s.createOrderTx(tx, b, requestIDs[i], g, req.AddressID)
+			o, skus, filled, err := s.createOrderTx(tx, b, requestIDs[i], g, req.AddressID)
 			if err != nil {
 				if len(groups) > 1 && IsUserError(err) {
 					return userErr("第 %d 个商家：%s", i+1, err.Error())
@@ -264,6 +287,9 @@ func (s *Service) CreateOrders(b Buyer, req CheckoutRequest) ([]model.ShopOrder,
 			}
 			orders = append(orders, o)
 			cartSKUs = append(cartSKUs, skus...)
+			if filled {
+				filledGroups = append(filledGroups, o.GroupID)
+			}
 		}
 		if req.FromCart {
 			if err := tx.Where("user_id = ? AND sku_id IN ?", b.UserID, cartSKUs).Delete(&model.ShopCartItem{}).Error; err != nil {
@@ -276,7 +302,17 @@ func (s *Service) CreateOrders(b Buyer, req CheckoutRequest) ([]model.ShopOrder,
 		return nil, err
 	}
 	if !existing {
+		for _, id := range filledGroups {
+			s.notifyGroupSuccess(id)
+		}
 		for _, o := range orders {
+			if o.Status == StatusGrouping {
+				s.notify(o.BotID, o.TelegramUserID, fmt.Sprintf("👥 <b>拼团已支付，等待成团</b>\n\n订单号：<code>%s</code>\n分享给好友一起拼，未成团将自动退款。", o.OrderNo), o.ID)
+				continue
+			}
+			if o.GroupID != 0 {
+				continue // a filled group is announced by notifyGroupSuccess
+			}
 			msg := fmt.Sprintf("🛒 <b>下单成功</b>\n\n订单号：<code>%s</code>\n商家：%s\n实付：<code>%s USDT</code>", o.OrderNo, htmlEscape(o.MerchantName), amount(o.PayAmount).String())
 			if o.Status == StatusCompleted {
 				msg += "\n\n🎁 卡密已发放，请在商城「订单详情」中查看。"
@@ -292,24 +328,37 @@ var deliveryNames = map[string]string{DeliveryExpress: "快递配送", DeliveryP
 
 // createOrderTx prices, charges and records one group inside the caller's transaction and
 // returns the order with the SKUs it bought.
-func (s *Service) createOrderTx(tx *gorm.DB, b Buyer, requestID string, g CheckoutGroup, addressID uint64) (model.ShopOrder, []uint64, error) {
-	var order model.ShopOrder
-	if err := checkLen(g.Remark, "备注", 255, false); err != nil {
-		return order, nil, err
+// filled reports that this order completed a group-buying group.
+func (s *Service) createOrderTx(tx *gorm.DB, b Buyer, requestID string, g CheckoutGroup, addressID uint64) (order model.ShopOrder, skus []uint64, filled bool, err error) {
+	if err = checkLen(g.Remark, "备注", 255, false); err != nil {
+		return
+	}
+	if g.GroupMode != "" && g.GroupMode != "start" && g.GroupMode != "join" {
+		err = userErr("拼团参数无效")
+		return
 	}
 	items, goods, types, err := s.price(tx, g.Items)
 	if err != nil {
-		return order, nil, err
+		return
+	}
+	if g.GroupMode != "" {
+		if items[0].line.Kind == "virtual" {
+			err = userErr("虚拟商品不支持拼团")
+			return
+		}
+		if goods, err = applyGroupPrice(items); err != nil {
+			return
+		}
 	}
 	allowed := false
 	for _, t := range types {
 		allowed = allowed || t == g.DeliveryType
 	}
 	if !allowed {
-		return order, nil, userErr("所选商品不支持该配送方式")
+		return order, nil, false, userErr("所选商品不支持该配送方式")
 	}
 	if err := s.checkLimits(tx, b.UserID, items); err != nil {
-		return order, nil, err
+		return order, nil, false, err
 	}
 	first := items[0].line
 	now := time.Now()
@@ -318,7 +367,7 @@ func (s *Service) createOrderTx(tx *gorm.DB, b Buyer, requestID string, g Checko
 	case DeliveryExpress:
 		var addr model.ShopAddress
 		if err := tx.Where("id = ? AND user_id = ?", addressID, b.UserID).First(&addr).Error; err != nil {
-			return order, nil, userErr("请选择收货地址")
+			return order, nil, false, userErr("请选择收货地址")
 		}
 		order.ContactName, order.ContactPhone, order.Address = addr.Name, addr.Phone, addr.Address
 	case DeliveryPickup:
@@ -329,68 +378,100 @@ func (s *Service) createOrderTx(tx *gorm.DB, b Buyer, requestID string, g Checko
 	var held model.ShopUserCoupon
 	if g.UserCouponID != 0 {
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND user_id = ?", g.UserCouponID, b.UserID).First(&held).Error; err != nil {
-			return order, nil, userErr("优惠券不存在")
+			return order, nil, false, userErr("优惠券不存在")
 		}
 		var c model.ShopCoupon
 		if err := tx.First(&c, held.CouponID).Error; err != nil {
-			return order, nil, userErr("优惠券不存在")
+			return order, nil, false, userErr("优惠券不存在")
 		}
 		if discount, err = couponDiscount(held, c, first.MerchantID, goods, now); err != nil {
-			return order, nil, err
+			return order, nil, false, err
 		}
 		order.UserCouponID = held.ID
 	}
-	pay := goods.Sub(discount)
-	order.GoodsAmount, order.Discount, order.PayAmount = goods.StringFixed(6), discount.StringFixed(6), pay.StringFixed(6)
-	if err := tx.Create(&order).Error; err != nil {
-		return order, nil, err
+	// Tier and points discounts come after the coupon. Spending points locks the member row.
+	var m model.ShopMember
+	if g.UsePoints {
+		m, err = lockMember(tx, b.UserID)
+	} else {
+		m, err = s.member(tx, b.UserID)
 	}
-	skus := []uint64{}
+	if err != nil {
+		return order, nil, false, err
+	}
+	level, member, pointsUsed, pointsDiscount := s.orderDiscounts(amount(m.Spent), m.Points, goods, discount, g.UsePoints)
+	pay := goods.Sub(discount).Sub(member).Sub(pointsDiscount)
+	order.GoodsAmount, order.Discount, order.PayAmount = goods.StringFixed(6), discount.StringFixed(6), pay.StringFixed(6)
+	order.MemberLevel, order.MemberDiscount, order.PointsUsed, order.PointsDiscount = level, member.StringFixed(6), pointsUsed, pointsDiscount.StringFixed(6)
+	if g.GroupMode != "" {
+		grp, full, err := s.joinGroup(tx, b, g, items[0].line)
+		if err != nil {
+			return order, nil, false, err
+		}
+		order.GroupID, filled = grp.ID, full
+		if !full {
+			order.Status = StatusGrouping
+		}
+	}
+	if err := tx.Create(&order).Error; err != nil {
+		return order, nil, false, err
+	}
+	if filled {
+		if err := completeGroup(tx, order.GroupID); err != nil {
+			return order, nil, false, err
+		}
+	}
+	if pointsUsed > 0 {
+		if err := addPoints(tx, b.UserID, -pointsUsed, PointsSpend, order.ID, "商城订单抵扣 "+order.OrderNo, ""); err != nil {
+			return order, nil, false, err
+		}
+	}
+	skus = []uint64{}
 	for _, it := range items {
 		// The conditional update is the stock check that holds under concurrent orders.
 		res := tx.Model(&model.ShopSKU{}).Where("id = ? AND stock >= ?", it.SKUID, it.Quantity).Update("stock", gorm.Expr("stock - ?", it.Quantity))
 		if res.Error != nil {
-			return order, nil, res.Error
+			return order, nil, false, res.Error
 		}
 		if res.RowsAffected != 1 {
-			return order, nil, userErr("「%s %s」库存不足", it.line.ProductName, it.line.Name)
+			return order, nil, false, userErr("「%s %s」库存不足", it.line.ProductName, it.line.Name)
 		}
 		if it.line.OnPromo && it.line.PromoStock != nil {
 			res := tx.Model(&model.ShopSKU{}).Where("id = ? AND promo_stock >= ?", it.SKUID, it.Quantity).Update("promo_stock", gorm.Expr("promo_stock - ?", it.Quantity))
 			if res.Error != nil {
-				return order, nil, res.Error
+				return order, nil, false, res.Error
 			}
 			// Never fall back to the regular price silently: the buyer was shown the promo price.
 			if res.RowsAffected != 1 {
-				return order, nil, userErr("「%s %s」活动价已抢完，请返回刷新后按当前价格购买", it.line.ProductName, it.line.Name)
+				return order, nil, false, userErr("「%s %s」活动价已抢完，请返回刷新后按当前价格购买", it.line.ProductName, it.line.Name)
 			}
 		}
 		if err := tx.Model(&model.ShopProduct{}).Where("id = ?", it.line.ProductID).Update("sales", gorm.Expr("sales + ?", it.Quantity)).Error; err != nil {
-			return order, nil, err
+			return order, nil, false, err
 		}
 		if err := tx.Create(&model.ShopOrderItem{OrderID: order.ID, ProductID: it.line.ProductID, SKUID: it.SKUID, ProductName: it.line.ProductName, SKUName: it.line.Name, ImageURL: firstImage(it.line.Images), Price: it.line.Price, Quantity: it.Quantity, Promo: it.line.OnPromo}).Error; err != nil {
-			return order, nil, err
+			return order, nil, false, err
 		}
 		skus = append(skus, it.SKUID)
 	}
 	if order.UserCouponID != 0 {
 		// The coupon row is locked and re-checked above, so one coupon cannot pay for two groups.
 		if err := tx.Model(&model.ShopUserCoupon{}).Where("id = ?", held.ID).Updates(map[string]any{"status": CouponUsed, "order_id": order.ID}).Error; err != nil {
-			return order, nil, err
+			return order, nil, false, err
 		}
 	}
 	if err := s.wallet.Spend(tx, b.UserID, pay, "shop_order", order.ID, "商城订单 "+order.OrderNo); err != nil {
 		if errors.Is(err, wallet.ErrInsufficientBalance) {
-			return order, nil, userErr("余额不足，请先充值")
+			return order, nil, false, userErr("余额不足，请先充值")
 		}
-		return order, nil, err
+		return order, nil, false, err
 	}
 	if g.DeliveryType == DeliveryVirtual {
 		if err := s.assignCodes(tx, &order, items); err != nil {
-			return order, nil, err
+			return order, nil, false, err
 		}
 	}
-	return order, skus, nil
+	return order, skus, filled, nil
 }
 
 // assignCodes delivers pre-loaded codes for a virtual order. When any SKU lacks codes the order
@@ -549,11 +630,21 @@ func (s *Service) cancel(id uint64, scope Scope, reason, operator string) error 
 		if o, err = lockOrder(tx, id, scope); err != nil {
 			return err
 		}
-		if scope.UserID != 0 && o.Status != StatusPaid {
+		if scope.UserID != 0 && o.Status != StatusPaid && o.Status != StatusGrouping {
 			return userErr("订单已发货或已备货，请联系商家处理")
 		}
-		if o.Status != StatusPaid && o.Status != StatusShipped && o.Status != StatusReady {
+		if o.Status != StatusPaid && o.Status != StatusShipped && o.Status != StatusReady && o.Status != StatusGrouping {
 			return userErr("当前订单状态不能取消")
+		}
+		if o.Status == StatusGrouping && o.GroupID != 0 {
+			if err := leaveGroup(tx, o.GroupID); err != nil {
+				return err
+			}
+		}
+		if o.PointsUsed > 0 {
+			if err := addPoints(tx, o.UserID, o.PointsUsed, PointsRefund, o.ID, "商城订单取消退回 "+o.OrderNo, operator); err != nil {
+				return err
+			}
 		}
 		if o.AfterSaleOpen {
 			return userErr("该订单有处理中的售后申请，请先处理售后")

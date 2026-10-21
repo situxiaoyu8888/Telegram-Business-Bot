@@ -14,6 +14,10 @@ import (
 	"time"
 )
 
+// APIBase is the Bot API server. Set it (via TELEGRAM_API_URL) before creating clients to use a
+// self-hosted Bot API server, or a local fake one in end-to-end tests.
+var APIBase = "https://api.telegram.org"
+
 type Client struct {
 	token string
 	base  string
@@ -41,7 +45,7 @@ func (c *Client) Username(ctx context.Context) (string, error) {
 func NewClient(token string) *Client {
 	return &Client{
 		token: token,
-		base:  "https://api.telegram.org/bot" + token,
+		base:  APIBase + "/bot" + token,
 		http: &http.Client{
 			Timeout: 70 * time.Second,
 		},

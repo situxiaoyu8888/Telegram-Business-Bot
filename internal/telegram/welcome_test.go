@@ -64,8 +64,11 @@ func (u *usernameTransport) RoundTrip(*http.Request) (*http.Response, error) {
 
 func TestSharePayloadCarriesProductAndReferralCode(t *testing.T) {
 	m := sharePayload.FindStringSubmatch("p42_TG1E8A2C27E")
-	if m == nil || m[1] != "42" || m[2] != "TG1E8A2C27E" {
+	if m == nil || m[1] != "p" || m[2] != "42" || m[3] != "TG1E8A2C27E" {
 		t.Fatal(m)
+	}
+	if g := sharePayload.FindStringSubmatch("g7_TG1"); g == nil || g[1] != "g" || g[2] != "7" {
+		t.Fatal(g)
 	}
 	for _, plain := range []string{"TG1E8A2C27E", "p_TG1", "p42", "p42_TG-1"} {
 		if sharePayload.MatchString(plain) {

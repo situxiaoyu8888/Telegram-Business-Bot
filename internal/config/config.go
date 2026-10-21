@@ -54,6 +54,7 @@ type Config struct {
 
 	// SHOP_H5_URL makes the user bots' menu button open the H5 shop; empty keeps the command list.
 	ShopH5URL        string
+	TelegramAPIURL   string // optional Bot API server; empty uses https://api.telegram.org
 	ShopH5ButtonText string
 
 	LogDir        string
@@ -147,6 +148,7 @@ func load(path string) (Config, error) {
 		return Config{}, fmt.Errorf("UPLOAD_MAX_VIDEO_MB invalid")
 	}
 
+	cfg.TelegramAPIURL = strings.TrimRight(mustEnv("TELEGRAM_API_URL"), "/")
 	cfg.ShopH5URL = mustEnv("SHOP_H5_URL")
 	cfg.ShopH5ButtonText = mustEnv("SHOP_H5_BUTTON_TEXT")
 	if cfg.ShopH5ButtonText == "" {
@@ -218,6 +220,11 @@ func (c Config) Validate() error {
 	rate, e3 := decimal.NewFromString(c.ReferralRate)
 	if e1 != nil || e2 != nil || e3 != nil || !min.IsPositive() || fee.IsNegative() || rate.IsNegative() || rate.GreaterThan(decimal.NewFromInt(1)) || !min.Equal(min.Truncate(6)) || !fee.Equal(fee.Truncate(6)) {
 		return fmt.Errorf("invalid withdrawal minimum, fee or referral rate")
+	}
+	if c.TelegramAPIURL != "" {
+		if u, err := url.Parse(c.TelegramAPIURL); err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
+			return fmt.Errorf("TELEGRAM_API_URL must be an http(s) URL")
+		}
 	}
 	if c.ShopH5URL != "" {
 		u, err := url.Parse(c.ShopH5URL)

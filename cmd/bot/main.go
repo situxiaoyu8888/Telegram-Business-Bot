@@ -14,6 +14,7 @@ import (
 	"telegram-business-bot/internal/app"
 	"telegram-business-bot/internal/config"
 	"telegram-business-bot/internal/logging"
+	"telegram-business-bot/internal/telegram"
 
 	"github.com/gin-gonic/gin"
 
@@ -44,6 +45,10 @@ func main() {
 		logger.Info("file logging enabled", zap.String("dir", cfg.LogDir))
 	}
 
+	if cfg.TelegramAPIURL != "" {
+		telegram.APIBase = cfg.TelegramAPIURL
+		logger.Info("using custom Telegram Bot API server", zap.String("url", cfg.TelegramAPIURL))
+	}
 	application, err := app.New(cfg, logger)
 	if err != nil {
 		logger.Fatal("initialize app", zap.Error(err))

@@ -51,6 +51,9 @@ type ProductDetail struct {
 	Rating          float64    `json:"rating"`
 	RatingCount     int64      `json:"rating_count"`
 	LimitPerUser    int64      `json:"limit_per_user"`
+	GroupSize       int        `json:"group_size"`
+	GroupHours      int        `json:"group_hours"`
+	GroupRate       string     `json:"group_rate"`
 	Favorited       bool       `json:"favorited"` // set by the H5 handler for the signed-in buyer
 	MerchantAddress string     `json:"merchant_address"`
 	MerchantHours   string     `json:"merchant_hours"`
@@ -135,7 +138,7 @@ func (s *Service) cards(products []model.ShopProduct) ([]ProductCard, error) {
 	type agg struct {
 		min, list decimal.Decimal
 		has       bool
-		promo     bool
+		anyPromo  bool // some SKU sells at a promo price, even if it is not the cheapest
 		inStock   bool
 	}
 	byID := map[uint64]model.ShopProduct{}
@@ -154,8 +157,9 @@ func (s *Service) cards(products []model.ShopProduct) ([]ProductCard, error) {
 		current, onPromo := effectivePrice(k.Price, k.PromoPrice, k.PromoStock, p.PromoStartsAt, p.PromoEndsAt, now)
 		price := amount(current)
 		if !a.has || price.LessThan(a.min) {
-			a.min, a.list, a.promo, a.has = price, amount(k.Price), onPromo, true
+			a.min, a.list, a.has = price, amount(k.Price), true
 		}
+		a.anyPromo = a.anyPromo || onPromo
 		if k.Stock > 0 {
 			a.inStock = true
 		}
@@ -165,7 +169,7 @@ func (s *Service) cards(products []model.ShopProduct) ([]ProductCard, error) {
 		if a == nil {
 			continue
 		}
-		out = append(out, ProductCard{ID: p.ID, Name: p.Name, Cover: firstImage(p.Images), MinPrice: a.min.StringFixed(6), ListPrice: a.list.StringFixed(6), OnPromo: a.promo, InStock: a.inStock, Sales: p.Sales, Kind: p.Kind, MerchantID: p.MerchantID, MerchantName: names[p.MerchantID]})
+		out = append(out, ProductCard{ID: p.ID, Name: p.Name, Cover: firstImage(p.Images), MinPrice: a.min.StringFixed(6), ListPrice: a.list.StringFixed(6), OnPromo: a.anyPromo, InStock: a.inStock, Sales: p.Sales, Kind: p.Kind, MerchantID: p.MerchantID, MerchantName: names[p.MerchantID]})
 	}
 	return out, nil
 }
@@ -218,7 +222,7 @@ func (s *Service) Product(id uint64) (*ProductDetail, error) {
 			images = append(images, line)
 		}
 	}
-	d := &ProductDetail{ProductCard: cards[0], LimitPerUser: p.LimitPerUser, Description: p.Description, Images: images, AllowExpress: p.AllowExpress, AllowPickup: p.AllowPickup, SKUs: views, Rating: rating.Avg, RatingCount: rating.N, MerchantAddress: m.Address, MerchantHours: m.Hours, MerchantPhone: m.Phone}
+	d := &ProductDetail{ProductCard: cards[0], LimitPerUser: p.LimitPerUser, GroupSize: p.GroupSize, GroupHours: p.GroupHours, GroupRate: p.GroupRate, Description: p.Description, Images: images, AllowExpress: p.AllowExpress, AllowPickup: p.AllowPickup, SKUs: views, Rating: rating.Avg, RatingCount: rating.N, MerchantAddress: m.Address, MerchantHours: m.Hours, MerchantPhone: m.Phone}
 	if anyPromo {
 		d.PromoEndsAt = p.PromoEndsAt
 	}
@@ -389,6 +393,18 @@ func (s *Service) SaveProduct(p model.ShopProduct, skus []SKUInput, merchantScop
 	if p.LimitPerUser < 0 {
 		return 0, userErr("每人限购数量不能为负数")
 	}
+	if p.GroupSize != 0 {
+		rate, err := decimal.NewFromString(strings.TrimSpace(p.GroupRate))
+		if p.GroupSize < 2 || p.GroupSize > 100 || p.GroupHours < 1 || p.GroupHours > 720 || err != nil || !rate.IsPositive() || !rate.LessThan(decimal.NewFromInt(1)) {
+			return 0, userErr("拼团需 2–100 人、1–720 小时，拼团价比例在 0 到 1 之间（如 0.8）")
+		}
+		if p.Kind == "virtual" {
+			return 0, userErr("虚拟商品不支持拼团")
+		}
+		p.GroupRate = rate.StringFixed(6)
+	} else {
+		p.GroupHours, p.GroupRate = 24, "1"
+	}
 	if hasPromo && p.PromoStartsAt == nil {
 		return 0, userErr("填写了活动价，请设置限时活动的开始和结束时间")
 	}
@@ -401,7 +417,7 @@ func (s *Service) SaveProduct(p model.ShopProduct, skus []SKUInput, merchantScop
 		if err := tx.Select("id").First(&c, p.CategoryID).Error; err != nil {
 			return userErr("请选择有效的分类")
 		}
-		fields := map[string]any{"merchant_id": p.MerchantID, "category_id": p.CategoryID, "name": p.Name, "description": p.Description, "images": strings.TrimSpace(p.Images), "kind": p.Kind, "allow_express": p.AllowExpress, "allow_pickup": p.AllowPickup, "sort": p.Sort, "enabled": p.Enabled, "featured": p.Featured, "promo_starts_at": p.PromoStartsAt, "promo_ends_at": p.PromoEndsAt, "limit_per_user": p.LimitPerUser}
+		fields := map[string]any{"merchant_id": p.MerchantID, "category_id": p.CategoryID, "name": p.Name, "description": p.Description, "images": strings.TrimSpace(p.Images), "kind": p.Kind, "allow_express": p.AllowExpress, "allow_pickup": p.AllowPickup, "sort": p.Sort, "enabled": p.Enabled, "featured": p.Featured, "promo_starts_at": p.PromoStartsAt, "promo_ends_at": p.PromoEndsAt, "limit_per_user": p.LimitPerUser, "group_size": p.GroupSize, "group_hours": p.GroupHours, "group_rate": p.GroupRate}
 		if p.ID == 0 {
 			p.Images = strings.TrimSpace(p.Images)
 			if err := tx.Create(&p).Error; err != nil {

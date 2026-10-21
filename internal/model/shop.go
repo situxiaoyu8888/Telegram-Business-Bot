@@ -33,11 +33,15 @@ type ShopProduct struct {
 	PromoStartsAt *time.Time `json:"promo_starts_at"`
 	PromoEndsAt   *time.Time `json:"promo_ends_at"`
 	// LimitPerUser caps how many units one buyer may hold across non-canceled orders (0 = no limit).
-	LimitPerUser int64     `gorm:"not null;default:0" json:"limit_per_user"`
-	Sort         int       `gorm:"not null;default:0;index" json:"sort"`
-	Enabled      bool      `gorm:"not null;index" json:"enabled"`
-	CreatedAt    time.Time `json:"created_at"`
-	UpdatedAt    time.Time `json:"updated_at"`
+	LimitPerUser int64 `gorm:"not null;default:0" json:"limit_per_user"`
+	// Group buying: GroupSize buyers (0 = off) within GroupHours pay GroupRate × price.
+	GroupSize  int       `gorm:"not null;default:0" json:"group_size"`
+	GroupHours int       `gorm:"not null;default:24" json:"group_hours"`
+	GroupRate  string    `gorm:"type:decimal(10,6);not null;default:1" json:"group_rate"`
+	Sort       int       `gorm:"not null;default:0;index" json:"sort"`
+	Enabled    bool      `gorm:"not null;index" json:"enabled"`
+	CreatedAt  time.Time `json:"created_at"`
+	UpdatedAt  time.Time `json:"updated_at"`
 }
 
 // ShopSKU is a purchasable variant of a product; every product has at least one.
@@ -104,7 +108,13 @@ type ShopOrder struct {
 	RefundedAmount string `gorm:"type:decimal(24,6);not null;default:0" json:"refunded_amount"` // after-sale refunds so far
 	AfterSaleOpen  bool   `gorm:"not null;default:false" json:"after_sale_open"`
 	// CommissionDone marks that the buyer's referrer has been paid (or that none was due).
-	CommissionDone bool       `gorm:"not null;default:false;index" json:"commission_done"`
+	CommissionDone bool `gorm:"not null;default:false;index" json:"commission_done"`
+	// MemberDiscount (tier) and PointsDiscount (PointsUsed points) are deducted besides Discount (coupon).
+	MemberDiscount string     `gorm:"type:decimal(24,6);not null;default:0" json:"member_discount"`
+	MemberLevel    string     `gorm:"size:32" json:"member_level"`
+	PointsUsed     int64      `gorm:"not null;default:0" json:"points_used"`
+	PointsDiscount string     `gorm:"type:decimal(24,6);not null;default:0" json:"points_discount"`
+	GroupID        uint64     `gorm:"not null;default:0;index" json:"group_id"` // group-buying group, 0 = regular order
 	UserCouponID   uint64     `gorm:"not null;default:0" json:"user_coupon_id"`
 	ContactName    string     `gorm:"size:64" json:"contact_name"`
 	ContactPhone   string     `gorm:"size:32" json:"contact_phone"`
@@ -275,4 +285,40 @@ type ShopView struct {
 	UserID    uint64    `gorm:"primaryKey;autoIncrement:false" json:"user_id"`
 	ProductID uint64    `gorm:"primaryKey;autoIncrement:false" json:"product_id"`
 	ViewedAt  time.Time `gorm:"index" json:"viewed_at"`
+}
+
+// ShopMember holds a buyer's points balance and the spend that decides their member tier.
+type ShopMember struct {
+	UserID    uint64    `gorm:"primaryKey;autoIncrement:false" json:"user_id"`
+	Points    int64     `gorm:"not null;default:0" json:"points"`
+	Spent     string    `gorm:"type:decimal(24,6);not null;default:0" json:"spent"` // completed spend net of refunds
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// ShopPointsLog is one change to a member's points. Type is earn, spend, refund or adjust.
+type ShopPointsLog struct {
+	ID        uint64    `gorm:"primaryKey" json:"id"`
+	UserID    uint64    `gorm:"not null;index" json:"user_id"`
+	Delta     int64     `gorm:"not null" json:"delta"`
+	Balance   int64     `gorm:"not null" json:"balance"`
+	Type      string    `gorm:"size:16;not null" json:"type"`
+	OrderID   uint64    `gorm:"not null;default:0" json:"order_id"`
+	Remark    string    `gorm:"size:255" json:"remark"`
+	Operator  string    `gorm:"size:128" json:"operator"`
+	CreatedAt time.Time `gorm:"index" json:"created_at"`
+}
+
+// ShopGroup is a group-buying group. Orders wait in status "grouping" until Joined reaches Size
+// (status success, orders become paid) or ExpiresAt passes (status failed, orders are refunded).
+type ShopGroup struct {
+	ID           uint64     `gorm:"primaryKey" json:"id"`
+	ProductID    uint64     `gorm:"not null;index" json:"product_id"`
+	LeaderUserID uint64     `gorm:"not null" json:"leader_user_id"`
+	Size         int        `gorm:"not null" json:"size"`
+	Joined       int        `gorm:"not null" json:"joined"`
+	Status       string     `gorm:"size:16;not null;index" json:"status"` // open | success | failed
+	ExpiresAt    time.Time  `gorm:"index" json:"expires_at"`
+	ClosedAt     *time.Time `json:"closed_at"`
+	CreatedAt    time.Time  `json:"created_at"`
+	UpdatedAt    time.Time  `json:"updated_at"`
 }

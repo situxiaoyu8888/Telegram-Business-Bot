@@ -24,11 +24,16 @@ import (
 	"telegram-business-bot/internal/wallet"
 
 	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
+
+	"telegram-business-bot/internal/ratelimit"
 )
 
 type Handler struct {
 	sessionBackend sessionStore
 	accountBackend accountStore
+	limiter        ratelimit.Store // login throttling; defaults to the store's Redis
+	logger         *zap.Logger
 	bots           *business.Service
 	st             *store.Store
 	wallet         *wallet.Service
@@ -67,11 +72,14 @@ func New(
 	}
 }
 
+// WithLogger enables the access log of console actions.
+func (h *Handler) WithLogger(l *zap.Logger) *Handler { h.logger = l; return h }
+
 func (h *Handler) Register(r *gin.Engine) {
 	r.GET("/admin/login", h.loginPage)
 	r.POST("/admin/login", h.login)
 	r.POST("/admin/logout", h.logout)
-	g := r.Group("/admin", h.requireSession)
+	g := r.Group("/admin", h.requireSession, h.accessLog)
 	g.GET("/api/session", h.session)
 
 	g.GET("/", h.page)

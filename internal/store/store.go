@@ -32,7 +32,7 @@ func New(mysqlDSN, redisAddr, redisPassword string, redisDB int) (*Store, error)
 		&model.Merchant{}, &model.BusinessBot{}, &model.BotSubscription{}, &model.PushRoute{}, &model.PushCampaign{}, &model.PushRecipient{}, &model.ReferralGrant{}, &model.SeedMigration{}, &model.AdminUser{}, &model.AdminRole{},
 		&model.ShopCategory{}, &model.ShopProduct{}, &model.ShopSKU{}, &model.ShopVirtualCode{}, &model.ShopCartItem{}, &model.ShopAddress{},
 		&model.ShopOrder{}, &model.ShopOrderItem{}, &model.ShopCoupon{}, &model.ShopUserCoupon{}, &model.ShopAfterSale{},
-		&model.ShopBanner{}, &model.ShopReview{}, &model.ShopMerchantEntry{}, &model.ShopSettlement{}, &model.ShopFavorite{}, &model.ShopView{},
+		&model.ShopBanner{}, &model.ShopReview{}, &model.ShopMerchantEntry{}, &model.ShopSettlement{}, &model.ShopFavorite{}, &model.ShopView{}, &model.ShopMember{}, &model.ShopPointsLog{}, &model.ShopGroup{},
 	); err != nil {
 		return nil, fmt.Errorf("auto migrate: %w", err)
 	}
@@ -57,6 +57,10 @@ func New(mysqlDSN, redisAddr, redisPassword string, redisDB int) (*Store, error)
 		{Key: "shop_aftersale_days", Value: "7", Remark: "商城订单完成后可申请售后的天数（0 为不允许完成后申请）"},
 		{Key: "shop_return_address", Value: "", Remark: "商城退货寄回地址（留空则使用商家地址）"},
 		{Key: "shop_low_stock", Value: "5", Remark: "商城销售报表中的低库存预警阈值"},
+		{Key: "shop_points_per_usdt", Value: "10", Remark: "商城每实付 1 USDT 获得的积分（订单完成且售后期结束后发放，0 为不发放）"},
+		{Key: "shop_points_value", Value: "0.01", Remark: "1 积分可抵扣的 USDT（0 为不能抵扣）"},
+		{Key: "shop_points_max_ratio", Value: "0.5", Remark: "积分最多抵扣订单金额的比例（0.5 = 50%）"},
+		{Key: "shop_member_levels", Value: "白银:100:0.98,黄金:500:0.95,钻石:2000:0.9", Remark: "会员等级，格式：名称:累计消费 USDT:折扣,…（0.95 = 95 折）；留空则不分等级"},
 		{Key: "shop_referral_rate", Value: "0", Remark: "商城推广返佣比例（0.05 = 5%，0 为关闭）；订单完成且售后期结束后发给直属上级"},
 	} {
 		if err := db.Clauses(clause.OnConflict{DoNothing: true}).Create(&c).Error; err != nil {

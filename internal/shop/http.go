@@ -15,6 +15,7 @@ import (
 
 	"telegram-business-bot/internal/business"
 	"telegram-business-bot/internal/model"
+	"telegram-business-bot/internal/ratelimit"
 	"telegram-business-bot/internal/store"
 	"telegram-business-bot/internal/telegram"
 )
@@ -79,7 +80,7 @@ func (h *Handler) Register(r *gin.Engine) {
 	r.GET("/shop", func(c *gin.Context) { c.Redirect(http.StatusMovedPermanently, "/shop/") })
 	r.GET("/shop/", page)
 
-	api := r.Group("/shop/api", h.authenticate)
+	api := r.Group("/shop/api", h.authenticate, h.throttle("rl:shop:", maxRequestsPerMinute))
 	api.GET("/me", h.me)
 	api.GET("/home", h.home)
 	api.GET("/categories", h.categories)
@@ -96,11 +97,15 @@ func (h *Handler) Register(r *gin.Engine) {
 	api.POST("/coupons/:id/claim", h.claimCoupon)
 	api.POST("/checkout/preview", h.preview)
 	api.GET("/orders", h.orders)
-	api.POST("/orders", h.createOrder)
+	api.POST("/orders", h.throttle("rl:shop-order:", maxOrdersPerMinute), h.createOrder)
 	api.GET("/orders/:id", h.order)
 	api.POST("/orders/:id/cancel", h.cancelOrder)
 	api.POST("/orders/:id/confirm", h.confirmOrder)
 	api.POST("/orders/:id/review", h.reviewOrder)
+	api.GET("/member", h.member)
+	api.GET("/member/points", h.pointsLog)
+	api.GET("/groups/:id", h.group)
+	api.GET("/products/:id/groups", h.productGroups)
 	api.GET("/favorites", h.favorites)
 	api.POST("/favorites/:id", h.addFavorite)
 	api.DELETE("/favorites/:id", h.removeFavorite)
@@ -157,6 +162,28 @@ func (h *Handler) authenticate(c *gin.Context) {
 }
 
 func buyer(c *gin.Context) Buyer { return c.MustGet(buyerKey).(Buyer) }
+
+const (
+	maxRequestsPerMinute = 180
+	maxOrdersPerMinute   = 20
+)
+
+// throttle limits each buyer to limit requests a minute under prefix. Redis errors let the
+// request through rather than block shopping.
+func (h *Handler) throttle(prefix string, limit int64) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if h.st == nil || h.st.Redis == nil {
+			c.Next()
+			return
+		}
+		n, err := ratelimit.Hit(c.Request.Context(), h.st.Redis, fmt.Sprintf("%s%d", prefix, buyer(c).TelegramUserID), time.Minute)
+		if err == nil && n > limit {
+			c.AbortWithStatusJSON(http.StatusTooManyRequests, gin.H{"error": "操作太频繁，请稍后再试"})
+			return
+		}
+		c.Next()
+	}
+}
 
 // fail reports user errors as 400 and hides internal ones behind a generic message.
 func (h *Handler) fail(c *gin.Context, err error) {
@@ -253,6 +280,26 @@ func (h *Handler) product(c *gin.Context) {
 		}
 	}
 	h.reply(c, p, err)
+}
+
+func (h *Handler) member(c *gin.Context) {
+	m, err := h.svc.Member(buyer(c).UserID)
+	h.reply(c, m, err)
+}
+
+func (h *Handler) pointsLog(c *gin.Context) {
+	rows, err := h.svc.PointsLog(buyer(c).UserID)
+	h.reply(c, rows, err)
+}
+
+func (h *Handler) group(c *gin.Context) {
+	g, err := h.svc.Group(buyer(c).UserID, idParam(c))
+	h.reply(c, g, err)
+}
+
+func (h *Handler) productGroups(c *gin.Context) {
+	rows, err := h.svc.OpenGroups(buyer(c).UserID, idParam(c))
+	h.reply(c, rows, err)
 }
 
 func (h *Handler) favorites(c *gin.Context) {
