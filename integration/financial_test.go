@@ -58,7 +58,7 @@ func testDatabase(t *testing.T) *gorm.DB {
 	raw, _ := db.DB()
 	t.Cleanup(func() { raw.Close() })
 	if err := db.AutoMigrate(&model.TelegramUser{}, &model.WalletAccount{}, &model.WalletTransaction{}, &model.DepositOrder{}, &model.WithdrawalOrder{}, &model.ReferralCommission{}, &model.ReferralGrant{},
-		&model.Merchant{}, &model.ShopCategory{}, &model.ShopProduct{}, &model.ShopSKU{}, &model.ShopVirtualCode{}, &model.ShopCartItem{}, &model.ShopAddress{}, &model.ShopOrder{}, &model.ShopOrderItem{}, &model.ShopCoupon{}, &model.ShopUserCoupon{}); err != nil {
+		&model.Merchant{}, &model.ShopCategory{}, &model.ShopProduct{}, &model.ShopSKU{}, &model.ShopVirtualCode{}, &model.ShopCartItem{}, &model.ShopAddress{}, &model.ShopOrder{}, &model.ShopOrderItem{}, &model.ShopCoupon{}, &model.ShopUserCoupon{}, &model.ShopAfterSale{}); err != nil {
 		t.Fatal(err)
 	}
 	return db

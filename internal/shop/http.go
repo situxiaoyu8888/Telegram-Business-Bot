@@ -89,6 +89,10 @@ func (h *Handler) Register(r *gin.Engine) {
 	api.GET("/orders/:id", h.order)
 	api.POST("/orders/:id/cancel", h.cancelOrder)
 	api.POST("/orders/:id/confirm", h.confirmOrder)
+	api.GET("/aftersales", h.myAfterSales)
+	api.POST("/aftersales", h.applyAfterSale)
+	api.POST("/aftersales/:id/cancel", h.cancelAfterSale)
+	api.POST("/aftersales/:id/return", h.submitReturn)
 }
 
 // authenticate accepts requests signed by any enabled bot's Mini App and maps them to the
@@ -268,8 +272,17 @@ func (h *Handler) createOrder(c *gin.Context) {
 		h.fail(c, userErr("参数错误"))
 		return
 	}
-	o, err := h.svc.CreateOrder(buyer(c), req)
-	h.reply(c, o, err)
+	orders, err := h.svc.CreateOrders(buyer(c), req)
+	if err != nil {
+		h.fail(c, err)
+		return
+	}
+	// Single-group requests keep returning the order itself.
+	if len(req.Groups) == 0 {
+		c.JSON(http.StatusOK, orders[0])
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"orders": orders})
 }
 
 func (h *Handler) orders(c *gin.Context) {
@@ -291,8 +304,53 @@ func (h *Handler) confirmOrder(c *gin.Context) {
 	h.reply(c, gin.H{"ok": true}, h.svc.ConfirmReceipt(buyer(c).UserID, idParam(c)))
 }
 
-// BotNotifier sends order messages through the bot the order was placed from.
-type BotNotifier struct{ Bots *business.Service }
+func (h *Handler) myAfterSales(c *gin.Context) {
+	rows, err := h.svc.MyAfterSales(buyer(c).UserID)
+	h.reply(c, rows, err)
+}
+
+func (h *Handler) applyAfterSale(c *gin.Context) {
+	var req AfterSaleRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		h.fail(c, userErr("参数错误"))
+		return
+	}
+	a, err := h.svc.ApplyAfterSale(buyer(c).UserID, req)
+	h.reply(c, a, err)
+}
+
+func (h *Handler) cancelAfterSale(c *gin.Context) {
+	h.reply(c, gin.H{"ok": true}, h.svc.CancelAfterSale(buyer(c).UserID, idParam(c)))
+}
+
+func (h *Handler) submitReturn(c *gin.Context) {
+	var b struct {
+		Carrier    string `json:"carrier"`
+		TrackingNo string `json:"tracking_no"`
+	}
+	if err := c.ShouldBindJSON(&b); err != nil {
+		h.fail(c, userErr("参数错误"))
+		return
+	}
+	h.reply(c, gin.H{"ok": true}, h.svc.SubmitReturn(buyer(c).UserID, idParam(c), b.Carrier, b.TrackingNo))
+}
+
+// BotNotifier sends buyer messages through the bot the order was placed from and staff messages
+// through Staff (the admin bot when configured, otherwise the primary bot).
+type BotNotifier struct {
+	Bots  *business.Service
+	Staff telegram.Sender
+}
+
+func (n BotNotifier) NotifyStaff(ctx context.Context, chatIDs []int64, html string) error {
+	var firstErr error
+	for _, id := range chatIDs {
+		if err := n.Staff.SendMessageWithParseMode(ctx, id, html, "HTML", nil); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
+}
 
 func (n BotNotifier) Notify(ctx context.Context, botID uint64, telegramUserID int64, html string) error {
 	sender, err := n.Bots.Sender(ctx, botID)

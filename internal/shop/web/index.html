@@ -121,7 +121,7 @@ const post=(path,body={})=>api(path,{method:'POST',body:JSON.stringify(body)});
 function newRequestID(){return crypto.randomUUID?crypto.randomUUID():Date.now().toString(36)+Math.random().toString(36).slice(2)}
 
 // ---- Routing ----
-const routes=[[/^#?\/?$/,home],[/^#\/product\/(\d+)$/,product],[/^#\/cart$/,cart],[/^#\/checkout$/,checkoutPage],[/^#\/orders(?:\/(\w+))?$/,orders],[/^#\/order\/(\d+)$/,orderDetail],[/^#\/me$/,mine],[/^#\/coupons(?:\/(\w+))?$/,coupons],[/^#\/addresses(?:\/(pick))?$/,addresses],[/^#\/address\/(new|\d+)(?:\/(pick))?$/,addressForm]];
+const routes=[[/^#?\/?$/,home],[/^#\/product\/(\d+)$/,product],[/^#\/cart$/,cart],[/^#\/checkout$/,checkoutPage],[/^#\/orders(?:\/(\w+))?$/,orders],[/^#\/order\/(\d+)$/,orderDetail],[/^#\/me$/,mine],[/^#\/coupons(?:\/(\w+))?$/,coupons],[/^#\/addresses(?:\/(pick))?$/,addresses],[/^#\/address\/(new|\d+)(?:\/(pick))?$/,addressForm],[/^#\/aftersale\/(\d+)$/,afterSaleForm],[/^#\/aftersales$/,afterSales]];
 const tabs=[['#/','首页','home'],['#/cart','购物车','cart'],['#/orders','订单','order'],['#/me','我的','me']];
 let renderVersion=0;
 async function route(){
@@ -175,7 +175,7 @@ async function product(v,id){
   const out=sku.stock<1;
   bottomBar(`<button class="btn ghost grow" id="addCart" ${out?'disabled':''}>加入购物车</button><button class="btn grow" id="buyNow" ${out?'disabled':''}>${out?'已售罄':'立即购买'}</button>`);
   $('addCart').onclick=async()=>{try{await post('cart',{sku_id:sku.id,quantity:qty,add:true});haptic('success');toast('已加入购物车');refreshCartCount()}catch(e){toast(e.message)}};
-  $('buyNow').onclick=()=>{checkout={items:[{sku_id:sku.id,quantity:qty}],from_cart:false,request_id:newRequestID()};location.hash='#/checkout'}}
+  $('buyNow').onclick=()=>{checkout={groups:[{merchant_id:p.merchant_id,items:[{sku_id:sku.id,quantity:qty}]}],from_cart:false,request_id:newRequestID()};location.hash='#/checkout'}}
  draw()}
 
 // ---- Cart ----
@@ -186,41 +186,57 @@ async function cart(v){
  const groups=[];for(const l of lines){let g=groups.find(x=>x.id===l.merchant_id);if(!g){g={id:l.merchant_id,name:l.merchant_name,lines:[]};groups.push(g)}g.lines.push(l)}
  $('app').innerHTML=groups.map(g=>{const ok=g.lines.filter(l=>l.available);const total=ok.reduce((s,l)=>s+Number(l.price)*l.quantity,0);
   return `<div class="card"><div class="row between" style="margin-bottom:10px"><span class="bold">🏪 ${esc(g.name)}</span></div><div class="list">${g.lines.map(l=>`<div class="item" style="${l.available?'':'opacity:.5'}"><div class="thumb" onclick="location.hash='#/product/${l.product_id}'">${imgOr(l.cover)}</div><div style="flex:1;min-width:0"><div class="clamp2">${esc(l.product_name)}</div><div class="muted small">${esc(l.sku_name)}${l.available?'':' · '+(l.stock<l.quantity?'库存不足':'已下架')}</div><div class="row between" style="margin-top:4px">${priceHTML(l.price)}<span class="stepper"><button data-dec="${l.sku_id}" data-q="${l.quantity}">−</button><span>${l.quantity}</span><button data-inc="${l.sku_id}" data-q="${l.quantity}">+</button></span></div></div></div>`).join('')}</div>
-  <div class="row between" style="margin-top:12px"><span>合计 <span class="price">≈ ${total.toFixed(2)}<small>USDT</small></span></span><button class="btn sm" data-checkout="${g.id}" ${ok.length?'':'disabled'}>去结算 (${ok.reduce((n,l)=>n+l.quantity,0)})</button></div></div>`}).join('')+'<div class="muted small" style="text-align:center">不同商家的商品需分别结算</div>';
+  <div class="row between" style="margin-top:12px"><span>合计 <span class="price">≈ ${total.toFixed(2)}<small>USDT</small></span></span><button class="btn sm" data-checkout="${g.id}" ${ok.length?'':'disabled'}>去结算 (${ok.reduce((n,l)=>n+l.quantity,0)})</button></div></div>`}).join('')+'<div class="muted small" style="text-align:center">可按商家分别结算，也可全部一起结算（自动拆分为多个订单）</div>';
  const set=async(sku,q)=>{try{await post('cart',{sku_id:sku,quantity:q});route()}catch(e){toast(e.message)}};
  document.querySelectorAll('[data-dec]').forEach(b=>b.onclick=async()=>{const q=Number(b.dataset.q)-1;if(q===0&&!(await confirmBox('从购物车移除该商品？')))return;set(Number(b.dataset.dec),q)});
  document.querySelectorAll('[data-inc]').forEach(b=>b.onclick=()=>set(Number(b.dataset.inc),Number(b.dataset.q)+1));
- document.querySelectorAll('[data-checkout]').forEach(b=>b.onclick=()=>{const g=groups.find(x=>x.id===Number(b.dataset.checkout));checkout={items:g.lines.filter(l=>l.available).map(l=>({sku_id:l.sku_id,quantity:l.quantity})),from_cart:true,request_id:newRequestID()};location.hash='#/checkout'})}
+ document.querySelectorAll('[data-checkout]').forEach(b=>b.onclick=()=>{const g=groups.find(x=>x.id===Number(b.dataset.checkout));checkout=newCheckout([g],true);location.hash='#/checkout'});
+ const payable=groups.filter(g=>g.lines.some(l=>l.available));
+ if(payable.length>1){bottomBar(`<div class="grow small muted">${payable.length} 个商家</div><button class="btn" id="checkoutAll">全部结算</button>`);$('checkoutAll').onclick=()=>{checkout=newCheckout(payable,true);location.hash='#/checkout'}}}
+function newCheckout(groups,fromCart){return {groups:groups.map(g=>({merchant_id:g.id,items:g.lines.filter(l=>l.available).map(l=>({sku_id:l.sku_id,quantity:l.quantity}))})),from_cart:fromCart,request_id:newRequestID()}}
 
 // ---- Checkout ----
+// checkout.groups holds one entry per merchant; each becomes an order, paid together.
 async function checkoutPage(v){
- if(!checkout){location.hash='#/cart';return}
- const [first,addrs]=await Promise.all([post('checkout/preview',{items:checkout.items}),api('addresses')]);if(stale(v))return;
- checkout.delivery_type=checkout.delivery_type&&first.delivery_types.includes(checkout.delivery_type)?checkout.delivery_type:first.delivery_types[0];
+ if(!checkout||!checkout.groups?.length){location.hash='#/cart';return}
+ const addrs=await api('addresses');if(stale(v))return;
  if(checkout.address_id===undefined)checkout.address_id=(addrs.find(a=>a.is_default)||addrs[0])?.id||0;
- checkout.user_coupon_id=checkout.user_coupon_id||0;
- let quote=first;
- if(checkout.user_coupon_id){try{quote=await post('checkout/preview',{items:checkout.items,user_coupon_id:checkout.user_coupon_id})}catch(e){checkout.user_coupon_id=0}}
+ const quotes=[];
+ for(const g of checkout.groups){
+  let q=await post('checkout/preview',{items:g.items});
+  g.delivery_type=g.delivery_type&&q.delivery_types.includes(g.delivery_type)?g.delivery_type:q.delivery_types[0];
+  // A coupon chosen for another merchant is not offered again.
+  const taken=checkout.groups.filter(x=>x!==g).map(x=>x.user_coupon_id).filter(Boolean);
+  if(g.user_coupon_id&&taken.includes(g.user_coupon_id))g.user_coupon_id=0;
+  if(g.user_coupon_id){try{q=await post('checkout/preview',{items:g.items,user_coupon_id:g.user_coupon_id})}catch(e){g.user_coupon_id=0}}
+  q.coupons=q.coupons.filter(c=>!taken.includes(c.id));
+  quotes.push(q)}
  if(stale(v))return;
  const addr=addrs.find(a=>a.id===checkout.address_id);
- const enough=Number(quote.balance)>=Number(quote.pay_amount);
- $('app').innerHTML=`<div class="card"><h3>配送方式</h3>${quote.delivery_types.map(d=>`<button class="radio ${checkout.delivery_type===d?'on':''}" data-dt="${d}"><i></i>${deliveryText[d]}</button>`).join('')}</div>
- ${checkout.delivery_type==='express'?`<div class="card" onclick="location.hash='#/addresses/pick'" style="cursor:pointer">${addr?`<div class="row between"><div><div class="bold">${esc(addr.name)} ${esc(addr.phone)}</div><div class="muted small">${esc(addr.address)}</div></div><span class="muted">›</span></div>`:'<div class="row between"><span>📍 添加收货地址</span><span class="muted">›</span></div>'}</div>`:''}
- ${checkout.delivery_type==='pickup'?`<div class="card"><div class="bold">🏪 ${esc(quote.merchant_name)}</div><div class="muted small">${esc(quote.merchant_address||'请联系商家确认自提地址')}</div></div>`:''}
- ${checkout.delivery_type==='virtual'?'<div class="card muted small">🎁 付款后在订单详情中查看卡密或发货内容。</div>':''}
- <div class="card"><h3>优惠券</h3>${quote.coupons.length?`<div class="list"><button class="radio ${!checkout.user_coupon_id?'on':''}" data-cp="0"><i></i>不使用优惠券</button>${quote.coupons.map(c=>`<button class="radio ${checkout.user_coupon_id===c.id?'on':''}" data-cp="${c.id}"><i></i><span style="flex:1">${esc(c.name)} <span class="muted small">满 ${money(c.threshold)} 减 ${money(c.discount)}</span></span></button>`).join('')}</div>`:'<div class="muted small">暂无可用优惠券</div>'}</div>
- <div class="card"><div class="field" style="margin:0"><label class="muted small">订单备注</label><input id="remark" maxlength="255" placeholder="选填" value="${esc(checkout.remark||'')}"></div></div>
- <div class="card"><div class="kv"><span>商品金额</span><span>${money(quote.goods_amount)} USDT</span></div><div class="kv"><span>优惠</span><span>-${money(quote.discount)} USDT</span></div><div class="kv"><span>钱包余额</span><span>${money(quote.balance)} USDT</span></div>${enough?'':'<div class="small" style="color:var(--danger);margin-top:6px">余额不足，请回到机器人「USDT充值」后再支付。</div>'}</div>`;
- document.querySelectorAll('[data-dt]').forEach(b=>b.onclick=()=>{checkout.delivery_type=b.dataset.dt;route()});
- document.querySelectorAll('[data-cp]').forEach(b=>b.onclick=()=>{checkout.user_coupon_id=Number(b.dataset.cp);route()});
- $('remark').oninput=e=>checkout.remark=e.target.value;
- bottomBar(`<div class="grow">实付 ${priceHTML(quote.pay_amount)}</div><button class="btn" id="pay" ${enough?'':'disabled'}>余额支付</button>`);
+ const needAddr=checkout.groups.some(g=>g.delivery_type==='express');
+ const sum=k=>quotes.reduce((t,q)=>t+Number(q[k]),0);
+ const total=sum('pay_amount'),balance=Number(quotes[0].balance);
+ const enough=balance+1e-9>=total;
+ const multi=checkout.groups.length>1;
+ $('app').innerHTML=(needAddr?`<div class="card" onclick="location.hash='#/addresses/pick'" style="cursor:pointer">${addr?`<div class="row between"><div><div class="bold">${esc(addr.name)} ${esc(addr.phone)}</div><div class="muted small">${esc(addr.address)}</div></div><span class="muted">›</span></div>`:'<div class="row between"><span>📍 添加收货地址</span><span class="muted">›</span></div>'}</div>`:'')+
+ checkout.groups.map((g,i)=>{const q=quotes[i];return `<div class="card"><div class="row between" style="margin-bottom:6px"><span class="bold">🏪 ${esc(q.merchant_name)}</span><span>${priceHTML(q.pay_amount)}</span></div>
+  <div class="muted small">配送方式</div>${q.delivery_types.map(d=>`<button class="radio ${g.delivery_type===d?'on':''}" data-dt="${i}:${d}"><i></i>${deliveryText[d]}${d==='pickup'?` <span class="muted small">${esc(q.merchant_address||'')}</span>`:''}</button>`).join('')}
+  ${q.coupons.length?`<div class="muted small" style="margin-top:6px">优惠券</div><button class="radio ${!g.user_coupon_id?'on':''}" data-cp="${i}:0"><i></i>不使用</button>${q.coupons.map(c=>`<button class="radio ${g.user_coupon_id===c.id?'on':''}" data-cp="${i}:${c.id}"><i></i><span style="flex:1">${esc(c.name)} <span class="muted small">满 ${money(c.threshold)} 减 ${money(c.discount)}</span></span></button>`).join('')}`:''}
+  ${g.delivery_type==='virtual'?'<div class="muted small">🎁 付款后在订单详情中查看卡密或发货内容。</div>':''}
+  <div class="field" style="margin:8px 0 0"><input data-remark="${i}" maxlength="255" placeholder="订单备注（选填）" value="${esc(g.remark||'')}"></div>
+  <div class="muted small" style="margin-top:6px">商品 ${money(q.goods_amount)} · 优惠 -${money(q.discount)}</div></div>`}).join('')+
+ `<div class="card"><div class="kv"><span>商品金额</span><span>${money(sum('goods_amount').toFixed(6))} USDT</span></div><div class="kv"><span>优惠</span><span>-${money(sum('discount').toFixed(6))} USDT</span></div><div class="kv"><span>钱包余额</span><span>${money(quotes[0].balance)} USDT</span></div>${multi?`<div class="muted small" style="margin-top:6px">将拆分为 ${checkout.groups.length} 个订单，一次付款。</div>`:''}${enough?'':'<div class="small" style="color:var(--danger);margin-top:6px">余额不足，请回到机器人「USDT充值」后再支付。</div>'}</div>`;
+ document.querySelectorAll('[data-dt]').forEach(b=>b.onclick=()=>{const [i,d]=b.dataset.dt.split(':');checkout.groups[i].delivery_type=d;route()});
+ document.querySelectorAll('[data-cp]').forEach(b=>b.onclick=()=>{const [i,c]=b.dataset.cp.split(':');checkout.groups[i].user_coupon_id=Number(c);route()});
+ document.querySelectorAll('[data-remark]').forEach(el=>el.oninput=e=>checkout.groups[Number(el.dataset.remark)].remark=e.target.value);
+ bottomBar(`<div class="grow">实付 ${priceHTML(total.toFixed(6))}</div><button class="btn" id="pay" ${enough?'':'disabled'}>余额支付</button>`);
  $('pay').onclick=async()=>{
-  if(checkout.delivery_type==='express'&&!checkout.address_id){toast('请添加收货地址');return}
-  if(!(await confirmBox(`确认使用钱包余额支付 ${money(quote.pay_amount)} USDT？`)))return;
+  if(needAddr&&!checkout.address_id){toast('请添加收货地址');return}
+  if(!(await confirmBox(`确认使用钱包余额支付 ${money(total.toFixed(6))} USDT？`)))return;
   $('pay').disabled=true;
-  try{const o=await post('orders',{request_id:checkout.request_id,items:checkout.items,delivery_type:checkout.delivery_type,address_id:checkout.address_id,user_coupon_id:checkout.user_coupon_id,remark:checkout.remark||'',from_cart:checkout.from_cart});
-   haptic('success');checkout=null;refreshCartCount();location.replace('#/order/'+o.id)}
+  const groups=checkout.groups.map(g=>({items:g.items,delivery_type:g.delivery_type,user_coupon_id:g.user_coupon_id||0,remark:g.remark||''}));
+  const body=multi?{request_id:checkout.request_id,address_id:checkout.address_id,from_cart:checkout.from_cart,groups}:{request_id:checkout.request_id,address_id:checkout.address_id,from_cart:checkout.from_cart,...groups[0]};
+  try{const r=await post('orders',body);haptic('success');checkout=null;refreshCartCount();location.replace(multi?'#/orders':'#/order/'+r.id)}
   catch(e){haptic('error');toast(e.message);$('pay').disabled=false}}}
 
 // ---- Orders ----
@@ -240,10 +256,32 @@ async function orderDetail(v,id){
  <div class="card"><div class="kv"><span>商品金额</span><span>${money(o.goods_amount)} USDT</span></div><div class="kv"><span>优惠</span><span>-${money(o.discount)} USDT</span></div><div class="kv"><span>实付</span><span class="price">${money(o.pay_amount)} USDT</span></div></div>
  <div class="card small"><div class="kv"><span>订单号</span><span>${esc(o.order_no)}</span></div><div class="kv"><span>配送方式</span><span>${deliveryText[o.delivery_type]}</span></div><div class="kv"><span>下单时间</span><span>${new Date(o.created_at).toLocaleString('zh-CN')}</span></div>${o.remark?`<div class="kv"><span>备注</span><span>${esc(o.remark)}</span></div>`:''}${o.cancel_reason?`<div class="kv"><span>取消原因</span><span>${esc(o.cancel_reason)}</span></div>`:''}</div>`;
  if($('copyNote'))$('copyNote').onclick=()=>navigator.clipboard?.writeText(o.delivery_note).then(()=>toast('已复制'),()=>toast('请长按内容复制'));
- const actions=[];if(o.status==='paid')actions.push('<button class="btn danger grow" id="cancelOrder">取消订单</button>');if(o.status==='shipped'||o.status==='ready')actions.push(`<button class="btn grow" id="confirmOrder">${o.status==='ready'?'我已取货':'确认收货'}</button>`);
+ const sales=o.after_sales||[];
+ if(sales.length||Number(o.refunded_amount)>0)$('app').insertAdjacentHTML('beforeend',`<div class="card"><h3>售后</h3>${Number(o.refunded_amount)>0&&o.status!=='canceled'?`<div class="kv"><span>已退款</span><span>${money(o.refunded_amount)} USDT</span></div>`:''}${sales.map(a=>afterSaleBlock(a)).join('')}</div>`);
+ document.querySelectorAll('[data-as-cancel]').forEach(b=>b.onclick=async()=>{if(!(await confirmBox('撤销该售后申请？')))return;try{await post(`aftersales/${b.dataset.asCancel}/cancel`);toast('已撤销');route()}catch(e){toast(e.message)}});
+ document.querySelectorAll('[data-as-return]').forEach(b=>b.onclick=async()=>{const id=b.dataset.asReturn;try{await post(`aftersales/${id}/return`,{carrier:$('rc'+id).value,tracking_no:$('rt'+id).value});toast('已提交');route()}catch(e){toast(e.message)}});
+ const actions=[];if(o.status==='paid')actions.push('<button class="btn danger grow" id="cancelOrder">取消订单</button>');if(o.can_apply_after_sale)actions.push(`<button class="btn ghost grow" onclick="location.hash='#/aftersale/${o.id}'">申请售后</button>`);if(o.status==='shipped'||o.status==='ready')actions.push(`<button class="btn grow" id="confirmOrder">${o.status==='ready'?'我已取货':'确认收货'}</button>`);
  if(actions.length)bottomBar(actions.join(''));
  if($('cancelOrder'))$('cancelOrder').onclick=async()=>{if(!(await confirmBox('确定取消订单？款项将退回钱包余额。')))return;try{await post(`orders/${o.id}/cancel`);toast('订单已取消');route()}catch(e){toast(e.message)}};
  if($('confirmOrder'))$('confirmOrder').onclick=async()=>{if(!(await confirmBox('确认已收到商品？')))return;try{await post(`orders/${o.id}/confirm`);toast('已确认');route()}catch(e){toast(e.message)}}}
+
+const afterSaleStatus={pending:['待处理',''],approved:['同意退货','green'],refunded:['已退款','green'],rejected:['未通过','red'],canceled:['已撤销','gray']};
+const afterSaleType={refund:'仅退款',return:'退货退款'};
+function afterSaleBlock(a){const st=afterSaleStatus[a.status]||[a.status,''];return `<div style="border-top:1px solid var(--line);padding-top:10px;margin-top:10px"><div class="row between"><span class="bold">${afterSaleType[a.type]} · ${money(a.amount)} USDT</span><span class="tag ${st[1]}">${st[0]}</span></div><div class="muted small">原因：${esc(a.reason)}</div>${a.status==='refunded'?`<div class="small">已退款 ${money(a.refund_amount)} USDT</div>`:''}${a.admin_note?`<div class="small">商家说明：${esc(a.admin_note)}</div>`:''}${a.status==='approved'?`<div class="small" style="margin-top:6px">请寄回：${esc(a.return_address)}</div>${a.return_tracking?`<div class="small muted">已寄回：${esc(a.return_carrier)} ${esc(a.return_tracking)}，等待商家确认退款</div>`:`<div class="field" style="margin:8px 0 6px"><input id="rc${a.id}" placeholder="快递公司"></div><div class="field" style="margin:0 0 6px"><input id="rt${a.id}" placeholder="快递单号"></div><button class="btn sm" data-as-return="${a.id}">提交退货单号</button>`}`:''}${['pending','approved'].includes(a.status)?` <button class="btn ghost sm" style="margin-top:6px" data-as-cancel="${a.id}">撤销申请</button>`:''}</div>`}
+async function afterSaleForm(v,orderId){
+ const o=await api('orders/'+orderId);if(stale(v))return;
+ if(!o.can_apply_after_sale){$('app').innerHTML='<div class="empty">该订单当前不能申请售后</div>';return}
+ const left=(Number(o.pay_amount)-Number(o.refunded_amount)).toFixed(6);let type='refund';
+ const draw=()=>{$('app').innerHTML=`<div class="card"><div class="bold">订单 ${esc(o.order_no)}</div><div class="muted small">最多可退 ${money(left)} USDT</div></div>
+ <div class="card"><h3>售后类型</h3><button class="radio ${type==='refund'?'on':''}" data-type="refund"><i></i>仅退款</button>${o.delivery_type==='virtual'?'':`<button class="radio ${type==='return'?'on':''}" data-type="return"><i></i>退货退款 <span class="muted small">商家同意后寄回商品</span></button>`}</div>
+ <div class="card"><div class="field"><label class="muted small">退款金额（USDT）</label><input id="asAmount" inputmode="decimal" value="${money(left)}"></div><div class="field" style="margin:0"><label class="muted small">原因</label><textarea id="asReason" maxlength="512" placeholder="请描述问题"></textarea></div></div>`;
+ document.querySelectorAll('[data-type]').forEach(b=>b.onclick=()=>{const amt=$('asAmount').value,reason=$('asReason').value;type=b.dataset.type;draw();$('asAmount').value=amt;$('asReason').value=reason})};
+ draw();
+ bottomBar('<button class="btn grow" id="asSubmit">提交申请</button>');
+ $('asSubmit').onclick=async()=>{try{await post('aftersales',{order_id:o.id,type,amount:$('asAmount').value.trim(),reason:$('asReason').value});haptic('success');toast('已提交，请等待商家处理');location.replace('#/order/'+o.id)}catch(e){toast(e.message)}}}
+async function afterSales(v){
+ const list=await api('aftersales');if(stale(v))return;
+ $('app').innerHTML=list.length?list.map(a=>`<div class="card" onclick="location.hash='#/order/${a.order_id}'" style="cursor:pointer"><div class="muted small">订单 ${esc(a.order_no)} · ${new Date(a.created_at).toLocaleDateString('zh-CN')}</div>${afterSaleBlock(a).replace(/<button[^>]*>[^<]*<\/button>|<div class="field"[\s\S]*?<\/div>/g,'')}</div>`).join(''):'<div class="empty">暂无售后记录</div>'}
 
 // ---- Me ----
 async function mine(v){
@@ -251,7 +289,7 @@ async function mine(v){
  const entry=(h,icon,label)=>`<button class="row between" style="width:100%;padding:12px 0" onclick="location.hash='${h}'"><span>${icon} ${label}</span><span class="muted">›</span></button>`;
  $('app').innerHTML=`<div class="status-head"><h2>${esc(me.name||'用户')}</h2><div class="small">${me.username?'@'+esc(me.username):''}</div></div>
  <div class="card"><div class="muted small">钱包余额</div><div style="font-size:24px" class="bold">${money(me.balance)} <span class="small">USDT</span></div><div class="muted small">充值、提现请回到机器人菜单操作</div></div>
- <div class="card list">${entry('#/orders','📦','我的订单')}${entry('#/coupons','🎟','我的优惠券')}${entry('#/coupons/center','🎁','领券中心')}${entry('#/addresses','📍','收货地址')}</div>`;
+ <div class="card list">${entry('#/orders','📦','我的订单')}${entry('#/aftersales','🧾','我的售后')}${entry('#/coupons','🎟','我的优惠券')}${entry('#/coupons/center','🎁','领券中心')}${entry('#/addresses','📍','收货地址')}</div>`;
  if(tg?.close)$('app').insertAdjacentHTML('beforeend','<button class="btn ghost block" onclick="Telegram.WebApp.close()">返回机器人</button>')}
 
 // ---- Coupons ----

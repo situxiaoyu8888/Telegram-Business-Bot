@@ -15,8 +15,8 @@ func (h *Handler) WithShop(s *shop.Service) *Handler { h.shop = s; return h }
 
 func (h *Handler) registerShop(api *gin.RouterGroup, can func(...string) gin.HandlerFunc) {
 	api.GET("/shop-categories", can("shop_products"), h.shopCategories)
-	api.POST("/shop-categories", can("shop_products"), h.saveShopCategory)
-	api.DELETE("/shop-categories/:id", can("shop_products"), h.deleteShopCategory)
+	api.POST("/shop-categories", can("shop_products"), platformOnly, h.saveShopCategory)
+	api.DELETE("/shop-categories/:id", can("shop_products"), platformOnly, h.deleteShopCategory)
 	api.GET("/shop-products", can("shop_products"), h.shopProducts)
 	api.POST("/shop-products", can("shop_products"), h.saveShopProduct)
 	api.POST("/shop-products/codes", can("shop_products"), h.importShopCodes)
@@ -25,6 +25,11 @@ func (h *Handler) registerShop(api *gin.RouterGroup, can func(...string) gin.Han
 	api.POST("/shop-orders/:id/fulfil", can("shop_orders"), h.fulfilShopOrder)
 	api.POST("/shop-orders/:id/complete", can("shop_orders"), h.completeShopOrder)
 	api.POST("/shop-orders/:id/cancel", can("shop_orders"), h.cancelShopOrder)
+
+	api.GET("/shop-aftersales", can("shop_aftersales"), h.shopAfterSales)
+	api.POST("/shop-aftersales/:id/approve", can("shop_aftersales"), h.approveShopAfterSale)
+	api.POST("/shop-aftersales/:id/refund", can("shop_aftersales"), h.refundShopAfterSale)
+	api.POST("/shop-aftersales/:id/reject", can("shop_aftersales"), h.rejectShopAfterSale)
 
 	api.GET("/shop-coupons", can("shop_coupons"), h.shopCoupons)
 	api.POST("/shop-coupons", can("shop_coupons"), h.saveShopCoupon)
@@ -54,7 +59,7 @@ func (h *Handler) deleteShopCategory(c *gin.Context) {
 }
 
 func (h *Handler) shopProducts(c *gin.Context) {
-	rows, err := h.shop.AdminProducts()
+	rows, err := h.shop.AdminProducts(merchantScope(c))
 	listOrError(c, rows, err)
 }
 
@@ -67,7 +72,7 @@ func (h *Handler) saveShopProduct(c *gin.Context) {
 		respond(c, err)
 		return
 	}
-	id, err := h.shop.SaveProduct(b.ShopProduct, b.SKUs)
+	id, err := h.shop.SaveProduct(b.ShopProduct, b.SKUs, merchantScope(c))
 	if err != nil {
 		respond(c, err)
 		return
@@ -84,7 +89,7 @@ func (h *Handler) importShopCodes(c *gin.Context) {
 		respond(c, err)
 		return
 	}
-	n, err := h.shop.ImportCodes(b.SKUID, b.Codes)
+	n, err := h.shop.ImportCodes(b.SKUID, b.Codes, merchantScope(c))
 	if err != nil {
 		respond(c, err)
 		return
@@ -93,7 +98,7 @@ func (h *Handler) importShopCodes(c *gin.Context) {
 }
 
 func (h *Handler) shopOrders(c *gin.Context) {
-	rows, err := h.shop.AdminOrders(shop.AdminOrderQuery{Status: c.Query("status"), Keyword: c.Query("q")})
+	rows, err := h.shop.AdminOrders(shop.AdminOrderQuery{Status: c.Query("status"), Keyword: c.Query("q"), MerchantID: merchantScope(c)})
 	listOrError(c, rows, err)
 }
 
@@ -108,7 +113,7 @@ func (h *Handler) fulfilShopOrder(c *gin.Context) {
 		Note       string `json:"note"`
 	}
 	_ = c.ShouldBindJSON(&b)
-	respond(c, h.shop.Fulfil(id, b.Carrier, b.TrackingNo, b.Note, operator(c)))
+	respond(c, h.shop.Fulfil(id, shop.Scope{MerchantID: merchantScope(c)}, b.Carrier, b.TrackingNo, b.Note, operator(c)))
 }
 
 func (h *Handler) completeShopOrder(c *gin.Context) {
@@ -116,7 +121,7 @@ func (h *Handler) completeShopOrder(c *gin.Context) {
 	if !ok {
 		return
 	}
-	respond(c, h.shop.CompleteByAdmin(id, operator(c)))
+	respond(c, h.shop.CompleteByAdmin(id, shop.Scope{MerchantID: merchantScope(c)}, operator(c)))
 }
 
 func (h *Handler) cancelShopOrder(c *gin.Context) {
@@ -128,7 +133,7 @@ func (h *Handler) cancelShopOrder(c *gin.Context) {
 		Reason string `json:"reason"`
 	}
 	_ = c.ShouldBindJSON(&b)
-	respond(c, h.shop.CancelByAdmin(id, b.Reason, operator(c)))
+	respond(c, h.shop.CancelByAdmin(id, shop.Scope{MerchantID: merchantScope(c)}, b.Reason, operator(c)))
 }
 
 func (h *Handler) shopCoupons(c *gin.Context) {
@@ -186,6 +191,49 @@ func (h *Handler) issueShopCoupon(c *gin.Context) {
 		return
 	}
 	c.JSON(200, gin.H{"ok": true, "issued": issued, "skipped": skipped})
+}
+
+func (h *Handler) shopAfterSales(c *gin.Context) {
+	rows, err := h.shop.AdminAfterSales(c.Query("status"), merchantScope(c))
+	listOrError(c, rows, err)
+}
+
+func (h *Handler) approveShopAfterSale(c *gin.Context) {
+	id, ok := idParam(c)
+	if !ok {
+		return
+	}
+	var b struct {
+		Address string `json:"address"`
+		Note    string `json:"note"`
+	}
+	_ = c.ShouldBindJSON(&b)
+	respond(c, h.shop.ApproveReturn(id, shop.Scope{MerchantID: merchantScope(c)}, b.Address, b.Note, operator(c)))
+}
+
+func (h *Handler) refundShopAfterSale(c *gin.Context) {
+	id, ok := idParam(c)
+	if !ok {
+		return
+	}
+	var b struct {
+		Amount string `json:"amount"`
+		Note   string `json:"note"`
+	}
+	_ = c.ShouldBindJSON(&b)
+	respond(c, h.shop.RefundAfterSale(id, shop.Scope{MerchantID: merchantScope(c)}, b.Amount, b.Note, operator(c)))
+}
+
+func (h *Handler) rejectShopAfterSale(c *gin.Context) {
+	id, ok := idParam(c)
+	if !ok {
+		return
+	}
+	var b struct {
+		Note string `json:"note"`
+	}
+	_ = c.ShouldBindJSON(&b)
+	respond(c, h.shop.RejectAfterSale(id, shop.Scope{MerchantID: merchantScope(c)}, b.Note, operator(c)))
 }
 
 func listOrError(c *gin.Context, rows any, err error) {

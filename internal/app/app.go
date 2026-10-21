@@ -36,6 +36,7 @@ type App struct {
 	engine        *gin.Engine
 	tronWatcher   *trongrid.Watcher
 	pushService   *push.Service
+	shop          *shop.Service
 }
 
 func New(cfg config.Config, logger *zap.Logger) (*App, error) {
@@ -81,9 +82,18 @@ func New(cfg config.Config, logger *zap.Logger) (*App, error) {
 		return telegram.NewRouter(client, st, sessions.WithNamespace(fmt.Sprintf("business:%d", id)), walletSvc, menuSvc, supportSvc, refSvc, cfg.AdminIDs, "", false, logger).WithBotID(id).WithMenuButton(shopButton)
 	}
 	pushSvc := push.New(st, tg, logger).WithBots(bots)
-	shopSvc := shop.New(st, walletSvc, shop.BotNotifier{Bots: bots}, logger)
+	// Staff notices go through the admin bot when there is one, since admins already talk to it.
+	var staffSender telegram.Sender = tg
+	if adminTG != nil {
+		staffSender = adminTG
+	}
+	staffIDs := make([]int64, 0, len(cfg.AdminIDs))
+	for id := range cfg.AdminIDs {
+		staffIDs = append(staffIDs, id)
+	}
+	shopSvc := shop.New(st, walletSvc, shop.BotNotifier{Bots: bots, Staff: staffSender}, logger).WithStaff(staffIDs)
 	shop.NewHandler(shopSvc, st, bots, logger).Register(engine)
-	a := &App{businessBots: bots, cfg: cfg, logger: logger, store: st, tg: tg, tgRouter: tgRouter, adminTG: adminTG, adminTGRouter: adminTGRouter, engine: engine, pushService: pushSvc}
+	a := &App{shop: shopSvc, businessBots: bots, cfg: cfg, logger: logger, store: st, tg: tg, tgRouter: tgRouter, adminTG: adminTG, adminTGRouter: adminTGRouter, engine: engine, pushService: pushSvc}
 	a.registerRoutes()
 	admin.New(
 		st,
@@ -149,6 +159,7 @@ func (a *App) Router() http.Handler { return a.engine }
 func (a *App) StartWorkers(ctx context.Context) {
 	go a.pushService.Run(ctx)
 	go a.businessBots.Run(ctx)
+	go a.shop.Run(ctx)
 	a.logger.Info("message push worker started")
 	if a.cfg.TronWatchEnabled {
 		go a.tronWatcher.Run(ctx)

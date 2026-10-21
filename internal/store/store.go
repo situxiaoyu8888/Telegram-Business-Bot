@@ -30,7 +30,7 @@ func New(mysqlDSN, redisAddr, redisPassword string, redisDB int) (*Store, error)
 		&model.WithdrawalOrder{}, &model.ReferralCommission{}, &model.SupportTicket{}, &model.MenuItem{}, &model.SystemConfig{}, &model.ActionLog{},
 		&model.Merchant{}, &model.BusinessBot{}, &model.BotSubscription{}, &model.PushRoute{}, &model.PushCampaign{}, &model.PushRecipient{}, &model.ReferralGrant{}, &model.SeedMigration{}, &model.AdminUser{}, &model.AdminRole{},
 		&model.ShopCategory{}, &model.ShopProduct{}, &model.ShopSKU{}, &model.ShopVirtualCode{}, &model.ShopCartItem{}, &model.ShopAddress{},
-		&model.ShopOrder{}, &model.ShopOrderItem{}, &model.ShopCoupon{}, &model.ShopUserCoupon{},
+		&model.ShopOrder{}, &model.ShopOrderItem{}, &model.ShopCoupon{}, &model.ShopUserCoupon{}, &model.ShopAfterSale{},
 	); err != nil {
 		return nil, fmt.Errorf("auto migrate: %w", err)
 	}
@@ -46,8 +46,15 @@ func New(mysqlDSN, redisAddr, redisPassword string, redisDB int) (*Store, error)
 		return nil, err
 	}
 	// Added after defaults_v1; the unique key makes this a no-op once present.
-	if err := db.Clauses(clause.OnConflict{DoNothing: true}).Create(&model.SystemConfig{Key: "welcome_text", Value: model.DefaultWelcomeText, Remark: "首次激活欢迎语（留空则不发送）"}).Error; err != nil {
-		return nil, err
+	for _, c := range []model.SystemConfig{
+		{Key: "welcome_text", Value: model.DefaultWelcomeText, Remark: "首次激活欢迎语（留空则不发送）"},
+		{Key: "shop_auto_complete_days", Value: "7", Remark: "商城快递订单发货后自动确认收货的天数（0 为不自动确认）"},
+		{Key: "shop_aftersale_days", Value: "7", Remark: "商城订单完成后可申请售后的天数（0 为不允许完成后申请）"},
+		{Key: "shop_return_address", Value: "", Remark: "商城退货寄回地址（留空则使用商家地址）"},
+	} {
+		if err := db.Clauses(clause.OnConflict{DoNothing: true}).Create(&c).Error; err != nil {
+			return nil, err
+		}
 	}
 	return s, nil
 }

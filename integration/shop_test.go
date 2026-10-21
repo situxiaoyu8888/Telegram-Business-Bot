@@ -166,12 +166,12 @@ func TestShopBuyerCannotCancelShippedOrder(t *testing.T) {
 	b, addr := f.buyer(t, 2301, "100")
 	o, err := f.svc.CreateOrder(b, shop.CheckoutRequest{RequestID: "ship", Items: []shop.CheckoutItem{{SKUID: f.sku.ID, Quantity: 1}}, DeliveryType: shop.DeliveryExpress, AddressID: addr})
 	must(t, err)
-	must(t, f.svc.Fulfil(o.ID, "顺丰", "SF123", "", "admin"))
+	must(t, f.svc.Fulfil(o.ID, shop.Scope{}, "顺丰", "SF123", "", "admin"))
 	if err := f.svc.CancelByBuyer(b.UserID, o.ID); err == nil {
 		t.Fatal("buyer canceled a shipped order")
 	}
 	must(t, f.svc.ConfirmReceipt(b.UserID, o.ID))
-	if err := f.svc.CancelByAdmin(o.ID, "test", "admin"); err == nil {
+	if err := f.svc.CancelByAdmin(o.ID, shop.Scope{}, "test", "admin"); err == nil {
 		t.Fatal("completed order refunded")
 	}
 	if f.balance(t, b.UserID) != "90" {
@@ -181,7 +181,7 @@ func TestShopBuyerCannotCancelShippedOrder(t *testing.T) {
 
 func TestShopVirtualCodesAreDeliveredOnPayment(t *testing.T) {
 	f := newShopFixture(t, 0, "virtual")
-	n, err := f.svc.ImportCodes(f.sku.ID, "CODE-1\nCODE-2\n\n")
+	n, err := f.svc.ImportCodes(f.sku.ID, "CODE-1\nCODE-2\n\n", 0)
 	must(t, err)
 	if n != 2 || f.stock(t) != 2 {
 		t.Fatal(n, f.stock(t))
@@ -218,7 +218,7 @@ func TestShopCouponTotalQuantityUnderConcurrency(t *testing.T) {
 
 func TestShopCartAndAdminCodeCounts(t *testing.T) {
 	f := newShopFixture(t, 0, "virtual")
-	_, err := f.svc.ImportCodes(f.sku.ID, "A\nB\nC")
+	_, err := f.svc.ImportCodes(f.sku.ID, "A\nB\nC", 0)
 	must(t, err)
 	b, _ := f.buyer(t, 2601, "100")
 	must(t, f.svc.SetCart(b.UserID, f.sku.ID, 2, true))
@@ -233,7 +233,7 @@ func TestShopCartAndAdminCodeCounts(t *testing.T) {
 	if lines, _ = f.svc.Cart(b.UserID); len(lines) != 0 {
 		t.Fatal("cart not cleared after checkout")
 	}
-	products, err := f.svc.AdminProducts()
+	products, err := f.svc.AdminProducts(0)
 	must(t, err)
 	if len(products) != 1 || products[0].Codes[f.sku.ID] != 2 {
 		t.Fatalf("unused codes: %+v", products[0].Codes)

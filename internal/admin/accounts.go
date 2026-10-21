@@ -15,8 +15,10 @@ import (
 )
 
 const (
-	roleSuper = "super"
-	roleAdmin = "admin"
+	roleSuper    = "super"
+	roleAdmin    = "admin"
+	roleMerchant = "merchant" // manages one merchant's shop products, orders and after-sales
+
 )
 
 var usernamePattern = regexp.MustCompile(`^[A-Za-z0-9_.@-]{3,32}$`)
@@ -38,7 +40,14 @@ func (h *Handler) session(c *gin.Context) {
 			list = append(list, p.Key)
 		}
 	}
-	c.JSON(200, gin.H{"ok": true, "id": u.ID, "username": u.Username, "role": u.Role, "permissions": list})
+	res := gin.H{"ok": true, "id": u.ID, "username": u.Username, "role": u.Role, "permissions": list}
+	if u.Role == roleMerchant && u.MerchantID != 0 {
+		var m model.Merchant
+		if h.st.DB.Select("id", "name").First(&m, u.MerchantID).Error == nil {
+			res["merchant_id"], res["merchant_name"] = m.ID, m.Name
+		}
+	}
+	c.JSON(200, res)
 }
 
 func (h *Handler) listAccounts(c *gin.Context) {
@@ -74,18 +83,19 @@ func keepSuper(tx *gorm.DB, change func() error) error {
 
 func (h *Handler) saveAccount(c *gin.Context) {
 	var b struct {
-		ID       uint64 `json:"id"`
-		Username string `json:"username"`
-		Password string `json:"password"`
-		Role     string `json:"role"`
-		RoleID   uint64 `json:"role_id"`
-		Enabled  bool   `json:"enabled"`
+		ID         uint64 `json:"id"`
+		Username   string `json:"username"`
+		Password   string `json:"password"`
+		Role       string `json:"role"`
+		RoleID     uint64 `json:"role_id"`
+		MerchantID uint64 `json:"merchant_id"`
+		Enabled    bool   `json:"enabled"`
 	}
 	if err := c.ShouldBindJSON(&b); err != nil {
 		c.JSON(400, gin.H{"error": "参数错误"})
 		return
 	}
-	if b.Role != roleSuper && b.Role != roleAdmin {
+	if b.Role != roleSuper && b.Role != roleAdmin && b.Role != roleMerchant {
 		c.JSON(400, gin.H{"error": "角色无效"})
 		return
 	}
@@ -100,10 +110,21 @@ func (h *Handler) saveAccount(c *gin.Context) {
 			return
 		}
 	}
-	if b.Role == roleSuper {
+	if b.Role != roleAdmin {
 		b.RoleID = 0
 	}
+	if b.Role != roleMerchant {
+		b.MerchantID = 0
+	} else if b.MerchantID == 0 {
+		c.JSON(400, gin.H{"error": "请选择商家账号管理的商家"})
+		return
+	}
 	err := h.st.DB.Transaction(func(tx *gorm.DB) error {
+		if b.MerchantID != 0 {
+			if err := tx.Select("id").First(&model.Merchant{}, b.MerchantID).Error; err != nil {
+				return errors.New("商家不存在")
+			}
+		}
 		if b.RoleID != 0 {
 			if err := tx.Select("id").First(&model.AdminRole{}, b.RoleID).Error; err != nil {
 				return errors.New("角色模板不存在")
@@ -119,13 +140,13 @@ func (h *Handler) saveAccount(c *gin.Context) {
 				if err != nil {
 					return err
 				}
-				res := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&model.AdminUser{Username: name, PasswordHash: hash, Role: b.Role, RoleID: b.RoleID, Enabled: b.Enabled})
+				res := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&model.AdminUser{Username: name, PasswordHash: hash, Role: b.Role, RoleID: b.RoleID, MerchantID: b.MerchantID, Enabled: b.Enabled})
 				if res.Error == nil && res.RowsAffected == 0 {
 					return errors.New("用户名已存在")
 				}
 				return res.Error
 			}
-			updates := map[string]any{"role": b.Role, "role_id": b.RoleID, "enabled": b.Enabled}
+			updates := map[string]any{"role": b.Role, "role_id": b.RoleID, "merchant_id": b.MerchantID, "enabled": b.Enabled}
 			if b.Password != "" {
 				hash, err := hashPassword(b.Password)
 				if err != nil {

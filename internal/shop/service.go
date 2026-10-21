@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -13,6 +14,7 @@ import (
 	"github.com/shopspring/decimal"
 	"go.uber.org/zap"
 
+	"telegram-business-bot/internal/model"
 	"telegram-business-bot/internal/store"
 	"telegram-business-bot/internal/wallet"
 )
@@ -35,17 +37,26 @@ const (
 	DeliveryVirtual = "virtual"
 )
 
-// Notifier tells a buyer about their order through the bot they shopped from.
+// Notifier delivers shop messages: Notify reaches a buyer through the bot they shopped from,
+// NotifyStaff reaches administrators and merchant contacts.
 type Notifier interface {
 	Notify(ctx context.Context, botID uint64, telegramUserID int64, html string) error
+	NotifyStaff(ctx context.Context, chatIDs []int64, html string) error
 }
+
+// autoOperator marks changes made by the shop's background worker.
+const autoOperator = "auto"
 
 type Service struct {
 	st       *store.Store
 	wallet   *wallet.Service
 	notifier Notifier
 	logger   *zap.Logger
+	staff    []int64 // administrators told about new orders and after-sales
 }
+
+// WithStaff sets the administrators' Telegram IDs that receive order and after-sale notices.
+func (s *Service) WithStaff(ids []int64) *Service { s.staff = ids; return s }
 
 func New(st *store.Store, w *wallet.Service, n Notifier, logger *zap.Logger) *Service {
 	return &Service{st: st, wallet: w, notifier: n, logger: logger}
@@ -100,6 +111,55 @@ func (s *Service) notify(botID uint64, tgUserID int64, html string) {
 			s.logger.Warn("shop notification failed", zap.Int64("telegram_user_id", tgUserID), zap.Error(err))
 		}
 	}()
+}
+
+// notifyStaff tells administrators and the merchant's notification contact, if any.
+func (s *Service) notifyStaff(merchantID uint64, html string) {
+	if s.notifier == nil {
+		return
+	}
+	ids := append([]int64{}, s.staff...)
+	var m model.Merchant
+	if merchantID != 0 && s.st.DB.Select("notify_chat_id").First(&m, merchantID).Error == nil && m.NotifyChatID != 0 {
+		dup := false
+		for _, id := range ids {
+			dup = dup || id == m.NotifyChatID
+		}
+		if !dup {
+			ids = append(ids, m.NotifyChatID)
+		}
+	}
+	if len(ids) == 0 {
+		return
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if err := s.notifier.NotifyStaff(ctx, ids, html); err != nil && s.logger != nil {
+			s.logger.Warn("shop staff notification failed", zap.Error(err))
+		}
+	}()
+}
+
+// config reads an integer shop setting from system_configs, falling back to def.
+func (s *Service) configInt(key string, def int) int {
+	var c model.SystemConfig
+	if err := s.st.DB.Where("`key` = ?", key).First(&c).Error; err != nil {
+		return def
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(c.Value))
+	if err != nil || n < 0 {
+		return def
+	}
+	return n
+}
+
+func (s *Service) configString(key string) string {
+	var c model.SystemConfig
+	if err := s.st.DB.Where("`key` = ?", key).First(&c).Error; err != nil {
+		return ""
+	}
+	return strings.TrimSpace(c.Value)
 }
 
 // firstImage returns the cover image of a newline-separated image list.

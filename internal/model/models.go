@@ -133,13 +133,15 @@ type MenuItem struct {
 	UpdatedAt   time.Time `json:"updated_at"`
 }
 
-// AdminUser is a web console account. Role is "super" (manages accounts) or "admin".
+// AdminUser is a web console account. Role is "super" (manages accounts), "admin" (pages from
+// its AdminRole) or "merchant" (only its own merchant's shop products, orders and after-sales).
 type AdminUser struct {
 	ID           uint64     `gorm:"primaryKey" json:"id"`
 	Username     string     `gorm:"size:64;uniqueIndex;not null" json:"username"`
 	PasswordHash string     `gorm:"size:100;not null" json:"-"`
 	Role         string     `gorm:"size:16;not null" json:"role"`
-	RoleID       uint64     `gorm:"not null;default:0;index" json:"role_id"` // AdminRole for role "admin"; ignored for "super"
+	RoleID       uint64     `gorm:"not null;default:0;index" json:"role_id"`     // AdminRole for role "admin"; ignored for "super"
+	MerchantID   uint64     `gorm:"not null;default:0;index" json:"merchant_id"` // the merchant a "merchant" account manages
 	Enabled      bool       `gorm:"not null" json:"enabled"`
 	LastLoginAt  *time.Time `json:"last_login_at"`
 	CreatedAt    time.Time  `json:"created_at"`
@@ -287,17 +289,19 @@ type PushRoute struct {
 
 // Merchant belongs to one child menu configured as a merchant directory.
 type Merchant struct {
-	Pinned      bool      `gorm:"not null;default:false;index" json:"pinned"`
-	ID          uint64    `gorm:"primaryKey" json:"id"`
-	MenuID      uint64    `gorm:"not null;index" json:"menu_id"`
-	Name        string    `gorm:"size:128;not null" json:"name"`
-	Description string    `gorm:"type:text" json:"description"`
-	Address     string    `gorm:"size:512" json:"address"`
-	Hours       string    `gorm:"size:128" json:"hours"`
-	Phone       string    `gorm:"size:64" json:"phone"`
-	ContactURL  string    `gorm:"size:1024" json:"contact_url"`
-	Sort        int       `gorm:"not null;default:0" json:"sort"`
-	Enabled     bool      `gorm:"not null;index" json:"enabled"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	Pinned      bool   `gorm:"not null;default:false;index" json:"pinned"`
+	ID          uint64 `gorm:"primaryKey" json:"id"`
+	MenuID      uint64 `gorm:"not null;index" json:"menu_id"`
+	Name        string `gorm:"size:128;not null" json:"name"`
+	Description string `gorm:"type:text" json:"description"`
+	Address     string `gorm:"size:512" json:"address"`
+	Hours       string `gorm:"size:128" json:"hours"`
+	Phone       string `gorm:"size:64" json:"phone"`
+	ContactURL  string `gorm:"size:1024" json:"contact_url"`
+	// NotifyChatID receives shop order and after-sale notices from the primary bot (0 = none).
+	NotifyChatID int64     `gorm:"not null;default:0" json:"notify_chat_id"`
+	Sort         int       `gorm:"not null;default:0" json:"sort"`
+	Enabled      bool      `gorm:"not null;index" json:"enabled"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
 }

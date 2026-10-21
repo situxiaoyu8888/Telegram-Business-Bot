@@ -163,6 +163,11 @@ func (h *Handler) page(c *gin.Context) {
 
 func (h *Handler) dashboard(c *gin.Context) {
 	counts := map[string]int64{}
+	// Platform-wide figures are not shown to merchant accounts.
+	if merchantScope(c) != 0 {
+		c.JSON(http.StatusOK, counts)
+		return
+	}
 
 	queries := []struct {
 		name  string

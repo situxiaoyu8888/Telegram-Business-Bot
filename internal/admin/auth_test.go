@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"telegram-business-bot/internal/model"
+	"telegram-business-bot/internal/shop"
 	"telegram-business-bot/internal/store"
 	"telegram-business-bot/internal/testutil"
 	"testing"
@@ -348,5 +349,36 @@ func TestNormalizePermissionsRejectsUnknownKeys(t *testing.T) {
 	}
 	if _, err := normalizePermissions([]string{"accounts"}); err == nil {
 		t.Fatal("account management must not be grantable")
+	}
+}
+func TestMerchantAccountGetsOnlyScopedShopPages(t *testing.T) {
+	h, r, _, accounts := accountFixture(t)
+	h.shop = &shop.Service{} // registers shop routes; the guards below reject before any handler runs
+	h.st = &store.Store{DB: testutil.DB(t, testutil.Step{Contains: "merchants", Columns: []string{"id", "name"}, Rows: [][]driver.Value{{int64(9), "甲"}}})}
+	r = gin.New()
+	h.Register(r)
+	m := testAccount(t, 3, "shopowner", "owner-password", roleMerchant)
+	m.MerchantID = 9
+	accounts[3] = m
+	cookie := login(t, r, "shopowner", "owner-password")
+	w := authRequest(r, "GET", "/admin/api/session", "", cookie, false)
+	if !strings.Contains(w.Body.String(), `"permissions":["shop_products","shop_orders","shop_aftersales"]`) || !strings.Contains(w.Body.String(), `"merchant_name":"甲"`) {
+		t.Fatal(w.Body.String())
+	}
+	for _, path := range []string{"/admin/api/configs", "/admin/api/withdrawals", "/admin/api/shop-coupons", "/admin/api/accounts"} {
+		if w := authRequest(r, "GET", path, "", cookie, false); w.Code != 403 {
+			t.Fatal(path, w.Code)
+		}
+	}
+	if w := authRequest(r, "POST", "/admin/api/shop-categories", `{"name":"x"}`, cookie, true); w.Code != 403 {
+		t.Fatal("merchant changed shared categories", w.Code)
+	}
+	if w := authRequest(r, "GET", "/admin/api/dashboard", "", cookie, false); w.Code != 200 || w.Body.String() != "{}" {
+		t.Fatal("platform figures shown to merchant", w.Body.String())
+	}
+	// A merchant account without a merchant has no pages at all.
+	m.MerchantID = 0
+	if w := authRequest(r, "GET", "/admin/api/session", "", cookie, false); !strings.Contains(w.Body.String(), `"permissions":[]`) {
+		t.Fatal(w.Body.String())
 	}
 }

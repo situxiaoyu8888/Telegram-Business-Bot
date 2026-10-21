@@ -22,15 +22,28 @@ type CheckoutItem struct {
 	Quantity int64  `json:"quantity"`
 }
 
-type CheckoutRequest struct {
-	RequestID    string         `json:"request_id"`
+// CheckoutGroup is one merchant's part of a checkout; it becomes one order.
+type CheckoutGroup struct {
 	Items        []CheckoutItem `json:"items"`
 	DeliveryType string         `json:"delivery_type"`
-	AddressID    uint64         `json:"address_id"`
 	UserCouponID uint64         `json:"user_coupon_id"`
 	Remark       string         `json:"remark"`
-	FromCart     bool           `json:"from_cart"`
 }
+
+// CheckoutRequest pays for one group (the top-level fields) or several (Groups), e.g. a cart
+// spanning merchants. All orders of a request are charged in one transaction.
+type CheckoutRequest struct {
+	RequestID    string          `json:"request_id"`
+	Items        []CheckoutItem  `json:"items"`
+	DeliveryType string          `json:"delivery_type"`
+	AddressID    uint64          `json:"address_id"`
+	UserCouponID uint64          `json:"user_coupon_id"`
+	Remark       string          `json:"remark"`
+	FromCart     bool            `json:"from_cart"`
+	Groups       []CheckoutGroup `json:"groups"`
+}
+
+const maxCheckoutGroups = 10
 
 // Quote is the price of a checkout, with the coupons the buyer could use on it.
 type Quote struct {
@@ -189,108 +202,62 @@ func newOrderNo(now time.Time) string {
 	return fmt.Sprintf("S%s%06d", now.Format("060102150405"), n.Int64())
 }
 
-// CreateOrder charges the wallet and creates a paid order in one transaction. Repeating a
-// request ID returns the original order, so a retried tap never charges twice.
+// CreateOrder places a single-group checkout; see CreateOrders.
 func (s *Service) CreateOrder(b Buyer, req CheckoutRequest) (*model.ShopOrder, error) {
-	req.RequestID = strings.TrimSpace(req.RequestID)
-	if req.RequestID == "" || len(req.RequestID) > 64 {
-		return nil, userErr("请求无效，请刷新后重试")
-	}
-	if err := checkLen(req.Remark, "备注", 255, false); err != nil {
+	orders, err := s.CreateOrders(b, req)
+	if err != nil {
 		return nil, err
 	}
-	var order model.ShopOrder
+	return &orders[0], nil
+}
+
+// CreateOrders charges the wallet and creates one paid order per group in a single transaction:
+// either every order is placed or none is. Repeating a request ID returns the original orders,
+// so a retried tap never charges twice.
+func (s *Service) CreateOrders(b Buyer, req CheckoutRequest) ([]model.ShopOrder, error) {
+	req.RequestID = strings.TrimSpace(req.RequestID)
+	if req.RequestID == "" || len(req.RequestID) > 60 {
+		return nil, userErr("请求无效，请刷新后重试")
+	}
+	groups := req.Groups
+	if len(groups) == 0 {
+		groups = []CheckoutGroup{{Items: req.Items, DeliveryType: req.DeliveryType, UserCouponID: req.UserCouponID, Remark: req.Remark}}
+	}
+	if len(groups) > maxCheckoutGroups {
+		return nil, userErr("一次最多结算 %d 个商家", maxCheckoutGroups)
+	}
+	// A single group keeps the plain request ID, so earlier clients stay idempotent.
+	requestIDs := []string{req.RequestID}
+	if len(groups) > 1 {
+		requestIDs = requestIDs[:0]
+		for i := range groups {
+			requestIDs = append(requestIDs, fmt.Sprintf("%s#%d", req.RequestID, i))
+		}
+	}
+	var orders []model.ShopOrder
 	var existing bool
 	err := s.st.DB.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Where("user_id = ? AND request_id = ?", b.UserID, req.RequestID).First(&order).Error; err == nil {
+		if err := tx.Where("user_id = ? AND request_id IN ?", b.UserID, requestIDs).Order("id asc").Find(&orders).Error; err != nil {
+			return err
+		}
+		if len(orders) > 0 {
 			existing = true
 			return nil
-		} else if !errors.Is(err, gorm.ErrRecordNotFound) {
-			return err
 		}
-		items, goods, types, err := s.price(tx, req.Items)
-		if err != nil {
-			return err
-		}
-		allowed := false
-		for _, t := range types {
-			allowed = allowed || t == req.DeliveryType
-		}
-		if !allowed {
-			return userErr("所选商品不支持该配送方式")
-		}
-		first := items[0].line
-		now := time.Now()
-		order = model.ShopOrder{OrderNo: newOrderNo(now), RequestID: req.RequestID, UserID: b.UserID, TelegramUserID: b.TelegramUserID, BotID: b.BotID, MerchantID: first.MerchantID, MerchantName: first.MerchantName, DeliveryType: req.DeliveryType, Status: StatusPaid, Remark: strings.TrimSpace(req.Remark), PaidAt: now}
-		switch req.DeliveryType {
-		case DeliveryExpress:
-			var addr model.ShopAddress
-			if err := tx.Where("id = ? AND user_id = ?", req.AddressID, b.UserID).First(&addr).Error; err != nil {
-				return userErr("请选择收货地址")
-			}
-			order.ContactName, order.ContactPhone, order.Address = addr.Name, addr.Phone, addr.Address
-		case DeliveryPickup:
-			order.Address = first.MerchantAddress
-		}
-
-		discount := decimal.Zero
-		var held model.ShopUserCoupon
-		if req.UserCouponID != 0 {
-			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND user_id = ?", req.UserCouponID, b.UserID).First(&held).Error; err != nil {
-				return userErr("优惠券不存在")
-			}
-			var c model.ShopCoupon
-			if err := tx.First(&c, held.CouponID).Error; err != nil {
-				return userErr("优惠券不存在")
-			}
-			if discount, err = couponDiscount(held, c, first.MerchantID, goods, now); err != nil {
+		var cartSKUs []uint64
+		for i, g := range groups {
+			o, skus, err := s.createOrderTx(tx, b, requestIDs[i], g, req.AddressID)
+			if err != nil {
+				if len(groups) > 1 && IsUserError(err) {
+					return userErr("第 %d 个商家：%s", i+1, err.Error())
+				}
 				return err
 			}
-			order.UserCouponID = held.ID
-		}
-		pay := goods.Sub(discount)
-		order.GoodsAmount, order.Discount, order.PayAmount = goods.StringFixed(6), discount.StringFixed(6), pay.StringFixed(6)
-		if err := tx.Create(&order).Error; err != nil {
-			return err
-		}
-		for _, it := range items {
-			// The conditional update is the stock check that holds under concurrent orders.
-			res := tx.Model(&model.ShopSKU{}).Where("id = ? AND stock >= ?", it.SKUID, it.Quantity).Update("stock", gorm.Expr("stock - ?", it.Quantity))
-			if res.Error != nil {
-				return res.Error
-			}
-			if res.RowsAffected != 1 {
-				return userErr("「%s %s」库存不足", it.line.ProductName, it.line.Name)
-			}
-			if err := tx.Model(&model.ShopProduct{}).Where("id = ?", it.line.ProductID).Update("sales", gorm.Expr("sales + ?", it.Quantity)).Error; err != nil {
-				return err
-			}
-			if err := tx.Create(&model.ShopOrderItem{OrderID: order.ID, ProductID: it.line.ProductID, SKUID: it.SKUID, ProductName: it.line.ProductName, SKUName: it.line.Name, ImageURL: firstImage(it.line.Images), Price: it.line.Price, Quantity: it.Quantity}).Error; err != nil {
-				return err
-			}
-		}
-		if order.UserCouponID != 0 {
-			if err := tx.Model(&model.ShopUserCoupon{}).Where("id = ?", held.ID).Updates(map[string]any{"status": CouponUsed, "order_id": order.ID}).Error; err != nil {
-				return err
-			}
-		}
-		if err := s.wallet.Spend(tx, b.UserID, pay, "shop_order", order.ID, "商城订单 "+order.OrderNo); err != nil {
-			if errors.Is(err, wallet.ErrInsufficientBalance) {
-				return userErr("余额不足，需支付 %s USDT，请先充值", pay.String())
-			}
-			return err
-		}
-		if req.DeliveryType == DeliveryVirtual {
-			if err := s.assignCodes(tx, &order, items); err != nil {
-				return err
-			}
+			orders = append(orders, o)
+			cartSKUs = append(cartSKUs, skus...)
 		}
 		if req.FromCart {
-			ids := []uint64{}
-			for _, it := range items {
-				ids = append(ids, it.SKUID)
-			}
-			if err := tx.Where("user_id = ? AND sku_id IN ?", b.UserID, ids).Delete(&model.ShopCartItem{}).Error; err != nil {
+			if err := tx.Where("user_id = ? AND sku_id IN ?", b.UserID, cartSKUs).Delete(&model.ShopCartItem{}).Error; err != nil {
 				return err
 			}
 		}
@@ -300,13 +267,108 @@ func (s *Service) CreateOrder(b Buyer, req CheckoutRequest) (*model.ShopOrder, e
 		return nil, err
 	}
 	if !existing {
-		msg := fmt.Sprintf("🛒 <b>下单成功</b>\n\n订单号：<code>%s</code>\n商家：%s\n实付：<code>%s USDT</code>", order.OrderNo, htmlEscape(order.MerchantName), amount(order.PayAmount).String())
-		if order.Status == StatusCompleted {
-			msg += "\n\n🎁 卡密已发放，请在商城「订单详情」中查看。"
+		for _, o := range orders {
+			msg := fmt.Sprintf("🛒 <b>下单成功</b>\n\n订单号：<code>%s</code>\n商家：%s\n实付：<code>%s USDT</code>", o.OrderNo, htmlEscape(o.MerchantName), amount(o.PayAmount).String())
+			if o.Status == StatusCompleted {
+				msg += "\n\n🎁 卡密已发放，请在商城「订单详情」中查看。"
+			}
+			s.notify(o.BotID, o.TelegramUserID, msg)
+			s.notifyStaff(o.MerchantID, fmt.Sprintf("🛒 <b>商城新订单</b>\n\n订单号：<code>%s</code>\n商家：%s\n配送：%s\n实付：<code>%s USDT</code>\n买家 Telegram ID：<code>%d</code>%s", o.OrderNo, htmlEscape(o.MerchantName), deliveryNames[o.DeliveryType], amount(o.PayAmount).String(), o.TelegramUserID, map[bool]string{true: "\n\n卡密已自动发放。", false: ""}[o.Status == StatusCompleted]))
 		}
-		s.notify(order.BotID, order.TelegramUserID, msg)
 	}
-	return &order, nil
+	return orders, nil
+}
+
+var deliveryNames = map[string]string{DeliveryExpress: "快递配送", DeliveryPickup: "到店自提", DeliveryVirtual: "虚拟商品"}
+
+// createOrderTx prices, charges and records one group inside the caller's transaction and
+// returns the order with the SKUs it bought.
+func (s *Service) createOrderTx(tx *gorm.DB, b Buyer, requestID string, g CheckoutGroup, addressID uint64) (model.ShopOrder, []uint64, error) {
+	var order model.ShopOrder
+	if err := checkLen(g.Remark, "备注", 255, false); err != nil {
+		return order, nil, err
+	}
+	items, goods, types, err := s.price(tx, g.Items)
+	if err != nil {
+		return order, nil, err
+	}
+	allowed := false
+	for _, t := range types {
+		allowed = allowed || t == g.DeliveryType
+	}
+	if !allowed {
+		return order, nil, userErr("所选商品不支持该配送方式")
+	}
+	first := items[0].line
+	now := time.Now()
+	order = model.ShopOrder{OrderNo: newOrderNo(now), RequestID: requestID, UserID: b.UserID, TelegramUserID: b.TelegramUserID, BotID: b.BotID, MerchantID: first.MerchantID, MerchantName: first.MerchantName, DeliveryType: g.DeliveryType, Status: StatusPaid, Remark: strings.TrimSpace(g.Remark), RefundedAmount: "0", PaidAt: now}
+	switch g.DeliveryType {
+	case DeliveryExpress:
+		var addr model.ShopAddress
+		if err := tx.Where("id = ? AND user_id = ?", addressID, b.UserID).First(&addr).Error; err != nil {
+			return order, nil, userErr("请选择收货地址")
+		}
+		order.ContactName, order.ContactPhone, order.Address = addr.Name, addr.Phone, addr.Address
+	case DeliveryPickup:
+		order.Address = first.MerchantAddress
+	}
+
+	discount := decimal.Zero
+	var held model.ShopUserCoupon
+	if g.UserCouponID != 0 {
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND user_id = ?", g.UserCouponID, b.UserID).First(&held).Error; err != nil {
+			return order, nil, userErr("优惠券不存在")
+		}
+		var c model.ShopCoupon
+		if err := tx.First(&c, held.CouponID).Error; err != nil {
+			return order, nil, userErr("优惠券不存在")
+		}
+		if discount, err = couponDiscount(held, c, first.MerchantID, goods, now); err != nil {
+			return order, nil, err
+		}
+		order.UserCouponID = held.ID
+	}
+	pay := goods.Sub(discount)
+	order.GoodsAmount, order.Discount, order.PayAmount = goods.StringFixed(6), discount.StringFixed(6), pay.StringFixed(6)
+	if err := tx.Create(&order).Error; err != nil {
+		return order, nil, err
+	}
+	skus := []uint64{}
+	for _, it := range items {
+		// The conditional update is the stock check that holds under concurrent orders.
+		res := tx.Model(&model.ShopSKU{}).Where("id = ? AND stock >= ?", it.SKUID, it.Quantity).Update("stock", gorm.Expr("stock - ?", it.Quantity))
+		if res.Error != nil {
+			return order, nil, res.Error
+		}
+		if res.RowsAffected != 1 {
+			return order, nil, userErr("「%s %s」库存不足", it.line.ProductName, it.line.Name)
+		}
+		if err := tx.Model(&model.ShopProduct{}).Where("id = ?", it.line.ProductID).Update("sales", gorm.Expr("sales + ?", it.Quantity)).Error; err != nil {
+			return order, nil, err
+		}
+		if err := tx.Create(&model.ShopOrderItem{OrderID: order.ID, ProductID: it.line.ProductID, SKUID: it.SKUID, ProductName: it.line.ProductName, SKUName: it.line.Name, ImageURL: firstImage(it.line.Images), Price: it.line.Price, Quantity: it.Quantity}).Error; err != nil {
+			return order, nil, err
+		}
+		skus = append(skus, it.SKUID)
+	}
+	if order.UserCouponID != 0 {
+		// The coupon row is locked and re-checked above, so one coupon cannot pay for two groups.
+		if err := tx.Model(&model.ShopUserCoupon{}).Where("id = ?", held.ID).Updates(map[string]any{"status": CouponUsed, "order_id": order.ID}).Error; err != nil {
+			return order, nil, err
+		}
+	}
+	if err := s.wallet.Spend(tx, b.UserID, pay, "shop_order", order.ID, "商城订单 "+order.OrderNo); err != nil {
+		if errors.Is(err, wallet.ErrInsufficientBalance) {
+			return order, nil, userErr("余额不足，请先充值")
+		}
+		return order, nil, err
+	}
+	if g.DeliveryType == DeliveryVirtual {
+		if err := s.assignCodes(tx, &order, items); err != nil {
+			return order, nil, err
+		}
+	}
+	return order, skus, nil
 }
 
 // assignCodes delivers pre-loaded codes for a virtual order. When any SKU lacks codes the order
@@ -337,10 +399,13 @@ func (s *Service) assignCodes(tx *gorm.DB, order *model.ShopOrder, items []price
 	return tx.Model(&model.ShopOrder{}).Where("id = ?", order.ID).Updates(map[string]any{"status": order.Status, "delivery_note": order.DeliveryNote, "completed_at": now, "handled_by": order.HandledBy}).Error
 }
 
-// OrderDetail is an order with its items.
+// OrderDetail is an order with its items (and, for a single order, its after-sale requests).
 type OrderDetail struct {
 	model.ShopOrder
-	Items []model.ShopOrderItem `json:"items"`
+	Items      []model.ShopOrderItem `json:"items"`
+	AfterSales []model.ShopAfterSale `json:"after_sales,omitempty"`
+	// CanApplyAfterSale tells the buyer's page whether to offer an after-sale request.
+	CanApplyAfterSale bool `json:"can_apply_after_sale"`
 }
 
 func (s *Service) withItems(orders []model.ShopOrder) ([]OrderDetail, error) {
@@ -395,15 +460,30 @@ func (s *Service) Order(userID, id uint64) (*OrderDetail, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &list[0], nil
+	d := &list[0]
+	if err := s.st.DB.Where("order_id = ?", o.ID).Order("id desc").Find(&d.AfterSales).Error; err != nil {
+		return nil, err
+	}
+	d.CanApplyAfterSale = s.afterSaleAllowed(o, time.Now()) == nil
+	return d, nil
 }
 
-// lockOrder loads an order for update; userID 0 skips the ownership check (administrators).
-func lockOrder(tx *gorm.DB, id, userID uint64) (model.ShopOrder, error) {
+// Scope limits an order operation to one buyer (UserID) or one merchant's console account
+// (MerchantID); zero values mean no restriction.
+type Scope struct {
+	UserID     uint64
+	MerchantID uint64
+}
+
+// lockOrder loads an order for update within the scope.
+func lockOrder(tx *gorm.DB, id uint64, scope Scope) (model.ShopOrder, error) {
 	var o model.ShopOrder
 	q := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", id)
-	if userID != 0 {
-		q = q.Where("user_id = ?", userID)
+	if scope.UserID != 0 {
+		q = q.Where("user_id = ?", scope.UserID)
+	}
+	if scope.MerchantID != 0 {
+		q = q.Where("merchant_id = ?", scope.MerchantID)
 	}
 	if err := q.First(&o).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -416,29 +496,33 @@ func lockOrder(tx *gorm.DB, id, userID uint64) (model.ShopOrder, error) {
 
 // CancelByBuyer cancels an order that has not been shipped or prepared yet.
 func (s *Service) CancelByBuyer(userID, id uint64) error {
-	return s.cancel(id, userID, "买家取消", "")
+	return s.cancel(id, Scope{UserID: userID}, "买家取消", "")
 }
 
-// CancelByAdmin cancels and refunds any paid, shipped or ready order.
-func (s *Service) CancelByAdmin(id uint64, reason, operator string) error {
+// CancelByAdmin cancels any paid, shipped or ready order and refunds what has not been refunded yet.
+func (s *Service) CancelByAdmin(id uint64, scope Scope, reason, operator string) error {
 	if err := checkLen(reason, "取消原因", 255, true); err != nil {
 		return err
 	}
-	return s.cancel(id, 0, strings.TrimSpace(reason), operator)
+	return s.cancel(id, scope, strings.TrimSpace(reason), operator)
 }
 
-func (s *Service) cancel(id, userID uint64, reason, operator string) error {
+func (s *Service) cancel(id uint64, scope Scope, reason, operator string) error {
 	var o model.ShopOrder
+	var refund decimal.Decimal
 	err := s.st.DB.Transaction(func(tx *gorm.DB) error {
 		var err error
-		if o, err = lockOrder(tx, id, userID); err != nil {
+		if o, err = lockOrder(tx, id, scope); err != nil {
 			return err
 		}
-		if userID != 0 && o.Status != StatusPaid {
+		if scope.UserID != 0 && o.Status != StatusPaid {
 			return userErr("订单已发货或已备货，请联系商家处理")
 		}
 		if o.Status != StatusPaid && o.Status != StatusShipped && o.Status != StatusReady {
 			return userErr("当前订单状态不能取消")
+		}
+		if o.AfterSaleOpen {
+			return userErr("该订单有处理中的售后申请，请先处理售后")
 		}
 		var items []model.ShopOrderItem
 		if err := tx.Where("order_id = ?", o.ID).Find(&items).Error; err != nil {
@@ -457,38 +541,48 @@ func (s *Service) cancel(id, userID uint64, reason, operator string) error {
 				return err
 			}
 		}
-		if err := s.wallet.Refund(tx, o.UserID, amount(o.PayAmount), "shop_order", o.ID, "商城订单退款 "+o.OrderNo); err != nil {
+		refund = amount(o.PayAmount).Sub(amount(o.RefundedAmount))
+		if refund.IsNegative() {
+			refund = decimal.Zero
+		}
+		if err := s.wallet.Refund(tx, o.UserID, refund, "shop_order", o.ID, "商城订单退款 "+o.OrderNo); err != nil {
 			return err
 		}
 		now := time.Now()
 		o.Status, o.CancelReason, o.CanceledAt = StatusCanceled, reason, &now
-		return tx.Model(&model.ShopOrder{}).Where("id = ?", o.ID).Updates(map[string]any{"status": StatusCanceled, "cancel_reason": reason, "canceled_at": now, "handled_by": operator}).Error
+		return tx.Model(&model.ShopOrder{}).Where("id = ?", o.ID).Updates(map[string]any{"status": StatusCanceled, "cancel_reason": reason, "canceled_at": now, "handled_by": operator, "refunded_amount": amount(o.PayAmount).StringFixed(6)}).Error
 	})
 	if err == nil {
-		s.notify(o.BotID, o.TelegramUserID, fmt.Sprintf("↩️ <b>订单已取消</b>\n\n订单号：<code>%s</code>\n原因：%s\n<code>%s USDT</code> 已退回钱包余额。", o.OrderNo, htmlEscape(reason), amount(o.PayAmount).String()))
+		s.notify(o.BotID, o.TelegramUserID, fmt.Sprintf("↩️ <b>订单已取消</b>\n\n订单号：<code>%s</code>\n原因：%s\n<code>%s USDT</code> 已退回钱包余额。", o.OrderNo, htmlEscape(reason), refund.String()))
+		if scope.UserID != 0 {
+			s.notifyStaff(o.MerchantID, fmt.Sprintf("↩️ <b>买家取消了订单</b>\n\n订单号：<code>%s</code>\n商家：%s\n已退款：<code>%s USDT</code>", o.OrderNo, htmlEscape(o.MerchantName), refund.String()))
+		}
 	}
 	return err
 }
 
 // ConfirmReceipt lets the buyer complete a shipped or ready order.
 func (s *Service) ConfirmReceipt(userID, id uint64) error {
-	return s.complete(id, userID, "")
+	return s.complete(id, Scope{UserID: userID}, "")
 }
 
 // CompleteByAdmin completes a shipped or ready order, e.g. after pickup.
-func (s *Service) CompleteByAdmin(id uint64, operator string) error {
-	return s.complete(id, 0, operator)
+func (s *Service) CompleteByAdmin(id uint64, scope Scope, operator string) error {
+	return s.complete(id, scope, operator)
 }
 
-func (s *Service) complete(id, userID uint64, operator string) error {
+func (s *Service) complete(id uint64, scope Scope, operator string) error {
 	var o model.ShopOrder
 	err := s.st.DB.Transaction(func(tx *gorm.DB) error {
 		var err error
-		if o, err = lockOrder(tx, id, userID); err != nil {
+		if o, err = lockOrder(tx, id, scope); err != nil {
 			return err
 		}
 		if o.Status != StatusShipped && o.Status != StatusReady {
 			return userErr("当前订单状态不能确认完成")
+		}
+		if operator == autoOperator && o.AfterSaleOpen {
+			return userErr("售后处理中，暂不自动确认")
 		}
 		updates := map[string]any{"status": StatusCompleted, "completed_at": time.Now()}
 		if operator != "" {
@@ -496,20 +590,24 @@ func (s *Service) complete(id, userID uint64, operator string) error {
 		}
 		return tx.Model(&model.ShopOrder{}).Where("id = ?", o.ID).Updates(updates).Error
 	})
-	if err == nil && userID == 0 {
-		s.notify(o.BotID, o.TelegramUserID, fmt.Sprintf("✅ <b>订单已完成</b>\n\n订单号：<code>%s</code>\n感谢您的购买！", o.OrderNo))
+	if err == nil && scope.UserID == 0 {
+		msg := fmt.Sprintf("✅ <b>订单已完成</b>\n\n订单号：<code>%s</code>\n感谢您的购买！", o.OrderNo)
+		if operator == autoOperator {
+			msg = fmt.Sprintf("✅ <b>订单已自动确认收货</b>\n\n订单号：<code>%s</code>\n如有问题，可在商城订单详情中申请售后。", o.OrderNo)
+		}
+		s.notify(o.BotID, o.TelegramUserID, msg)
 	}
 	return err
 }
 
 // Fulfil moves a paid order forward: express orders ship with a carrier and tracking number,
 // pickup orders become ready with an optional note, and virtual orders complete with the delivered content.
-func (s *Service) Fulfil(id uint64, carrier, trackingNo, note, operator string) error {
+func (s *Service) Fulfil(id uint64, scope Scope, carrier, trackingNo, note, operator string) error {
 	var o model.ShopOrder
 	var msg string
 	err := s.st.DB.Transaction(func(tx *gorm.DB) error {
 		var err error
-		if o, err = lockOrder(tx, id, 0); err != nil {
+		if o, err = lockOrder(tx, id, scope); err != nil {
 			return err
 		}
 		if o.Status != StatusPaid {
@@ -549,8 +647,9 @@ func (s *Service) Fulfil(id uint64, carrier, trackingNo, note, operator string) 
 }
 
 type AdminOrderQuery struct {
-	Status  string
-	Keyword string
+	Status     string
+	Keyword    string
+	MerchantID uint64 // 0 = every merchant
 }
 
 // AdminOrders lists recent orders for the console.
@@ -558,6 +657,9 @@ func (s *Service) AdminOrders(q AdminOrderQuery) ([]OrderDetail, error) {
 	db := s.st.DB.Model(&model.ShopOrder{})
 	if q.Status != "" {
 		db = db.Where("status = ?", q.Status)
+	}
+	if q.MerchantID != 0 {
+		db = db.Where("merchant_id = ?", q.MerchantID)
 	}
 	if kw := strings.TrimSpace(q.Keyword); kw != "" {
 		db = db.Where("order_no = ? OR telegram_user_id = ?", kw, kw)

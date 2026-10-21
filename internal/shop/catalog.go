@@ -207,13 +207,22 @@ type AdminProduct struct {
 	Codes map[uint64]int64 `json:"codes"`
 }
 
-func (s *Service) AdminProducts() ([]AdminProduct, error) {
+// AdminProducts lists products for the console; merchantID limits it to one merchant (0 = all).
+func (s *Service) AdminProducts(merchantID uint64) ([]AdminProduct, error) {
 	var products []model.ShopProduct
-	if err := s.st.DB.Order("sort asc, id desc").Find(&products).Error; err != nil {
+	q := s.st.DB.Order("sort asc, id desc")
+	if merchantID != 0 {
+		q = q.Where("merchant_id = ?", merchantID)
+	}
+	if err := q.Find(&products).Error; err != nil {
 		return nil, err
 	}
+	ids := []uint64{0}
+	for _, p := range products {
+		ids = append(ids, p.ID)
+	}
 	var skus []model.ShopSKU
-	if err := s.st.DB.Order("sort asc, id asc").Find(&skus).Error; err != nil {
+	if err := s.st.DB.Where("product_id IN ?", ids).Order("sort asc, id asc").Find(&skus).Error; err != nil {
 		return nil, err
 	}
 	var counts []struct {
@@ -255,7 +264,12 @@ type SKUInput struct {
 	Stock int64  `json:"stock"`
 }
 
-func (s *Service) SaveProduct(p model.ShopProduct, skus []SKUInput) (uint64, error) {
+// SaveProduct creates or updates a product with its SKUs. A non-zero merchantScope (a merchant
+// account) pins the product to that merchant and refuses other merchants' products.
+func (s *Service) SaveProduct(p model.ShopProduct, skus []SKUInput, merchantScope uint64) (uint64, error) {
+	if merchantScope != 0 {
+		p.MerchantID = merchantScope
+	}
 	p.Name = strings.TrimSpace(p.Name)
 	if err := checkLen(p.Name, "商品名称", 128, true); err != nil {
 		return 0, err
@@ -310,7 +324,7 @@ func (s *Service) SaveProduct(p model.ShopProduct, skus []SKUInput) (uint64, err
 			}
 		} else {
 			var existing model.ShopProduct
-			if err := tx.Select("id", "kind").First(&existing, p.ID).Error; err != nil {
+			if err := tx.Select("id", "kind", "merchant_id").First(&existing, p.ID).Error; err != nil || (merchantScope != 0 && existing.MerchantID != merchantScope) {
 				return userErr("商品不存在")
 			}
 			if existing.Kind != p.Kind {
@@ -351,7 +365,8 @@ func (s *Service) SaveProduct(p model.ShopProduct, skus []SKUInput) (uint64, err
 }
 
 // ImportCodes adds virtual codes (one per non-empty line) to a virtual SKU and raises its stock to match.
-func (s *Service) ImportCodes(skuID uint64, text string) (int, error) {
+// A non-zero merchantScope only allows SKUs of that merchant's products.
+func (s *Service) ImportCodes(skuID uint64, text string, merchantScope uint64) (int, error) {
 	codes := []model.ShopVirtualCode{}
 	for _, line := range strings.Split(text, "\n") {
 		if line = strings.TrimSpace(line); line != "" {
@@ -370,8 +385,11 @@ func (s *Service) ImportCodes(skuID uint64, text string) (int, error) {
 			return userErr("规格不存在")
 		}
 		var p model.ShopProduct
-		if err := tx.Select("id", "kind").First(&p, sku.ProductID).Error; err != nil {
+		if err := tx.Select("id", "kind", "merchant_id").First(&p, sku.ProductID).Error; err != nil {
 			return err
+		}
+		if merchantScope != 0 && p.MerchantID != merchantScope {
+			return userErr("规格不存在")
 		}
 		if p.Kind != "virtual" {
 			return userErr("只有虚拟商品可以导入卡密")

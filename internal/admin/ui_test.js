@@ -152,3 +152,11 @@ test('shop categories follow the shop products permission and are not a grantabl
  assert.ok(!html.includes('data-nav="shop_orders"'));
  assert.equal(h.run("apiPath('shop_products')"),'shop-products');
 });
+test('merchant accounts see their shop pages but not categories or platform stats',()=>{
+ const h=harness();
+ h.run("me={id:3,role:'merchant',merchant_name:'甲',permissions:['shop_products','shop_orders','shop_aftersales']};nav();renderStats()");
+ const html=h.elements.get('navigation').innerHTML;
+ for(const page of ['shop_products','shop_orders','shop_aftersales'])assert.ok(html.includes(`data-nav="${page}"`),page);
+ assert.ok(!html.includes('data-nav="shop_categories"'));
+ assert.equal(h.elements.get('stats').innerHTML,'');
+});

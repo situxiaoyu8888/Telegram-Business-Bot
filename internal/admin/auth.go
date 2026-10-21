@@ -293,6 +293,15 @@ func (h *Handler) permissionsOf(ctx context.Context, u *model.AdminUser) (map[st
 		}
 		return perms, nil
 	}
+	if u.Role == roleMerchant {
+		// Merchant accounts get fixed shop pages; every handler then limits data to merchantScope.
+		if u.MerchantID != 0 {
+			for _, p := range merchantPermissions {
+				perms[p] = true
+			}
+		}
+		return perms, nil
+	}
 	if u.RoleID == 0 {
 		return perms, nil
 	}
@@ -322,6 +331,25 @@ func requirePermission(pages ...string) gin.HandlerFunc {
 		}
 		c.AbortWithStatusJSON(403, gin.H{"error": "没有该页面的访问权限，请联系超级管理员"})
 	}
+}
+
+var merchantPermissions = []string{"shop_products", "shop_orders", "shop_aftersales"}
+
+// merchantScope is the merchant a merchant account is limited to, or 0 for platform accounts.
+func merchantScope(c *gin.Context) uint64 {
+	if u := current(c); u.Role == roleMerchant {
+		return u.MerchantID
+	}
+	return 0
+}
+
+// platformOnly rejects merchant accounts on routes that change shared shop data.
+func platformOnly(c *gin.Context) {
+	if current(c).Role == roleMerchant {
+		c.AbortWithStatusJSON(403, gin.H{"error": "商家账号不能执行此操作"})
+		return
+	}
+	c.Next()
 }
 
 func requireSuper(c *gin.Context) {

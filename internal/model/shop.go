@@ -92,6 +92,8 @@ type ShopOrder struct {
 	GoodsAmount    string     `gorm:"type:decimal(24,6);not null" json:"goods_amount"`
 	Discount       string     `gorm:"type:decimal(24,6);not null" json:"discount"`
 	PayAmount      string     `gorm:"type:decimal(24,6);not null" json:"pay_amount"`
+	RefundedAmount string     `gorm:"type:decimal(24,6);not null;default:0" json:"refunded_amount"` // after-sale refunds so far
+	AfterSaleOpen  bool       `gorm:"not null;default:false" json:"after_sale_open"`
 	UserCouponID   uint64     `gorm:"not null;default:0" json:"user_coupon_id"`
 	ContactName    string     `gorm:"size:64" json:"contact_name"`
 	ContactPhone   string     `gorm:"size:32" json:"contact_phone"`
@@ -151,4 +153,29 @@ type ShopUserCoupon struct {
 	ExpiresAt *time.Time `json:"expires_at"`
 	CreatedAt time.Time  `json:"created_at"`
 	UpdatedAt time.Time  `json:"updated_at"`
+}
+
+// ShopAfterSale is a buyer's refund request on a shipped, ready or completed order.
+// Type is refund (money only) or return (goods sent back first). Status flow:
+// pending → approved (return only, waiting for the parcel) → refunded, or pending → rejected / canceled.
+type ShopAfterSale struct {
+	ID             uint64     `gorm:"primaryKey" json:"id"`
+	OrderID        uint64     `gorm:"not null;index" json:"order_id"`
+	OrderNo        string     `gorm:"size:32;not null" json:"order_no"`
+	UserID         uint64     `gorm:"not null;index" json:"user_id"`
+	TelegramUserID int64      `gorm:"not null" json:"telegram_user_id"`
+	MerchantID     uint64     `gorm:"not null;index" json:"merchant_id"`
+	Type           string     `gorm:"size:16;not null" json:"type"`
+	Reason         string     `gorm:"size:512;not null" json:"reason"`
+	Amount         string     `gorm:"type:decimal(24,6);not null" json:"amount"` // requested
+	RefundAmount   string     `gorm:"type:decimal(24,6);not null;default:0" json:"refund_amount"`
+	Status         string     `gorm:"size:16;not null;index" json:"status"`
+	ReturnCarrier  string     `gorm:"size:64" json:"return_carrier"`
+	ReturnTracking string     `gorm:"size:128" json:"return_tracking"`
+	ReturnAddress  string     `gorm:"size:512" json:"return_address"`
+	AdminNote      string     `gorm:"size:512" json:"admin_note"`
+	HandledBy      string     `gorm:"size:128" json:"handled_by"`
+	ClosedAt       *time.Time `json:"closed_at"`
+	CreatedAt      time.Time  `gorm:"index" json:"created_at"`
+	UpdatedAt      time.Time  `json:"updated_at"`
 }

@@ -13,7 +13,11 @@ import (
 
 func (h *Handler) merchants(c *gin.Context) {
 	rows := []model.Merchant{}
-	if err := h.st.DB.Order("sort asc,id desc").Find(&rows).Error; err != nil {
+	q := h.st.DB.Order("sort asc,id desc")
+	if id := merchantScope(c); id != 0 {
+		q = q.Where("id = ?", id)
+	}
+	if err := q.Find(&rows).Error; err != nil {
 		c.JSON(500, gin.H{"error": "商家加载失败"})
 		return
 	}
@@ -36,6 +40,9 @@ func validateMerchant(b *model.Merchant) error {
 		if utf8.RuneCountInString(f.v) > f.max {
 			return errors.New("商家信息过长：名称 64 字、简介 1000 字、地址 256 字、营业时间 100 字、电话 64 字、链接 1024 字以内")
 		}
+	}
+	if b.NotifyChatID < 0 {
+		return errors.New("订单通知 Telegram ID 无效")
 	}
 	if b.ContactURL != "" && !telegram.IsTelegramURL(b.ContactURL) {
 		return errors.New("联系链接必须是有效的 HTTPS 地址，例如 https://t.me/用户名")
