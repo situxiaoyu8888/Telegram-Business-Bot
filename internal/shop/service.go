@@ -40,7 +40,8 @@ const (
 // Notifier delivers shop messages: Notify reaches a buyer through the bot they shopped from,
 // NotifyStaff reaches administrators and merchant contacts.
 type Notifier interface {
-	Notify(ctx context.Context, botID uint64, telegramUserID int64, html string) error
+	// orderID, when non-zero, adds a button that opens the order in the shop.
+	Notify(ctx context.Context, botID uint64, telegramUserID int64, html string, orderID uint64) error
 	NotifyStaff(ctx context.Context, chatIDs []int64, html string) error
 }
 
@@ -100,14 +101,14 @@ func checkLen(value, field string, max int, required bool) error {
 	return nil
 }
 
-func (s *Service) notify(botID uint64, tgUserID int64, html string) {
+func (s *Service) notify(botID uint64, tgUserID int64, html string, orderID uint64) {
 	if s.notifier == nil || tgUserID == 0 {
 		return
 	}
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cancel()
-		if err := s.notifier.Notify(ctx, botID, tgUserID, html); err != nil && s.logger != nil {
+		if err := s.notifier.Notify(ctx, botID, tgUserID, html, orderID); err != nil && s.logger != nil {
 			s.logger.Warn("shop notification failed", zap.Int64("telegram_user_id", tgUserID), zap.Error(err))
 		}
 	}()
@@ -163,10 +164,11 @@ func (s *Service) configString(key string) string {
 }
 
 // effectivePrice is the SKU price at now: its promo price while the product's promo window is
-// open, otherwise the regular price. Nothing is stored, so prices revert by themselves.
-func effectivePrice(price, promoPrice string, startsAt, endsAt *time.Time, now time.Time) (current string, onPromo bool) {
+// open and promo stock (when limited) remains, otherwise the regular price. Nothing is stored,
+// so prices revert by themselves.
+func effectivePrice(price, promoPrice string, promoStock *int64, startsAt, endsAt *time.Time, now time.Time) (current string, onPromo bool) {
 	promo := amount(promoPrice)
-	if promo.IsPositive() && startsAt != nil && endsAt != nil && !now.Before(*startsAt) && now.Before(*endsAt) {
+	if promo.IsPositive() && (promoStock == nil || *promoStock > 0) && startsAt != nil && endsAt != nil && !now.Before(*startsAt) && now.Before(*endsAt) {
 		return promo.StringFixed(6), true
 	}
 	return price, false

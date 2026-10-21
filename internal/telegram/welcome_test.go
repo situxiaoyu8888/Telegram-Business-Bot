@@ -61,3 +61,30 @@ func (u *usernameTransport) RoundTrip(*http.Request) (*http.Response, error) {
 	u.calls++
 	return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"ok":true,"result":{"id":1,"username":"skk_bot"}}`))}, nil
 }
+
+func TestSharePayloadCarriesProductAndReferralCode(t *testing.T) {
+	m := sharePayload.FindStringSubmatch("p42_TG1E8A2C27E")
+	if m == nil || m[1] != "42" || m[2] != "TG1E8A2C27E" {
+		t.Fatal(m)
+	}
+	for _, plain := range []string{"TG1E8A2C27E", "p_TG1", "p42", "p42_TG-1"} {
+		if sharePayload.MatchString(plain) {
+			t.Fatal("matched", plain)
+		}
+	}
+}
+
+func TestShopOrdersCommandListsOrdersWithShopButtons(t *testing.T) {
+	r, tr := merchantRouter(t, testutil.Step{Contains: "shop_orders", Columns: []string{"id", "order_no", "status", "merchant_name", "pay_amount"}, Rows: [][]driver.Value{{int64(12), "S1", "shipped", "<店>", "9.500000"}}})
+	r.menuButton = MenuButton{Text: "商城", URL: "https://shop.example.com/shop/"}
+	r.sendShopOrders(context.Background(), 5, 1)
+	text := tr.payload["text"].(string)
+	if !strings.Contains(text, "S1") || !strings.Contains(text, "已发货") || !strings.Contains(text, "&lt;店&gt;") || !strings.Contains(text, "9.5 USDT") {
+		t.Fatal(text)
+	}
+	rows := tr.payload["reply_markup"].(map[string]any)["inline_keyboard"].([]any)
+	first := rows[0].([]any)[0].(map[string]any)
+	if first["web_app"].(map[string]any)["url"] != "https://shop.example.com/shop/#/order/12" {
+		t.Fatal(first)
+	}
+}

@@ -12,9 +12,12 @@ type BotCommand struct {
 	Description string `json:"description"`
 }
 
-func defaultCommands(adminOnly bool) []BotCommand {
+func defaultCommands(adminOnly, shop bool) []BotCommand {
 	if adminOnly {
 		return []BotCommand{{"start", "开始使用"}, {"admin", "管理入口"}, {"menu", "返回主菜单"}, {"cancel", "取消当前操作"}}
+	}
+	if shop {
+		return []BotCommand{{"start", "开始使用"}, {"orders", "我的订单"}, {"contactus", "联系客服"}}
 	}
 	return []BotCommand{{"start", "开始使用"}, {"contactus", "联系客服"}}
 }
@@ -36,7 +39,7 @@ func (b MenuButton) payload() any {
 // Register the private-chat command list and the input field's menu button.
 // Commands stay available by typing "/" when the button opens the H5 page.
 func (c *Client) RegisterCommandMenu(ctx context.Context, adminOnly bool, button MenuButton) error {
-	if err := c.call(ctx, "setMyCommands", map[string]any{"commands": defaultCommands(adminOnly), "scope": map[string]string{"type": "all_private_chats"}, "language_code": ""}, nil); err != nil {
+	if err := c.call(ctx, "setMyCommands", map[string]any{"commands": defaultCommands(adminOnly, button.URL != ""), "scope": map[string]string{"type": "all_private_chats"}, "language_code": ""}, nil); err != nil {
 		return err
 	}
 	return c.call(ctx, "setChatMenuButton", map[string]any{"menu_button": button.payload()}, nil)

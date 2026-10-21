@@ -32,19 +32,23 @@ type ShopProduct struct {
 	// SKU promo prices apply only between PromoStartsAt and PromoEndsAt.
 	PromoStartsAt *time.Time `json:"promo_starts_at"`
 	PromoEndsAt   *time.Time `json:"promo_ends_at"`
-	Sort          int        `gorm:"not null;default:0;index" json:"sort"`
-	Enabled       bool       `gorm:"not null;index" json:"enabled"`
-	CreatedAt     time.Time  `json:"created_at"`
-	UpdatedAt     time.Time  `json:"updated_at"`
+	// LimitPerUser caps how many units one buyer may hold across non-canceled orders (0 = no limit).
+	LimitPerUser int64     `gorm:"not null;default:0" json:"limit_per_user"`
+	Sort         int       `gorm:"not null;default:0;index" json:"sort"`
+	Enabled      bool      `gorm:"not null;index" json:"enabled"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
 }
 
 // ShopSKU is a purchasable variant of a product; every product has at least one.
 type ShopSKU struct {
-	ID         uint64    `gorm:"primaryKey" json:"id"`
-	ProductID  uint64    `gorm:"not null;index" json:"product_id"`
-	Name       string    `gorm:"size:64;not null" json:"name"`
-	Price      string    `gorm:"type:decimal(24,6);not null" json:"price"`
-	PromoPrice string    `gorm:"type:decimal(24,6);not null;default:0" json:"promo_price"` // 0 = no promo price
+	ID         uint64 `gorm:"primaryKey" json:"id"`
+	ProductID  uint64 `gorm:"not null;index" json:"product_id"`
+	Name       string `gorm:"size:64;not null" json:"name"`
+	Price      string `gorm:"type:decimal(24,6);not null" json:"price"`
+	PromoPrice string `gorm:"type:decimal(24,6);not null;default:0" json:"promo_price"` // 0 = no promo price
+	// PromoStock limits how many units sell at the promo price; nil means no separate limit.
+	PromoStock *int64    `json:"promo_stock"`
 	Stock      int64     `gorm:"not null;default:0" json:"stock"`
 	Sort       int       `gorm:"not null;default:0" json:"sort"`
 	Enabled    bool      `gorm:"not null" json:"enabled"`
@@ -84,21 +88,23 @@ type ShopAddress struct {
 // ShopOrder covers one merchant and one delivery type. It is paid from the wallet when created,
 // so it starts as "paid"; see internal/shop for the status flow.
 type ShopOrder struct {
-	ID             uint64     `gorm:"primaryKey" json:"id"`
-	OrderNo        string     `gorm:"size:32;uniqueIndex;not null" json:"order_no"`
-	RequestID      string     `gorm:"size:64;uniqueIndex:uk_order_user_request;not null" json:"-"`
-	UserID         uint64     `gorm:"not null;uniqueIndex:uk_order_user_request;index" json:"user_id"`
-	TelegramUserID int64      `gorm:"not null;index" json:"telegram_user_id"`
-	BotID          uint64     `gorm:"not null;default:0" json:"bot_id"` // bot the Mini App was opened from; used for notifications
-	MerchantID     uint64     `gorm:"not null;index" json:"merchant_id"`
-	MerchantName   string     `gorm:"size:128" json:"merchant_name"`
-	DeliveryType   string     `gorm:"size:16;not null" json:"delivery_type"` // express | pickup | virtual
-	Status         string     `gorm:"size:16;not null;index" json:"status"`
-	GoodsAmount    string     `gorm:"type:decimal(24,6);not null" json:"goods_amount"`
-	Discount       string     `gorm:"type:decimal(24,6);not null" json:"discount"`
-	PayAmount      string     `gorm:"type:decimal(24,6);not null" json:"pay_amount"`
-	RefundedAmount string     `gorm:"type:decimal(24,6);not null;default:0" json:"refunded_amount"` // after-sale refunds so far
-	AfterSaleOpen  bool       `gorm:"not null;default:false" json:"after_sale_open"`
+	ID             uint64 `gorm:"primaryKey" json:"id"`
+	OrderNo        string `gorm:"size:32;uniqueIndex;not null" json:"order_no"`
+	RequestID      string `gorm:"size:64;uniqueIndex:uk_order_user_request;not null" json:"-"`
+	UserID         uint64 `gorm:"not null;uniqueIndex:uk_order_user_request;index" json:"user_id"`
+	TelegramUserID int64  `gorm:"not null;index" json:"telegram_user_id"`
+	BotID          uint64 `gorm:"not null;default:0" json:"bot_id"` // bot the Mini App was opened from; used for notifications
+	MerchantID     uint64 `gorm:"not null;index" json:"merchant_id"`
+	MerchantName   string `gorm:"size:128" json:"merchant_name"`
+	DeliveryType   string `gorm:"size:16;not null" json:"delivery_type"` // express | pickup | virtual
+	Status         string `gorm:"size:16;not null;index" json:"status"`
+	GoodsAmount    string `gorm:"type:decimal(24,6);not null" json:"goods_amount"`
+	Discount       string `gorm:"type:decimal(24,6);not null" json:"discount"`
+	PayAmount      string `gorm:"type:decimal(24,6);not null" json:"pay_amount"`
+	RefundedAmount string `gorm:"type:decimal(24,6);not null;default:0" json:"refunded_amount"` // after-sale refunds so far
+	AfterSaleOpen  bool   `gorm:"not null;default:false" json:"after_sale_open"`
+	// CommissionDone marks that the buyer's referrer has been paid (or that none was due).
+	CommissionDone bool       `gorm:"not null;default:false;index" json:"commission_done"`
 	UserCouponID   uint64     `gorm:"not null;default:0" json:"user_coupon_id"`
 	ContactName    string     `gorm:"size:64" json:"contact_name"`
 	ContactPhone   string     `gorm:"size:32" json:"contact_phone"`
@@ -128,6 +134,7 @@ type ShopOrderItem struct {
 	ImageURL    string `gorm:"size:1024" json:"image_url"`
 	Price       string `gorm:"type:decimal(24,6);not null" json:"price"`
 	Quantity    int64  `gorm:"not null" json:"quantity"`
+	Promo       bool   `gorm:"not null;default:false" json:"promo"` // sold at the promo price (counts against promo stock)
 }
 
 // ShopCoupon is a "spend Threshold, save Discount" template. MerchantID 0 applies to every merchant.
@@ -254,4 +261,18 @@ type ShopSettlement struct {
 	PaidAt     *time.Time `json:"paid_at"`
 	CreatedAt  time.Time  `gorm:"index" json:"created_at"`
 	UpdatedAt  time.Time  `json:"updated_at"`
+}
+
+// ShopFavorite is a product the buyer saved.
+type ShopFavorite struct {
+	UserID    uint64    `gorm:"primaryKey;autoIncrement:false" json:"user_id"`
+	ProductID uint64    `gorm:"primaryKey;autoIncrement:false" json:"product_id"`
+	CreatedAt time.Time `gorm:"index" json:"created_at"`
+}
+
+// ShopView is the buyer's most recent visit to a product, for browsing history.
+type ShopView struct {
+	UserID    uint64    `gorm:"primaryKey;autoIncrement:false" json:"user_id"`
+	ProductID uint64    `gorm:"primaryKey;autoIncrement:false" json:"product_id"`
+	ViewedAt  time.Time `gorm:"index" json:"viewed_at"`
 }

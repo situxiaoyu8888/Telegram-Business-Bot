@@ -3,6 +3,7 @@ package shop
 import (
 	"context"
 	_ "embed"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -41,6 +42,14 @@ type Handler struct {
 	cached   []business.BotToken
 	cachedAt time.Time
 	now      func() time.Time
+
+	botUsername func(ctx context.Context, botID uint64) string
+}
+
+// WithBotUsernames lets the shop build share links that open the bot the buyer is using.
+func (h *Handler) WithBotUsernames(fn func(ctx context.Context, botID uint64) string) *Handler {
+	h.botUsername = fn
+	return h
 }
 
 func NewHandler(svc *Service, st *store.Store, tokens TokenSource, logger *zap.Logger) *Handler {
@@ -92,6 +101,11 @@ func (h *Handler) Register(r *gin.Engine) {
 	api.POST("/orders/:id/cancel", h.cancelOrder)
 	api.POST("/orders/:id/confirm", h.confirmOrder)
 	api.POST("/orders/:id/review", h.reviewOrder)
+	api.GET("/favorites", h.favorites)
+	api.POST("/favorites/:id", h.addFavorite)
+	api.DELETE("/favorites/:id", h.removeFavorite)
+	api.GET("/history", h.history)
+	api.DELETE("/history", h.clearHistory)
 	api.GET("/aftersales", h.myAfterSales)
 	api.POST("/aftersales", h.applyAfterSale)
 	api.POST("/aftersales/:id/cancel", h.cancelAfterSale)
@@ -189,7 +203,11 @@ func (h *Handler) me(c *gin.Context) {
 	if name == "" {
 		name = u.Username
 	}
-	c.JSON(http.StatusOK, gin.H{"name": name, "username": u.Username, "telegram_user_id": u.TelegramUserID, "balance": available.StringFixed(6)})
+	res := gin.H{"name": name, "username": u.Username, "telegram_user_id": u.TelegramUserID, "balance": available.StringFixed(6), "referral_code": u.ReferralCode}
+	if h.botUsername != nil {
+		res["bot_username"] = h.botUsername(c.Request.Context(), buyer(c).BotID)
+	}
+	c.JSON(http.StatusOK, res)
 }
 
 func (h *Handler) home(c *gin.Context) {
@@ -226,8 +244,37 @@ func (h *Handler) products(c *gin.Context) {
 }
 
 func (h *Handler) product(c *gin.Context) {
+	b := buyer(c)
 	p, err := h.svc.Product(idParam(c))
+	if err == nil {
+		p.Favorited = h.svc.IsFavorite(b.UserID, p.ID)
+		if e := h.svc.RecordView(b.UserID, p.ID); e != nil && h.logger != nil {
+			h.logger.Warn("record product view", zap.Error(e))
+		}
+	}
 	h.reply(c, p, err)
+}
+
+func (h *Handler) favorites(c *gin.Context) {
+	rows, err := h.svc.Favorites(buyer(c).UserID)
+	h.reply(c, rows, err)
+}
+
+func (h *Handler) addFavorite(c *gin.Context) {
+	h.reply(c, gin.H{"ok": true}, h.svc.SetFavorite(buyer(c).UserID, idParam(c), true))
+}
+
+func (h *Handler) removeFavorite(c *gin.Context) {
+	h.reply(c, gin.H{"ok": true}, h.svc.SetFavorite(buyer(c).UserID, idParam(c), false))
+}
+
+func (h *Handler) history(c *gin.Context) {
+	rows, err := h.svc.History(buyer(c).UserID)
+	h.reply(c, rows, err)
+}
+
+func (h *Handler) clearHistory(c *gin.Context) {
+	h.reply(c, gin.H{"ok": true}, h.svc.ClearHistory(buyer(c).UserID))
 }
 
 func (h *Handler) cart(c *gin.Context) {
@@ -363,8 +410,21 @@ func (h *Handler) submitReturn(c *gin.Context) {
 // BotNotifier sends buyer messages through the bot the order was placed from and staff messages
 // through Staff (the admin bot when configured, otherwise the primary bot).
 type BotNotifier struct {
-	Bots  *business.Service
-	Staff telegram.Sender
+	Bots    *business.Service
+	Staff   telegram.Sender
+	ShopURL string // H5 shop address; enables the "view order" button when set
+}
+
+func (n BotNotifier) Notify(ctx context.Context, botID uint64, telegramUserID int64, html string, orderID uint64) error {
+	sender, err := n.Bots.Sender(ctx, botID)
+	if err != nil {
+		return err
+	}
+	var kb *telegram.InlineKeyboardMarkup
+	if n.ShopURL != "" && orderID != 0 {
+		kb = &telegram.InlineKeyboardMarkup{InlineKeyboard: [][]telegram.InlineKeyboardButton{{telegram.ShopButton("📦 查看订单", n.ShopURL, fmt.Sprintf("/order/%d", orderID))}}}
+	}
+	return sender.SendMessageWithParseMode(ctx, telegramUserID, html, "HTML", kb)
 }
 
 func (n BotNotifier) NotifyStaff(ctx context.Context, chatIDs []int64, html string) error {
@@ -375,12 +435,4 @@ func (n BotNotifier) NotifyStaff(ctx context.Context, chatIDs []int64, html stri
 		}
 	}
 	return firstErr
-}
-
-func (n BotNotifier) Notify(ctx context.Context, botID uint64, telegramUserID int64, html string) error {
-	sender, err := n.Bots.Sender(ctx, botID)
-	if err != nil {
-		return err
-	}
-	return sender.SendMessageWithParseMode(ctx, telegramUserID, html, "HTML", nil)
 }

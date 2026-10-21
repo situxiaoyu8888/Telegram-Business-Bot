@@ -10,6 +10,7 @@ import (
 	"telegram-business-bot/internal/business"
 	"telegram-business-bot/internal/config"
 	"telegram-business-bot/internal/menu"
+	"telegram-business-bot/internal/model"
 	"telegram-business-bot/internal/push"
 	"telegram-business-bot/internal/referral"
 	"telegram-business-bot/internal/session"
@@ -91,8 +92,16 @@ func New(cfg config.Config, logger *zap.Logger) (*App, error) {
 	for id := range cfg.AdminIDs {
 		staffIDs = append(staffIDs, id)
 	}
-	shopSvc := shop.New(st, walletSvc, shop.BotNotifier{Bots: bots, Staff: staffSender}, logger).WithStaff(staffIDs)
-	shop.NewHandler(shopSvc, st, bots, logger).Register(engine)
+	shopSvc := shop.New(st, walletSvc, shop.BotNotifier{Bots: bots, Staff: staffSender, ShopURL: cfg.ShopH5URL}, logger).WithStaff(staffIDs)
+	shop.NewHandler(shopSvc, st, bots, logger).WithBotUsernames(func(ctx context.Context, botID uint64) string {
+		if botID == 0 {
+			name, _ := tg.Username(ctx)
+			return name
+		}
+		var b model.BusinessBot
+		_ = st.DB.WithContext(ctx).Select("username").First(&b, botID).Error
+		return b.Username
+	}).Register(engine)
 	a := &App{shop: shopSvc, businessBots: bots, cfg: cfg, logger: logger, store: st, tg: tg, tgRouter: tgRouter, adminTG: adminTG, adminTGRouter: adminTGRouter, engine: engine, pushService: pushSvc}
 	a.registerRoutes()
 	admin.New(

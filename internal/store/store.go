@@ -32,7 +32,7 @@ func New(mysqlDSN, redisAddr, redisPassword string, redisDB int) (*Store, error)
 		&model.Merchant{}, &model.BusinessBot{}, &model.BotSubscription{}, &model.PushRoute{}, &model.PushCampaign{}, &model.PushRecipient{}, &model.ReferralGrant{}, &model.SeedMigration{}, &model.AdminUser{}, &model.AdminRole{},
 		&model.ShopCategory{}, &model.ShopProduct{}, &model.ShopSKU{}, &model.ShopVirtualCode{}, &model.ShopCartItem{}, &model.ShopAddress{},
 		&model.ShopOrder{}, &model.ShopOrderItem{}, &model.ShopCoupon{}, &model.ShopUserCoupon{}, &model.ShopAfterSale{},
-		&model.ShopBanner{}, &model.ShopReview{}, &model.ShopMerchantEntry{}, &model.ShopSettlement{},
+		&model.ShopBanner{}, &model.ShopReview{}, &model.ShopMerchantEntry{}, &model.ShopSettlement{}, &model.ShopFavorite{}, &model.ShopView{},
 	); err != nil {
 		return nil, fmt.Errorf("auto migrate: %w", err)
 	}
@@ -47,6 +47,9 @@ func New(mysqlDSN, redisAddr, redisPassword string, redisDB int) (*Store, error)
 	if err := s.seedSubscriptions(); err != nil {
 		return nil, err
 	}
+	if err := s.seedShopCommissions(); err != nil {
+		return nil, err
+	}
 	// Added after defaults_v1; the unique key makes this a no-op once present.
 	for _, c := range []model.SystemConfig{
 		{Key: "welcome_text", Value: model.DefaultWelcomeText, Remark: "首次激活欢迎语（留空则不发送）"},
@@ -54,6 +57,7 @@ func New(mysqlDSN, redisAddr, redisPassword string, redisDB int) (*Store, error)
 		{Key: "shop_aftersale_days", Value: "7", Remark: "商城订单完成后可申请售后的天数（0 为不允许完成后申请）"},
 		{Key: "shop_return_address", Value: "", Remark: "商城退货寄回地址（留空则使用商家地址）"},
 		{Key: "shop_low_stock", Value: "5", Remark: "商城销售报表中的低库存预警阈值"},
+		{Key: "shop_referral_rate", Value: "0", Remark: "商城推广返佣比例（0.05 = 5%，0 为关闭）；订单完成且售后期结束后发给直属上级"},
 	} {
 		if err := db.Clauses(clause.OnConflict{DoNothing: true}).Create(&c).Error; err != nil {
 			return nil, err
@@ -176,6 +180,18 @@ func (s *Store) seedSubscriptions() error {
 			return nil
 		}
 		return tx.Exec("INSERT IGNORE INTO bot_subscriptions (bot_id, telegram_user_id, created_at) SELECT 0, telegram_user_id, CURRENT_TIMESTAMP FROM telegram_users").Error
+	})
+}
+
+// seedShopCommissions marks orders that already ended before shop referral commissions existed,
+// so enabling shop_referral_rate pays only for orders completed from now on.
+func (s *Store) seedShopCommissions() error {
+	return s.DB.Transaction(func(tx *gorm.DB) error {
+		claim := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&model.SeedMigration{Name: "shop_commission_v1"})
+		if claim.Error != nil || claim.RowsAffected == 0 {
+			return claim.Error
+		}
+		return tx.Model(&model.ShopOrder{}).Where("status IN ?", []string{"completed", "canceled"}).Update("commission_done", true).Error
 	})
 }
 

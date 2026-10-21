@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"telegram-business-bot/internal/lease"
@@ -131,10 +132,20 @@ func (r *Router) handleMessage(ctx context.Context, m *Message, first bool) {
 	if command == "/start" {
 		_ = r.sessions.Clear(ctx, m.From.ID)
 		parts := strings.Fields(text)
+		var sharedProduct string
 		if len(parts) > 1 {
-			_ = r.referral.BindByCode(u.ID, parts[1])
+			code := parts[1]
+			// Shop share links carry "p<productID>_<referral code>".
+			if m := sharePayload.FindStringSubmatch(code); m != nil {
+				sharedProduct, code = m[1], m[2]
+			}
+			_ = r.referral.BindByCode(u.ID, code)
 		}
 		r.sendHome(ctx, m.Chat.ID, m.From.ID)
+		if sharedProduct != "" && r.menuButton.URL != "" && !r.adminOnly {
+			kb := &InlineKeyboardMarkup{InlineKeyboard: [][]InlineKeyboardButton{{ShopButton("🛍 查看商品", r.menuButton.URL, "/product/"+sharedProduct)}}}
+			_ = r.client.SendMessage(ctx, m.Chat.ID, "好友给你分享了一个商品，点击下方按钮查看：", kb)
+		}
 		return
 	}
 	switch command {
@@ -142,6 +153,11 @@ func (r *Router) handleMessage(ctx context.Context, m *Message, first bool) {
 		_ = r.sessions.Clear(ctx, m.From.ID)
 		r.sendHome(ctx, m.Chat.ID, m.From.ID)
 		return
+	case "/orders":
+		if !r.adminOnly {
+			r.sendShopOrders(ctx, m.Chat.ID, u.ID)
+			return
+		}
 	case "/cancel":
 		_ = r.sessions.Clear(ctx, m.From.ID)
 		_ = r.client.SendMessage(ctx, m.Chat.ID, "已取消当前操作。", r.homeKeyboard(r.isAdmin(m.From.ID)))
@@ -472,6 +488,45 @@ func (r *Router) handleSessionInput(ctx context.Context, m *Message, u *model.Te
 			_ = r.client.SendMessage(ctx, m.Chat.ID, fmt.Sprintf("客服工单已创建：<code>#%d</code>\n请等待客服处理。", ticket.ID), r.homeKeyboard(r.isAdmin(m.From.ID)))
 		}
 	}
+}
+
+var sharePayload = regexp.MustCompile(`^p(\d{1,18})_([A-Za-z0-9]{1,40})$`)
+
+var shopStatusNames = map[string]string{"paid": "待处理", "shipped": "已发货", "ready": "待自提", "completed": "已完成", "canceled": "已取消"}
+
+// sendShopOrders lists the user's latest shop orders, with buttons that open each in the shop.
+func (r *Router) sendShopOrders(ctx context.Context, chatID int64, userID uint64) {
+	var orders []model.ShopOrder
+	if err := r.store.DB.Where("user_id = ?", userID).Order("id desc").Limit(5).Find(&orders).Error; err != nil {
+		_ = r.client.SendMessage(ctx, chatID, "订单暂时无法查询，请稍后重试。", nil)
+		return
+	}
+	if len(orders) == 0 {
+		var kb *InlineKeyboardMarkup
+		if r.menuButton.URL != "" {
+			kb = &InlineKeyboardMarkup{InlineKeyboard: [][]InlineKeyboardButton{{ShopButton("🛍 去逛逛", r.menuButton.URL, "/")}}}
+		}
+		_ = r.client.SendMessage(ctx, chatID, "你还没有商城订单。", kb)
+		return
+	}
+	var b strings.Builder
+	b.WriteString("<b>📦 最近的商城订单</b>\n")
+	rows := [][]InlineKeyboardButton{}
+	for _, o := range orders {
+		pay, _ := decimal.NewFromString(o.PayAmount)
+		b.WriteString(fmt.Sprintf("\n<code>%s</code>  %s\n%s · %s USDT · %s\n", o.OrderNo, shopStatusNames[o.Status], htmlEscape(o.MerchantName), pay.String(), o.CreatedAt.Format("01-02 15:04")))
+		if r.menuButton.URL != "" {
+			rows = append(rows, []InlineKeyboardButton{ShopButton("查看 "+o.OrderNo, r.menuButton.URL, fmt.Sprintf("/order/%d", o.ID))})
+		}
+	}
+	if r.menuButton.URL != "" {
+		rows = append(rows, []InlineKeyboardButton{ShopButton("全部订单", r.menuButton.URL, "/orders")})
+	}
+	var kb *InlineKeyboardMarkup
+	if len(rows) > 0 {
+		kb = &InlineKeyboardMarkup{InlineKeyboard: rows}
+	}
+	_ = r.client.SendMessage(ctx, chatID, b.String(), kb)
 }
 
 // sendWelcome greets a user on first activation; an empty welcome_text disables it.

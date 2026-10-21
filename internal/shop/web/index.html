@@ -136,7 +136,7 @@ const post=(path,body={})=>api(path,{method:'POST',body:JSON.stringify(body)});
 function newRequestID(){return crypto.randomUUID?crypto.randomUUID():Date.now().toString(36)+Math.random().toString(36).slice(2)}
 
 // ---- Routing ----
-const routes=[[/^#?\/?$/,home],[/^#\/product\/(\d+)$/,product],[/^#\/cart$/,cart],[/^#\/checkout$/,checkoutPage],[/^#\/orders(?:\/(\w+))?$/,orders],[/^#\/order\/(\d+)$/,orderDetail],[/^#\/me$/,mine],[/^#\/coupons(?:\/(\w+))?$/,coupons],[/^#\/addresses(?:\/(pick))?$/,addresses],[/^#\/address\/(new|\d+)(?:\/(pick))?$/,addressForm],[/^#\/aftersale\/(\d+)$/,afterSaleForm],[/^#\/review\/(\d+)$/,reviewForm],[/^#\/aftersales$/,afterSales]];
+const routes=[[/^#?\/?$/,home],[/^#\/product\/(\d+)$/,product],[/^#\/cart$/,cart],[/^#\/checkout$/,checkoutPage],[/^#\/orders(?:\/(\w+))?$/,orders],[/^#\/order\/(\d+)$/,orderDetail],[/^#\/me$/,mine],[/^#\/coupons(?:\/(\w+))?$/,coupons],[/^#\/addresses(?:\/(pick))?$/,addresses],[/^#\/address\/(new|\d+)(?:\/(pick))?$/,addressForm],[/^#\/aftersale\/(\d+)$/,afterSaleForm],[/^#\/review\/(\d+)$/,reviewForm],[/^#\/(favorites|history)$/,productList],[/^#\/aftersales$/,afterSales]];
 const tabs=[['#/','首页','home'],['#/cart','购物车','cart'],['#/orders','订单','order'],['#/me','我的','me']];
 let renderVersion=0;
 async function route(){
@@ -178,24 +178,39 @@ async function loadProducts(v,reset){
  if($('moreBtn'))$('moreBtn').onclick=()=>{homeState.page++;loadProducts(v,false)}}
 
 // ---- Product ----
+let shareInfo=null;
+async function shareProduct(p){
+ try{shareInfo=shareInfo||await api('me')}catch(e){toast(e.message);return}
+ if(!shareInfo.bot_username){toast('暂时无法生成分享链接');return}
+ const link=`https://t.me/${shareInfo.bot_username}?start=p${p.id}_${shareInfo.referral_code}`;
+ const text=`${p.name} · ${money(p.min_price)} USDT`;
+ const url='https://t.me/share/url?url='+encodeURIComponent(link)+'&text='+encodeURIComponent(text);
+ if(tg?.openTelegramLink)tg.openTelegramLink(url);else window.open(url,'_blank')}
+async function productList(v,kind){
+ const list=await api(kind);if(stale(v))return;
+ $('app').innerHTML=list.length?`<div class="grid">${list.map(tileHTML).join('')}</div>`:`<div class="empty">${kind==='favorites'?'还没有收藏的商品':'还没有浏览记录'}</div>`;
+ if(kind==='history'&&list.length){bottomBar('<button class="btn ghost grow" id="clearHistory">清空浏览记录</button>');$('clearHistory').onclick=async()=>{if(!(await confirmBox('清空全部浏览记录？')))return;try{await api('history',{method:'DELETE'});route()}catch(e){toast(e.message)}}}}
 function timeLeft(end){const ms=new Date(end)-Date.now();if(ms<=0)return '即将';const h=Math.floor(ms/3600000);return h>=24?Math.floor(h/24)+' 天 '+(h%24)+' 小时':h>0?h+' 小时 '+Math.floor(ms%3600000/60000)+' 分钟':Math.max(1,Math.floor(ms/60000))+' 分钟'}
 async function loadReviews(p,page){if(!p.rating_count)return;try{const list=await api(`products/${p.id}/reviews?page=${page}`);const box=$('reviews');if(!box)return;const html=list.map(r=>`<div class="item" style="flex-direction:column;gap:4px"><div class="row between"><span class="small bold">${esc(r.buyer_name)}</span><span>${stars(r.rating)}</span></div><div class="muted small">${esc(r.sku_name)} · ${new Date(r.created_at).toLocaleDateString('zh-CN')}</div>${r.content?`<div style="white-space:pre-wrap">${esc(r.content)}</div>`:''}${r.reply?`<div class="small" style="background:var(--bg);border-radius:8px;padding:8px">商家回复：${esc(r.reply)}</div>`:''}</div>`).join('');if(page===1)box.innerHTML=`<div class="card"><h3>买家评价 ${stars(p.rating)} ${p.rating.toFixed(1)} <span class="muted small">（${p.rating_count} 条）</span></h3><div class="list" id="reviewList">${html}</div><div id="reviewMore"></div></div>`;else $('reviewList').insertAdjacentHTML('beforeend',html);$('reviewMore').innerHTML=list.length>=20?'<button class="btn ghost sm" id="moreReviews" style="margin-top:8px">更多评价</button>':'';if($('moreReviews'))$('moreReviews').onclick=()=>loadReviews(p,page+1)}catch(e){}}
 async function product(v,id){
  const p=await api('products/'+id);if(stale(v))return;
  let sku=p.skus.find(k=>k.stock>0)||p.skus[0],qty=1;
+ const maxQty=()=>Math.min(sku.stock,999,p.limit_per_user||999,sku.on_promo&&sku.promo_left!=null?sku.promo_left:999);
  const delivery=p.kind==='virtual'?['virtual']:[p.allow_express&&'express',p.allow_pickup&&'pickup'].filter(Boolean);
  function draw(){
   $('app').innerHTML=`<div class="gallery">${p.images.length?p.images.map(src=>`<img src="${esc(src)}" alt="">`).join(''):`<div class="ph">${svg('img')}</div>`}</div>
   <div class="card"><div>${priceHTML(sku.price,sku.on_promo?sku.list_price:'')}</div>${sku.on_promo&&p.promo_ends_at?`<div class="small" style="color:var(--price);margin-top:4px">⏰ 限时价，${timeLeft(p.promo_ends_at)}后恢复原价</div>`:''}<div class="bold" style="font-size:16px;margin-top:6px">${esc(p.name)}</div><div class="row small muted" style="margin-top:6px;flex-wrap:wrap">${delivery.map(d=>`<span class="tag">${deliveryText[d]}</span>`).join('')}<span>已售 ${p.sales}</span>${p.rating_count?`<span>${stars(p.rating)} ${p.rating.toFixed(1)}（${p.rating_count}）</span>`:''}</div></div>
   <div class="card"><h3>规格</h3><div class="skus">${p.skus.map(k=>`<button class="sku ${k.id===sku.id?'on':''}" data-sku="${k.id}" ${k.stock<1?'disabled':''}>${esc(k.name)}</button>`).join('')}</div>
-  <div class="row between" style="margin-top:14px"><span>数量 <span class="muted small">库存 ${sku.stock}</span></span><span class="stepper"><button id="minus">−</button><span>${qty}</span><button id="plus">+</button></span></div></div>
+  <div class="row between" style="margin-top:14px"><span>数量 <span class="muted small">库存 ${sku.stock}${p.limit_per_user?` · 每人限购 ${p.limit_per_user} 件`:''}${sku.on_promo&&sku.promo_left!=null?` · 活动价仅剩 ${sku.promo_left} 件`:''}</span></span><span class="stepper"><button id="minus">−</button><span>${qty}</span><button id="plus">+</button></span></div></div>
   <div class="card"><div class="bold">${esc(p.merchant_name)}</div>${p.merchant_address?`<div class="muted small">📍 ${esc(p.merchant_address)}</div>`:''}${p.merchant_hours?`<div class="muted small">🕒 ${esc(p.merchant_hours)}</div>`:''}</div>
   ${p.description?`<div class="card"><h3>商品详情</h3><div style="white-space:pre-wrap">${esc(p.description)}</div></div>`:''}<div id="reviews"></div>`;
   loadReviews(p,1);
-  document.querySelectorAll('[data-sku]').forEach(b=>b.onclick=()=>{sku=p.skus.find(k=>k.id===Number(b.dataset.sku));qty=Math.min(qty,Math.max(1,sku.stock));draw()});
-  $('minus').onclick=()=>{if(qty>1){qty--;draw()}};$('plus').onclick=()=>{if(qty<sku.stock&&qty<999){qty++;draw()}};
+  document.querySelectorAll('[data-sku]').forEach(b=>b.onclick=()=>{sku=p.skus.find(k=>k.id===Number(b.dataset.sku));qty=Math.min(qty,Math.max(1,maxQty()));draw()});
+  $('minus').onclick=()=>{if(qty>1){qty--;draw()}};$('plus').onclick=()=>{if(qty<maxQty()){qty++;draw()}else if(p.limit_per_user&&qty>=p.limit_per_user)toast('每人限购 '+p.limit_per_user+' 件')};
+  $('favBtn').onclick=async()=>{try{await api('favorites/'+p.id,{method:p.favorited?'DELETE':'POST'});p.favorited=!p.favorited;haptic('success');toast(p.favorited?'已收藏':'已取消收藏');draw()}catch(e){toast(e.message)}};
+  $('shareBtn').onclick=()=>shareProduct(p);
   const out=sku.stock<1;
-  bottomBar(`<button class="btn ghost grow" id="addCart" ${out?'disabled':''}>加入购物车</button><button class="btn grow" id="buyNow" ${out?'disabled':''}>${out?'已售罄':'立即购买'}</button>`);
+  bottomBar(`<button class="btn ghost sm" id="favBtn" aria-label="收藏" style="height:42px;padding:0 12px">${p.favorited?'❤️':'🤍'}</button><button class="btn ghost sm" id="shareBtn" aria-label="分享" style="height:42px;padding:0 12px">↗️</button><button class="btn ghost grow" id="addCart" ${out?'disabled':''}>加入购物车</button><button class="btn grow" id="buyNow" ${out?'disabled':''}>${out?'已售罄':'立即购买'}</button>`);
   $('addCart').onclick=async()=>{try{await post('cart',{sku_id:sku.id,quantity:qty,add:true});haptic('success');toast('已加入购物车');refreshCartCount()}catch(e){toast(e.message)}};
   $('buyNow').onclick=()=>{checkout={groups:[{merchant_id:p.merchant_id,items:[{sku_id:sku.id,quantity:qty}]}],from_cart:false,request_id:newRequestID()};location.hash='#/checkout'}}
  draw()}
@@ -319,11 +334,12 @@ async function reviewForm(v,orderId){
 
 // ---- Me ----
 async function mine(v){
- me=await api('me');if(stale(v))return;
+ me=await api('me');shareInfo=me;if(stale(v))return;
  const entry=(h,icon,label)=>`<button class="row between" style="width:100%;padding:12px 0" onclick="location.hash='${h}'"><span>${icon} ${label}</span><span class="muted">›</span></button>`;
  $('app').innerHTML=`<div class="status-head"><h2>${esc(me.name||'用户')}</h2><div class="small">${me.username?'@'+esc(me.username):''}</div></div>
  <div class="card"><div class="muted small">钱包余额</div><div style="font-size:24px" class="bold">${money(me.balance)} <span class="small">USDT</span></div><div class="muted small">充值、提现请回到机器人菜单操作</div></div>
- <div class="card list">${entry('#/orders','📦','我的订单')}${entry('#/aftersales','🧾','我的售后')}${entry('#/coupons','🎟','我的优惠券')}${entry('#/coupons/center','🎁','领券中心')}${entry('#/addresses','📍','收货地址')}</div>`;
+ <div class="card small muted">↗️ 在商品页点击分享发给好友，好友通过你的链接注册并下单，订单完成且售后期结束后你可获得推广佣金（以平台设置为准）。</div>
+ <div class="card list">${entry('#/orders','📦','我的订单')}${entry('#/aftersales','🧾','我的售后')}${entry('#/favorites','❤️','我的收藏')}${entry('#/history','🕘','浏览记录')}${entry('#/coupons','🎟','我的优惠券')}${entry('#/coupons/center','🎁','领券中心')}${entry('#/addresses','📍','收货地址')}</div>`;
  if(tg?.close)$('app').insertAdjacentHTML('beforeend','<button class="btn ghost block" onclick="Telegram.WebApp.close()">返回机器人</button>')}
 
 // ---- Coupons ----

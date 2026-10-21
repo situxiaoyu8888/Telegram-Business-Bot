@@ -12,7 +12,8 @@ import (
 
 const workerInterval = 10 * time.Minute
 
-// Run auto-completes express orders that were shipped shop_auto_complete_days ago. Pickup orders
+// Run auto-completes express orders that were shipped shop_auto_complete_days ago and then pays
+// due referral commissions (see GrantCommissions). Pickup orders
 // are left alone because only the merchant knows whether the goods were collected. A Redis
 // lease keeps several replicas from running the same pass.
 func (s *Service) Run(ctx context.Context) {
@@ -20,9 +21,12 @@ func (s *Service) Run(ctx context.Context) {
 	defer ticker.Stop()
 	for {
 		if err := lease.Run(ctx, s.st.Redis, "shop:auto-complete", func(ctx context.Context) error {
-			return s.AutoComplete(ctx, time.Now())
+			if err := s.AutoComplete(ctx, time.Now()); err != nil {
+				return err
+			}
+			return s.GrantCommissions(ctx, time.Now())
 		}); err != nil && err != lease.ErrBusy && ctx.Err() == nil && s.logger != nil {
-			s.logger.Warn("shop auto-complete failed", zap.Error(err))
+			s.logger.Warn("shop background pass failed", zap.Error(err))
 		}
 		select {
 		case <-ctx.Done():

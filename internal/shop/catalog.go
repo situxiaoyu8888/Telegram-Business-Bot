@@ -36,6 +36,7 @@ type SKUView struct {
 	ListPrice string `json:"list_price"`
 	OnPromo   bool   `json:"on_promo"`
 	Stock     int64  `json:"stock"`
+	PromoLeft *int64 `json:"promo_left,omitempty"` // units left at the promo price, when limited
 }
 
 // ProductDetail adds the description, images, delivery options, enabled SKUs and rating summary.
@@ -49,6 +50,8 @@ type ProductDetail struct {
 	PromoEndsAt     *time.Time `json:"promo_ends_at,omitempty"`
 	Rating          float64    `json:"rating"`
 	RatingCount     int64      `json:"rating_count"`
+	LimitPerUser    int64      `json:"limit_per_user"`
+	Favorited       bool       `json:"favorited"` // set by the H5 handler for the signed-in buyer
 	MerchantAddress string     `json:"merchant_address"`
 	MerchantHours   string     `json:"merchant_hours"`
 	MerchantPhone   string     `json:"merchant_phone"`
@@ -148,7 +151,7 @@ func (s *Service) cards(products []model.ShopProduct) ([]ProductCard, error) {
 			byProduct[k.ProductID] = a
 		}
 		p := byID[k.ProductID]
-		current, onPromo := effectivePrice(k.Price, k.PromoPrice, p.PromoStartsAt, p.PromoEndsAt, now)
+		current, onPromo := effectivePrice(k.Price, k.PromoPrice, k.PromoStock, p.PromoStartsAt, p.PromoEndsAt, now)
 		price := amount(current)
 		if !a.has || price.LessThan(a.min) {
 			a.min, a.list, a.promo, a.has = price, amount(k.Price), onPromo, true
@@ -190,9 +193,13 @@ func (s *Service) Product(id uint64) (*ProductDetail, error) {
 	views := make([]SKUView, 0, len(skus))
 	anyPromo := false
 	for _, k := range skus {
-		current, onPromo := effectivePrice(k.Price, k.PromoPrice, p.PromoStartsAt, p.PromoEndsAt, now)
+		current, onPromo := effectivePrice(k.Price, k.PromoPrice, k.PromoStock, p.PromoStartsAt, p.PromoEndsAt, now)
 		anyPromo = anyPromo || onPromo
-		views = append(views, SKUView{ID: k.ID, Name: k.Name, Price: current, ListPrice: k.Price, OnPromo: onPromo, Stock: k.Stock})
+		v := SKUView{ID: k.ID, Name: k.Name, Price: current, ListPrice: k.Price, OnPromo: onPromo, Stock: k.Stock}
+		if onPromo {
+			v.PromoLeft = k.PromoStock
+		}
+		views = append(views, v)
 	}
 	var rating struct {
 		Avg float64
@@ -211,7 +218,7 @@ func (s *Service) Product(id uint64) (*ProductDetail, error) {
 			images = append(images, line)
 		}
 	}
-	d := &ProductDetail{ProductCard: cards[0], Description: p.Description, Images: images, AllowExpress: p.AllowExpress, AllowPickup: p.AllowPickup, SKUs: views, Rating: rating.Avg, RatingCount: rating.N, MerchantAddress: m.Address, MerchantHours: m.Hours, MerchantPhone: m.Phone}
+	d := &ProductDetail{ProductCard: cards[0], LimitPerUser: p.LimitPerUser, Description: p.Description, Images: images, AllowExpress: p.AllowExpress, AllowPickup: p.AllowPickup, SKUs: views, Rating: rating.Avg, RatingCount: rating.N, MerchantAddress: m.Address, MerchantHours: m.Hours, MerchantPhone: m.Phone}
 	if anyPromo {
 		d.PromoEndsAt = p.PromoEndsAt
 	}
@@ -314,6 +321,7 @@ type SKUInput struct {
 	Name       string `json:"name"`
 	Price      string `json:"price"`
 	PromoPrice string `json:"promo_price"` // optional; used only inside the product's promo window
+	PromoStock *int64 `json:"promo_stock"` // optional cap on units sold at the promo price
 	Stock      int64  `json:"stock"`
 }
 
@@ -368,12 +376,18 @@ func (s *Service) SaveProduct(p model.ShopProduct, skus []SKUInput, merchantScop
 		}
 		skus[i].PromoPrice = promo.StringFixed(6)
 		hasPromo = hasPromo || promo.IsPositive()
+		if skus[i].PromoStock != nil && (*skus[i].PromoStock < 0 || promo.IsZero()) {
+			return 0, userErr("规格「%s」：活动库存需为非负数，且需同时填写活动价", skus[i].Name)
+		}
 		if skus[i].Stock < 0 {
 			return 0, userErr("库存不能为负数")
 		}
 	}
 	if (p.PromoStartsAt == nil) != (p.PromoEndsAt == nil) || (p.PromoStartsAt != nil && !p.PromoEndsAt.After(*p.PromoStartsAt)) {
 		return 0, userErr("限时活动需同时设置开始和结束时间，且结束晚于开始")
+	}
+	if p.LimitPerUser < 0 {
+		return 0, userErr("每人限购数量不能为负数")
 	}
 	if hasPromo && p.PromoStartsAt == nil {
 		return 0, userErr("填写了活动价，请设置限时活动的开始和结束时间")
@@ -387,7 +401,7 @@ func (s *Service) SaveProduct(p model.ShopProduct, skus []SKUInput, merchantScop
 		if err := tx.Select("id").First(&c, p.CategoryID).Error; err != nil {
 			return userErr("请选择有效的分类")
 		}
-		fields := map[string]any{"merchant_id": p.MerchantID, "category_id": p.CategoryID, "name": p.Name, "description": p.Description, "images": strings.TrimSpace(p.Images), "kind": p.Kind, "allow_express": p.AllowExpress, "allow_pickup": p.AllowPickup, "sort": p.Sort, "enabled": p.Enabled, "featured": p.Featured, "promo_starts_at": p.PromoStartsAt, "promo_ends_at": p.PromoEndsAt}
+		fields := map[string]any{"merchant_id": p.MerchantID, "category_id": p.CategoryID, "name": p.Name, "description": p.Description, "images": strings.TrimSpace(p.Images), "kind": p.Kind, "allow_express": p.AllowExpress, "allow_pickup": p.AllowPickup, "sort": p.Sort, "enabled": p.Enabled, "featured": p.Featured, "promo_starts_at": p.PromoStartsAt, "promo_ends_at": p.PromoEndsAt, "limit_per_user": p.LimitPerUser}
 		if p.ID == 0 {
 			p.Images = strings.TrimSpace(p.Images)
 			if err := tx.Create(&p).Error; err != nil {
@@ -415,13 +429,13 @@ func (s *Service) SaveProduct(p model.ShopProduct, skus []SKUInput, merchantScop
 		}
 		for i, in := range skus {
 			if old, ok := byName[in.Name]; ok {
-				if err := tx.Model(&model.ShopSKU{}).Where("id = ?", old.ID).Updates(map[string]any{"price": in.Price, "promo_price": in.PromoPrice, "stock": in.Stock, "sort": i, "enabled": true}).Error; err != nil {
+				if err := tx.Model(&model.ShopSKU{}).Where("id = ?", old.ID).Updates(map[string]any{"price": in.Price, "promo_price": in.PromoPrice, "promo_stock": in.PromoStock, "stock": in.Stock, "sort": i, "enabled": true}).Error; err != nil {
 					return err
 				}
 				delete(byName, in.Name)
 				continue
 			}
-			if err := tx.Create(&model.ShopSKU{ProductID: p.ID, Name: in.Name, Price: in.Price, PromoPrice: in.PromoPrice, Stock: in.Stock, Sort: i, Enabled: true}).Error; err != nil {
+			if err := tx.Create(&model.ShopSKU{ProductID: p.ID, Name: in.Name, Price: in.Price, PromoPrice: in.PromoPrice, PromoStock: in.PromoStock, Stock: in.Stock, Sort: i, Enabled: true}).Error; err != nil {
 				return err
 			}
 		}

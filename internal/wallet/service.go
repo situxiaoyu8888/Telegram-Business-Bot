@@ -270,3 +270,12 @@ func (s *Service) adjust(tx *gorm.DB, userID uint64, delta decimal.Decimal, txTy
 	}
 	return tx.Create(&model.WalletTransaction{UserID: userID, Currency: s.currency, Type: txType, Amount: delta.StringFixed(6), Balance: av.StringFixed(6), RefType: refType, RefID: refID, Remark: remark}).Error
 }
+
+// Credit adds a positive amount to the available balance inside the caller's transaction,
+// e.g. a shop referral commission, and records it in the ledger as txType.
+func (s *Service) Credit(tx *gorm.DB, userID uint64, amount decimal.Decimal, txType, refType string, refID uint64, remark string) error {
+	if !amount.IsPositive() {
+		return fmt.Errorf("credit must be positive")
+	}
+	return s.adjust(tx, userID, amount, txType, refType, refID, remark)
+}

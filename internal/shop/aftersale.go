@@ -308,5 +308,5 @@ func (s *Service) notifyBuyerOf(a model.ShopAfterSale, html string) {
 	if s.st.DB.Select("bot_id").First(&o, a.OrderID).Error != nil {
 		return
 	}
-	s.notify(o.BotID, a.TelegramUserID, html)
+	s.notify(o.BotID, a.TelegramUserID, html, a.OrderID)
 }

@@ -101,6 +101,9 @@ func (s *Service) price(db *gorm.DB, items []CheckoutItem) ([]pricedItem, decima
 		if l.Stock < it.Quantity {
 			return nil, decimal.Zero, nil, userErr("「%s %s」库存不足，剩余 %d", l.ProductName, l.Name, l.Stock)
 		}
+		if l.OnPromo && l.PromoStock != nil && *l.PromoStock < it.Quantity {
+			return nil, decimal.Zero, nil, userErr("「%s %s」活动价限量，仅剩 %d 件", l.ProductName, l.Name, *l.PromoStock)
+		}
 		if merchantID != 0 && l.MerchantID != merchantID {
 			return nil, decimal.Zero, nil, userErr("不同商家的商品请分开下单")
 		}
@@ -237,6 +240,12 @@ func (s *Service) CreateOrders(b Buyer, req CheckoutRequest) ([]model.ShopOrder,
 	var orders []model.ShopOrder
 	var existing bool
 	err := s.st.DB.Transaction(func(tx *gorm.DB) error {
+		// One checkout per buyer at a time, so purchase limits hold under concurrent taps. This
+		// must be the first statement: under REPEATABLE READ the first plain read fixes the
+		// snapshot, and it has to come after the lock to see orders committed while waiting.
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Select("id").First(&model.TelegramUser{}, b.UserID).Error; err != nil {
+			return err
+		}
 		if err := tx.Where("user_id = ? AND request_id IN ?", b.UserID, requestIDs).Order("id asc").Find(&orders).Error; err != nil {
 			return err
 		}
@@ -272,7 +281,7 @@ func (s *Service) CreateOrders(b Buyer, req CheckoutRequest) ([]model.ShopOrder,
 			if o.Status == StatusCompleted {
 				msg += "\n\n🎁 卡密已发放，请在商城「订单详情」中查看。"
 			}
-			s.notify(o.BotID, o.TelegramUserID, msg)
+			s.notify(o.BotID, o.TelegramUserID, msg, o.ID)
 			s.notifyStaff(o.MerchantID, fmt.Sprintf("🛒 <b>商城新订单</b>\n\n订单号：<code>%s</code>\n商家：%s\n配送：%s\n实付：<code>%s USDT</code>\n买家 Telegram ID：<code>%d</code>%s", o.OrderNo, htmlEscape(o.MerchantName), deliveryNames[o.DeliveryType], amount(o.PayAmount).String(), o.TelegramUserID, map[bool]string{true: "\n\n卡密已自动发放。", false: ""}[o.Status == StatusCompleted]))
 		}
 	}
@@ -298,6 +307,9 @@ func (s *Service) createOrderTx(tx *gorm.DB, b Buyer, requestID string, g Checko
 	}
 	if !allowed {
 		return order, nil, userErr("所选商品不支持该配送方式")
+	}
+	if err := s.checkLimits(tx, b.UserID, items); err != nil {
+		return order, nil, err
 	}
 	first := items[0].line
 	now := time.Now()
@@ -343,10 +355,20 @@ func (s *Service) createOrderTx(tx *gorm.DB, b Buyer, requestID string, g Checko
 		if res.RowsAffected != 1 {
 			return order, nil, userErr("「%s %s」库存不足", it.line.ProductName, it.line.Name)
 		}
+		if it.line.OnPromo && it.line.PromoStock != nil {
+			res := tx.Model(&model.ShopSKU{}).Where("id = ? AND promo_stock >= ?", it.SKUID, it.Quantity).Update("promo_stock", gorm.Expr("promo_stock - ?", it.Quantity))
+			if res.Error != nil {
+				return order, nil, res.Error
+			}
+			// Never fall back to the regular price silently: the buyer was shown the promo price.
+			if res.RowsAffected != 1 {
+				return order, nil, userErr("「%s %s」活动价已抢完，请返回刷新后按当前价格购买", it.line.ProductName, it.line.Name)
+			}
+		}
 		if err := tx.Model(&model.ShopProduct{}).Where("id = ?", it.line.ProductID).Update("sales", gorm.Expr("sales + ?", it.Quantity)).Error; err != nil {
 			return order, nil, err
 		}
-		if err := tx.Create(&model.ShopOrderItem{OrderID: order.ID, ProductID: it.line.ProductID, SKUID: it.SKUID, ProductName: it.line.ProductName, SKUName: it.line.Name, ImageURL: firstImage(it.line.Images), Price: it.line.Price, Quantity: it.Quantity}).Error; err != nil {
+		if err := tx.Create(&model.ShopOrderItem{OrderID: order.ID, ProductID: it.line.ProductID, SKUID: it.SKUID, ProductName: it.line.ProductName, SKUName: it.line.Name, ImageURL: firstImage(it.line.Images), Price: it.line.Price, Quantity: it.Quantity, Promo: it.line.OnPromo}).Error; err != nil {
 			return order, nil, err
 		}
 		skus = append(skus, it.SKUID)
@@ -544,6 +566,11 @@ func (s *Service) cancel(id uint64, scope Scope, reason, operator string) error 
 			if err := tx.Model(&model.ShopSKU{}).Where("id = ?", it.SKUID).Update("stock", gorm.Expr("stock + ?", it.Quantity)).Error; err != nil {
 				return err
 			}
+			if it.Promo {
+				if err := tx.Model(&model.ShopSKU{}).Where("id = ? AND promo_stock IS NOT NULL", it.SKUID).Update("promo_stock", gorm.Expr("promo_stock + ?", it.Quantity)).Error; err != nil {
+					return err
+				}
+			}
 			if err := tx.Model(&model.ShopProduct{}).Where("id = ? AND sales >= ?", it.ProductID, it.Quantity).Update("sales", gorm.Expr("sales - ?", it.Quantity)).Error; err != nil {
 				return err
 			}
@@ -565,7 +592,7 @@ func (s *Service) cancel(id uint64, scope Scope, reason, operator string) error 
 		return tx.Model(&model.ShopOrder{}).Where("id = ?", o.ID).Updates(map[string]any{"status": StatusCanceled, "cancel_reason": reason, "canceled_at": now, "handled_by": operator, "refunded_amount": amount(o.PayAmount).StringFixed(6)}).Error
 	})
 	if err == nil {
-		s.notify(o.BotID, o.TelegramUserID, fmt.Sprintf("↩️ <b>订单已取消</b>\n\n订单号：<code>%s</code>\n原因：%s\n<code>%s USDT</code> 已退回钱包余额。", o.OrderNo, htmlEscape(reason), refund.String()))
+		s.notify(o.BotID, o.TelegramUserID, fmt.Sprintf("↩️ <b>订单已取消</b>\n\n订单号：<code>%s</code>\n原因：%s\n<code>%s USDT</code> 已退回钱包余额。", o.OrderNo, htmlEscape(reason), refund.String()), o.ID)
 		if scope.UserID != 0 {
 			s.notifyStaff(o.MerchantID, fmt.Sprintf("↩️ <b>买家取消了订单</b>\n\n订单号：<code>%s</code>\n商家：%s\n已退款：<code>%s USDT</code>", o.OrderNo, htmlEscape(o.MerchantName), refund.String()))
 		}
@@ -610,7 +637,7 @@ func (s *Service) complete(id uint64, scope Scope, operator string) error {
 		if operator == autoOperator {
 			msg = fmt.Sprintf("✅ <b>订单已自动确认收货</b>\n\n订单号：<code>%s</code>\n如有问题，可在商城订单详情中申请售后。", o.OrderNo)
 		}
-		s.notify(o.BotID, o.TelegramUserID, msg)
+		s.notify(o.BotID, o.TelegramUserID, msg, o.ID)
 	}
 	return err
 }
@@ -662,9 +689,38 @@ func (s *Service) Fulfil(id uint64, scope Scope, carrier, trackingNo, note, oper
 		return nil
 	})
 	if err == nil {
-		s.notify(o.BotID, o.TelegramUserID, msg)
+		s.notify(o.BotID, o.TelegramUserID, msg, o.ID)
 	}
 	return err
+}
+
+// checkLimits enforces each product's per-buyer limit, counting units in the buyer's
+// non-canceled orders (including ones created earlier in this checkout) plus this group.
+func (s *Service) checkLimits(tx *gorm.DB, userID uint64, items []pricedItem) error {
+	want := map[uint64]int64{}
+	limits := map[uint64]pricedItem{}
+	for _, it := range items {
+		if it.line.LimitPerUser > 0 {
+			want[it.line.ProductID] += it.Quantity
+			limits[it.line.ProductID] = it
+		}
+	}
+	for productID, qty := range want {
+		var bought int64
+		if err := tx.Raw(`SELECT COALESCE(SUM(i.quantity), 0) FROM shop_order_items i JOIN shop_orders o ON o.id = i.order_id
+			WHERE o.user_id = ? AND o.status <> ? AND i.product_id = ?`, userID, StatusCanceled, productID).Scan(&bought).Error; err != nil {
+			return err
+		}
+		it := limits[productID]
+		if bought+qty > it.line.LimitPerUser {
+			left := it.line.LimitPerUser - bought
+			if left < 0 {
+				left = 0
+			}
+			return userErr("「%s」每人限购 %d 件，你还可以购买 %d 件", it.line.ProductName, it.line.LimitPerUser, left)
+		}
+	}
+	return nil
 }
 
 type AdminOrderQuery struct {

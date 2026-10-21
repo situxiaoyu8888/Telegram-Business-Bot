@@ -1,5 +1,7 @@
 package telegram
 
+import "strings"
+
 type Update struct {
 	UpdateID      int            `json:"update_id"`
 	Message       *Message       `json:"message,omitempty"`
@@ -46,7 +48,17 @@ type InlineKeyboardMarkup struct {
 }
 
 type InlineKeyboardButton struct {
-	Text         string `json:"text"`
-	CallbackData string `json:"callback_data,omitempty"`
-	URL          string `json:"url,omitempty"`
+	Text         string      `json:"text"`
+	CallbackData string      `json:"callback_data,omitempty"`
+	URL          string      `json:"url,omitempty"`
+	WebApp       *WebAppInfo `json:"web_app,omitempty"` // opens a Mini App; private chats only
+}
+
+type WebAppInfo struct {
+	URL string `json:"url"`
+}
+
+// ShopButton opens a page of the H5 shop (fragment such as "/order/12") in the Mini App.
+func ShopButton(text, shopURL, fragment string) InlineKeyboardButton {
+	return InlineKeyboardButton{Text: text, WebApp: &WebAppInfo{URL: strings.SplitN(shopURL, "#", 2)[0] + "#" + fragment}}
 }
