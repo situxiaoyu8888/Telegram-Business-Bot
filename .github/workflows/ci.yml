@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      mariadb:
+        image: mariadb:11.4
+        env:
+          MARIADB_ROOT_PASSWORD: ci
+        ports: ["3306:3306"]
+        options: >-
+          --health-cmd="healthcheck.sh --connect --innodb_initialized"
+          --health-interval=5s --health-timeout=5s --health-retries=30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: gofmt
+        run: test -z "$(gofmt -l cmd internal integration)" || (gofmt -l cmd internal integration; exit 1)
+      - run: go vet ./...
+      - name: Admin console UI tests
+        run: node --test internal/admin/ui_test.js
+      - name: Unit and real-database tests
+        run: go test -race -count=1 ./...
+        env:
+          TEST_MYSQL_DSN: "root:ci@tcp(127.0.0.1:3306)/"
+
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: e2e/package-lock.json
+      - name: Install browser
+        working-directory: e2e
+        run: npm ci && npx playwright install --with-deps chromium
+      - name: End-to-end run
+        run: ./e2e/run.sh
+      - name: Screenshots and logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-artifacts
+          path: |
+            e2e/.work/shots
+            e2e/.work/*.log
+            e2e/.work/logs
+            e2e/.work/sent.json
+          if-no-files-found: ignore

@@ -169,3 +169,10 @@ test('merchant accounts get reports, settlements and reviews but not marketing',
  h.run("reportRange={from:'2026-10-01',to:'2026-10-07'}");
  assert.equal(h.run("reportQuery()"),'?from=2026-10-01&to=2026-10-07');
 });
+test('navigation hides section titles that have no visible pages',()=>{
+ const h=harness();
+ h.run("me={id:3,role:'merchant',permissions:['shop_orders']};nav()");
+ const html=h.elements.get('navigation').innerHTML;
+ assert.ok(html.includes('商城管理'));
+ for(const title of ['运营工作台','业务管理','系统设置'])assert.ok(!html.includes(title),title);
+});

@@ -53,6 +53,14 @@ func (h *Handler) registerShop(api *gin.RouterGroup, can func(...string) gin.Han
 	api.GET("/shop-members", can("shop_members"), h.shopMembers)
 	api.POST("/shop-members/adjust", can("shop_members"), platformOnly, h.adjustShopPoints)
 
+	api.GET("/shop-messages", can("shop_messages"), h.shopConversations)
+	api.GET("/shop-messages/:id", can("shop_messages"), h.shopThread)
+	api.POST("/shop-messages/:id/reply", can("shop_messages"), h.replyShopMessage)
+
+	api.GET("/shop-applications", can("shop_applications"), platformOnly, h.shopApplications)
+	api.POST("/shop-applications/:id/approve", can("shop_applications"), platformOnly, h.approveShopApplication)
+	api.POST("/shop-applications/:id/reject", can("shop_applications"), platformOnly, h.rejectShopApplication)
+
 	api.GET("/shop-coupons", can("shop_coupons"), h.shopCoupons)
 	api.POST("/shop-coupons", can("shop_coupons"), h.saveShopCoupon)
 	api.POST("/shop-coupons/:id/issue", can("shop_coupons"), h.issueShopCoupon)
@@ -424,6 +432,36 @@ func (h *Handler) adjustShopPoints(c *gin.Context) {
 		return
 	}
 	respond(c, h.shop.AdjustPoints(b.TelegramUserID, b.Delta, b.Reason, operator(c)))
+}
+
+func (h *Handler) shopConversations(c *gin.Context) {
+	rows, err := h.shop.AdminConversations(merchantScope(c))
+	listOrError(c, rows, err)
+}
+
+func (h *Handler) shopThread(c *gin.Context) {
+	id, ok := idParam(c)
+	if !ok {
+		return
+	}
+	t, err := h.shop.AdminThread(id, shop.Scope{MerchantID: merchantScope(c)})
+	if err != nil {
+		respond(c, err)
+		return
+	}
+	c.JSON(200, t)
+}
+
+func (h *Handler) replyShopMessage(c *gin.Context) {
+	id, ok := idParam(c)
+	if !ok {
+		return
+	}
+	var b struct {
+		Content string `json:"content"`
+	}
+	_ = c.ShouldBindJSON(&b)
+	respond(c, h.shop.ReplyToBuyer(id, shop.Scope{MerchantID: merchantScope(c)}, b.Content, operator(c)))
 }
 
 func listOrError(c *gin.Context, rows any, err error) {

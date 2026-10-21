@@ -55,6 +55,7 @@ type Config struct {
 	// SHOP_H5_URL makes the user bots' menu button open the H5 shop; empty keeps the command list.
 	ShopH5URL        string
 	TelegramAPIURL   string // optional Bot API server; empty uses https://api.telegram.org
+	AdminPublicURL   string // optional console address included in merchant approval messages
 	ShopH5ButtonText string
 
 	LogDir        string
@@ -149,6 +150,7 @@ func load(path string) (Config, error) {
 	}
 
 	cfg.TelegramAPIURL = strings.TrimRight(mustEnv("TELEGRAM_API_URL"), "/")
+	cfg.AdminPublicURL = mustEnv("ADMIN_PUBLIC_URL")
 	cfg.ShopH5URL = mustEnv("SHOP_H5_URL")
 	cfg.ShopH5ButtonText = mustEnv("SHOP_H5_BUTTON_TEXT")
 	if cfg.ShopH5ButtonText == "" {

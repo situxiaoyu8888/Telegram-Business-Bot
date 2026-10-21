@@ -40,9 +40,15 @@ const (
 // Notifier delivers shop messages: Notify reaches a buyer through the bot they shopped from,
 // NotifyStaff reaches administrators and merchant contacts.
 type Notifier interface {
-	// orderID, when non-zero, adds a button that opens the order in the shop.
-	Notify(ctx context.Context, botID uint64, telegramUserID int64, html string, orderID uint64) error
+	// link, when set, adds a button that opens that shop page.
+	Notify(ctx context.Context, botID uint64, telegramUserID int64, html string, link *Link) error
 	NotifyStaff(ctx context.Context, chatIDs []int64, html string) error
+}
+
+// Link is a button that opens a page of the H5 shop, e.g. Fragment "/order/12".
+type Link struct {
+	Text     string
+	Fragment string
 }
 
 // autoOperator marks changes made by the shop's background worker.
@@ -101,14 +107,28 @@ func checkLen(value, field string, max int, required bool) error {
 	return nil
 }
 
+// notify messages a buyer, with a "view order" button when orderID is set.
 func (s *Service) notify(botID uint64, tgUserID int64, html string, orderID uint64) {
+	var link *Link
+	if orderID != 0 {
+		link = &Link{Text: "📦 查看订单", Fragment: fmt.Sprintf("/order/%d", orderID)}
+	}
+	s.send(botID, tgUserID, html, link)
+}
+
+// notifyChat messages a buyer with a button that opens a conversation page.
+func (s *Service) notifyChat(botID uint64, tgUserID int64, html, fragment string) {
+	s.send(botID, tgUserID, html, &Link{Text: "💬 查看对话", Fragment: fragment})
+}
+
+func (s *Service) send(botID uint64, tgUserID int64, html string, link *Link) {
 	if s.notifier == nil || tgUserID == 0 {
 		return
 	}
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cancel()
-		if err := s.notifier.Notify(ctx, botID, tgUserID, html, orderID); err != nil && s.logger != nil {
+		if err := s.notifier.Notify(ctx, botID, tgUserID, html, link); err != nil && s.logger != nil {
 			s.logger.Warn("shop notification failed", zap.Int64("telegram_user_id", tgUserID), zap.Error(err))
 		}
 	}()

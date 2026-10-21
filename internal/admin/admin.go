@@ -34,6 +34,7 @@ type Handler struct {
 	accountBackend accountStore
 	limiter        ratelimit.Store // login throttling; defaults to the store's Redis
 	logger         *zap.Logger
+	publicURL      string // console address sent to approved merchants
 	bots           *business.Service
 	st             *store.Store
 	wallet         *wallet.Service
@@ -71,6 +72,9 @@ func New(
 		uploadMaxVideoMB:    uploadMaxVideoMB,
 	}
 }
+
+// WithPublicURL sets the console address included in merchant approval messages.
+func (h *Handler) WithPublicURL(u string) *Handler { h.publicURL = u; return h }
 
 // WithLogger enables the access log of console actions.
 func (h *Handler) WithLogger(l *zap.Logger) *Handler { h.logger = l; return h }
@@ -125,7 +129,7 @@ func (h *Handler) Register(r *gin.Engine) {
 	api.POST("/merchants", can("merchants"), h.saveMerchant)
 	api.DELETE("/merchants/:id", can("merchants"), h.deleteMerchant)
 	// The merchant form picks its category from the menu list.
-	api.GET("/menus", can("menus", "merchants"), h.menus)
+	api.GET("/menus", can("menus", "merchants", "shop_applications"), h.menus)
 	api.POST("/menus", can("menus"), h.saveMenu)
 	api.DELETE("/menus/:id", can("menus"), h.deleteMenu)
 

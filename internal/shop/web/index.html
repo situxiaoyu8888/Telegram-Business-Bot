@@ -101,6 +101,11 @@ img{display:block;max-width:100%}
 .stars i{color:var(--line);font-style:normal}
 .star-pick button{font-size:26px;color:var(--line);padding:0 2px}
 .star-pick button.on{color:#f5a623}
+.bubble{max-width:78%;padding:9px 12px;border-radius:14px;white-space:pre-wrap;word-break:break-word;background:var(--card)}
+.bubble.mine{background:var(--brand);color:var(--brand-ink)}
+.bubble .meta{font-size:11px;opacity:.7;margin-top:4px}
+.chat-input{display:flex;gap:8px;align-items:flex-end}
+.chat-input textarea{flex:1;min-height:42px;max-height:120px;border:1px solid var(--line);border-radius:12px;padding:10px 12px;background:var(--card);outline:0;resize:none}
 .toast{position:fixed;left:50%;top:40%;transform:translate(-50%,-50%);background:#000c;color:#fff;padding:10px 16px;border-radius:10px;z-index:20;max-width:80%;text-align:center}
 .loading{padding:40px;text-align:center;color:var(--muted)}
 h3{font-size:15px;margin:0 0 10px}
@@ -137,7 +142,7 @@ const post=(path,body={})=>api(path,{method:'POST',body:JSON.stringify(body)});
 function newRequestID(){return crypto.randomUUID?crypto.randomUUID():Date.now().toString(36)+Math.random().toString(36).slice(2)}
 
 // ---- Routing ----
-const routes=[[/^#?\/?$/,home],[/^#\/product\/(\d+)(?:\?group=(\d+))?$/,product],[/^#\/group\/(\d+)$/,groupPage],[/^#\/cart$/,cart],[/^#\/checkout$/,checkoutPage],[/^#\/orders(?:\/(\w+))?$/,orders],[/^#\/order\/(\d+)$/,orderDetail],[/^#\/me$/,mine],[/^#\/coupons(?:\/(\w+))?$/,coupons],[/^#\/addresses(?:\/(pick))?$/,addresses],[/^#\/address\/(new|\d+)(?:\/(pick))?$/,addressForm],[/^#\/aftersale\/(\d+)$/,afterSaleForm],[/^#\/review\/(\d+)$/,reviewForm],[/^#\/(favorites|history)$/,productList],[/^#\/aftersales$/,afterSales]];
+const routes=[[/^#?\/?$/,home],[/^#\/product\/(\d+)(?:\?group=(\d+))?$/,product],[/^#\/group\/(\d+)$/,groupPage],[/^#\/cart$/,cart],[/^#\/checkout$/,checkoutPage],[/^#\/orders(?:\/(\w+))?$/,orders],[/^#\/order\/(\d+)$/,orderDetail],[/^#\/me$/,mine],[/^#\/coupons(?:\/(\w+))?$/,coupons],[/^#\/addresses(?:\/(pick))?$/,addresses],[/^#\/address\/(new|\d+)(?:\/(pick))?$/,addressForm],[/^#\/aftersale\/(\d+)$/,afterSaleForm],[/^#\/review\/(\d+)$/,reviewForm],[/^#\/(favorites|history)$/,productList],[/^#\/chat\/(\d+)(?:\?(product|order)=(\d+))?$/,chatPage],[/^#\/messages$/,messageList],[/^#\/apply$/,applyPage],[/^#\/aftersales$/,afterSales]];
 const tabs=[['#/','首页','home'],['#/cart','购物车','cart'],['#/orders','订单','order'],['#/me','我的','me']];
 let renderVersion=0;
 async function route(){
@@ -206,7 +211,7 @@ async function product(v,id,joinGroup){
   ${groupOn?`<div class="card"><div class="row between"><span class="bold">👥 ${p.group_size} 人团</span><span>拼团价 ${priceHTML(groupPriceOf(sku),sku.list_price)}</span></div><div class="muted small" style="margin:4px 0 8px">${p.group_hours} 小时内凑齐 ${p.group_size} 人即成团，未成团自动退款</div>${joinGroup?`<button class="btn block" id="joinGroup">参加这个拼团</button>`:`<button class="btn ghost block" id="startGroup">发起拼团</button>`}${!joinGroup&&openGroups.length?`<div class="list" style="margin-top:10px">${openGroups.filter(g=>!g.mine).slice(0,3).map(g=>`<div class="item" style="align-items:center"><div style="flex:1">${esc(g.members[0]||'')} 的团 · 还差 <b>${g.size-g.joined}</b> 人<div class="muted small">剩余 ${timeLeft(g.expires_at)}</div></div><button class="btn sm" onclick="location.hash='#/product/${p.id}?group=${g.id}'">去参团</button></div>`).join('')}</div>`:''}</div>`:''}
   <div class="card"><h3>规格</h3><div class="skus">${p.skus.map(k=>`<button class="sku ${k.id===sku.id?'on':''}" data-sku="${k.id}" ${k.stock<1?'disabled':''}>${esc(k.name)}</button>`).join('')}</div>
   <div class="row between" style="margin-top:14px"><span>数量 <span class="muted small">库存 ${sku.stock}${p.limit_per_user?` · 每人限购 ${p.limit_per_user} 件`:''}${sku.on_promo&&sku.promo_left!=null?` · 活动价仅剩 ${sku.promo_left} 件`:''}</span></span><span class="stepper"><button id="minus">−</button><span>${qty}</span><button id="plus">+</button></span></div></div>
-  <div class="card"><div class="bold">${esc(p.merchant_name)}</div>${p.merchant_address?`<div class="muted small">📍 ${esc(p.merchant_address)}</div>`:''}${p.merchant_hours?`<div class="muted small">🕒 ${esc(p.merchant_hours)}</div>`:''}</div>
+  <div class="card"><div class="bold">${esc(p.merchant_name)}</div>${p.merchant_address?`<div class="muted small">📍 ${esc(p.merchant_address)}</div>`:''}${p.merchant_hours?`<div class="muted small">🕒 ${esc(p.merchant_hours)}</div>`:''}<button class="btn ghost sm" style="margin-top:10px" onclick="location.hash='#/chat/${p.merchant_id}?product=${p.id}'">💬 联系商家</button></div>
   ${p.description?`<div class="card"><h3>商品详情</h3><div style="white-space:pre-wrap">${esc(p.description)}</div></div>`:''}<div id="reviews"></div>`;
   loadReviews(p,1);
   document.querySelectorAll('[data-sku]').forEach(b=>b.onclick=()=>{sku=p.skus.find(k=>k.id===Number(b.dataset.sku));qty=Math.min(qty,Math.max(1,maxQty()));draw()});
@@ -310,7 +315,7 @@ async function orderDetail(v,id){
  if(sales.length||Number(o.refunded_amount)>0)$('app').insertAdjacentHTML('beforeend',`<div class="card"><h3>售后</h3>${Number(o.refunded_amount)>0&&o.status!=='canceled'?`<div class="kv"><span>已退款</span><span>${money(o.refunded_amount)} USDT</span></div>`:''}${sales.map(a=>afterSaleBlock(a)).join('')}</div>`);
  document.querySelectorAll('[data-as-cancel]').forEach(b=>b.onclick=async()=>{if(!(await confirmBox('撤销该售后申请？')))return;try{await post(`aftersales/${b.dataset.asCancel}/cancel`);toast('已撤销');route()}catch(e){toast(e.message)}});
  document.querySelectorAll('[data-as-return]').forEach(b=>b.onclick=async()=>{const id=b.dataset.asReturn;try{await post(`aftersales/${id}/return`,{carrier:$('rc'+id).value,tracking_no:$('rt'+id).value});toast('已提交');route()}catch(e){toast(e.message)}});
- const actions=[];if(o.status==='paid')actions.push('<button class="btn danger grow" id="cancelOrder">取消订单</button>');if(o.can_review)actions.push(`<button class="btn grow" onclick="location.hash='#/review/${o.id}'">评价</button>`);if(o.can_apply_after_sale)actions.push(`<button class="btn ghost grow" onclick="location.hash='#/aftersale/${o.id}'">申请售后</button>`);if(o.status==='shipped'||o.status==='ready')actions.push(`<button class="btn grow" id="confirmOrder">${o.status==='ready'?'我已取货':'确认收货'}</button>`);
+ const actions=[`<button class="btn ghost sm" style="height:42px" onclick="location.hash='#/chat/${o.merchant_id}?order=${o.id}'">💬</button>`];if(o.status==='paid')actions.push('<button class="btn danger grow" id="cancelOrder">取消订单</button>');if(o.can_review)actions.push(`<button class="btn grow" onclick="location.hash='#/review/${o.id}'">评价</button>`);if(o.can_apply_after_sale)actions.push(`<button class="btn ghost grow" onclick="location.hash='#/aftersale/${o.id}'">申请售后</button>`);if(o.status==='shipped'||o.status==='ready')actions.push(`<button class="btn grow" id="confirmOrder">${o.status==='ready'?'我已取货':'确认收货'}</button>`);
  if(actions.length)bottomBar(actions.join(''));
  if($('cancelOrder'))$('cancelOrder').onclick=async()=>{if(!(await confirmBox('确定取消订单？款项将退回钱包余额。')))return;try{await post(`orders/${o.id}/cancel`);toast('订单已取消');route()}catch(e){toast(e.message)}};
  if($('confirmOrder'))$('confirmOrder').onclick=async()=>{if(!(await confirmBox('确认已收到商品？')))return;try{await post(`orders/${o.id}/confirm`);toast('已确认');route()}catch(e){toast(e.message)}}}
@@ -359,15 +364,40 @@ async function groupPage(v,id){
  if(actions.length)bottomBar(actions.join(''));
  if($('shareGroup'))$('shareGroup').onclick=async()=>{try{shareInfo=shareInfo||await api('me')}catch(e){toast(e.message);return}if(!shareInfo.bot_username){toast('暂时无法生成分享链接');return}const link=`https://t.me/${shareInfo.bot_username}?start=g${g.id}_${shareInfo.referral_code}`;const url='https://t.me/share/url?url='+encodeURIComponent(link)+'&text='+encodeURIComponent(`一起拼团：${g.product.name}，拼团价 ${money(g.group_price)} USDT`);if(tg?.openTelegramLink)tg.openTelegramLink(url);else window.open(url,'_blank')}}
 
+async function chatPage(v,merchantId,refKind,refId){
+ const load=async()=>{const t=await api('conversations/merchant/'+merchantId);if(stale(v))return null;return t};
+ let t=await load();if(!t)return;
+ const draw=()=>{
+  $('app').innerHTML=`<div class="card"><div class="bold">💬 ${esc(t.merchant_name)}</div><div class="muted small">商家回复后会通过机器人通知你</div></div>
+  ${refKind?`<div class="muted small" style="margin-bottom:8px">关于${refKind==='order'?'订单':'商品'} #${refId}</div>`:''}
+  <div id="chatList">${t.messages.length?t.messages.map(m=>`<div style="display:flex;justify-content:${m.from_merchant?'flex-start':'flex-end'};margin:8px 0"><div class="bubble ${m.from_merchant?'':'mine'}">${esc(m.content)}<div class="meta">${m.from_merchant?'商家 · ':''}${new Date(m.created_at).toLocaleString('zh-CN',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'})}</div></div></div>`).join(''):'<div class="empty" style="padding:40px 0">有问题可以直接问商家，例如库存、配送时间或售后。</div>'}</div>`;
+  window.scrollTo(0,document.body.scrollHeight)};
+ draw();
+ bottomBar('<div class="chat-input grow"><textarea id="chatText" maxlength="1000" placeholder="输入消息…"></textarea><button class="btn" id="chatSend">发送</button></div>');
+ $('chatSend').onclick=async()=>{const text=$('chatText').value.trim();if(!text)return;$('chatSend').disabled=true;try{await post('conversations/merchant/'+merchantId,{content:text,product_id:refKind==='product'?Number(refId):0,order_id:refKind==='order'?Number(refId):0});$('chatText').value='';refKind=null;t=await load();if(t)draw()}catch(e){toast(e.message)}finally{if($('chatSend'))$('chatSend').disabled=false}};
+ // Pick up replies while the page is open.
+ const timer=setInterval(async()=>{if(stale(v)){clearInterval(timer);return}try{const n=await load();if(n&&n.messages.length!==t.messages.length){t=n;draw()}}catch(e){}},8000)}
+async function messageList(v){
+ const list=await api('conversations');if(stale(v))return;
+ $('app').innerHTML=list.length?`<div class="card list">${list.map(c=>`<button class="item" style="width:100%;text-align:left" onclick="location.hash='#/chat/${c.merchant_id}'"><div style="flex:1;min-width:0"><div class="row between"><span class="bold">🏪 ${esc(c.merchant_name||'商家')}</span><span class="muted small">${new Date(c.last_at).toLocaleDateString('zh-CN')}</span></div><div class="muted small clamp2">${esc(c.last_message)}</div></div>${c.buyer_unread?`<span class="tag red">${c.buyer_unread}</span>`:''}</button>`).join('')}</div>`:'<div class="empty">还没有消息。可以在商品或订单页点「联系商家」。</div>'}
+async function applyPage(v){
+ const {application:a}=await api('merchant-applications/mine');if(stale(v))return;
+ const statusInfo={pending:['审核中','我们会尽快审核，结果会通过机器人通知你。'],approved:['已通过',`后台账号 ${a?.username||''} 和初始密码已通过机器人发送给你。`],rejected:['未通过',a?.admin_note?'原因：'+a.admin_note:'']};
+ const head=a?`<div class="status-head"><h2>${esc(statusInfo[a.status]?.[0]||a.status)}</h2><div class="small">店铺：${esc(a.shop_name)}<br>${esc(statusInfo[a.status]?.[1]||'')}</div></div>`:'';
+ if(a&&a.status!=='rejected'){$('app').innerHTML=head;return}
+ $('app').innerHTML=head+`<div class="card"><h3>${a?'重新申请':'申请成为商家'}</h3><div class="field"><label class="muted small">店铺名称 *</label><input id="apName" maxlength="64"></div><div class="field"><label class="muted small">联系方式 *（电话或 Telegram）</label><input id="apContact" maxlength="128"></div><div class="field"><label class="muted small">经营类目</label><input id="apCategory" maxlength="64" placeholder="例如：中餐、水果、数码"></div><div class="field"><label class="muted small">店铺地址</label><input id="apAddress" maxlength="256"></div><div class="field" style="margin:0"><label class="muted small">店铺介绍</label><textarea id="apDesc" maxlength="1000"></textarea></div></div>`;
+ bottomBar('<button class="btn grow" id="apSubmit">提交申请</button>');
+ $('apSubmit').onclick=async()=>{try{await post('merchant-applications',{shop_name:$('apName').value,contact:$('apContact').value,category:$('apCategory').value,address:$('apAddress').value,description:$('apDesc').value});haptic('success');toast('已提交，请等待审核');route()}catch(e){toast(e.message)}}}
+
 // ---- Me ----
 async function mine(v){
- const [meInfo,mem]=await Promise.all([api('me'),api('member').catch(()=>null)]);me=meInfo;shareInfo=me;if(stale(v))return;
+ const [meInfo,mem,convs]=await Promise.all([api('me'),api('member').catch(()=>null),api('conversations').catch(()=>[])]);const unread=convs.reduce((n,c)=>n+c.buyer_unread,0);me=meInfo;shareInfo=me;if(stale(v))return;
  const entry=(h,icon,label)=>`<button class="row between" style="width:100%;padding:12px 0" onclick="location.hash='${h}'"><span>${icon} ${label}</span><span class="muted">›</span></button>`;
  $('app').innerHTML=`<div class="status-head"><h2>${esc(me.name||'用户')}</h2><div class="small">${me.username?'@'+esc(me.username):''}</div></div>
  <div class="card"><div class="muted small">钱包余额</div><div style="font-size:24px" class="bold">${money(me.balance)} <span class="small">USDT</span></div><div class="muted small">充值、提现请回到机器人菜单操作</div></div>
  ${mem?`<div class="card"><div class="row between"><span class="bold">${mem.level?'💎 '+esc(mem.level.name)+'会员 · '+Math.round((1-Number(mem.level.rate))*100)+'% 折扣':'普通会员'}</span><span>积分 <b>${mem.points}</b></span></div><div class="muted small" style="margin-top:4px">累计消费 ${money(mem.spent)} USDT${mem.next?`，再消费 ${money((Number(mem.next.threshold)-Number(mem.spent)).toFixed(6))} USDT 升级${esc(mem.next.name)}`:''}${Number(mem.points_value)>0?` · ${Math.round(1/Number(mem.points_value))} 积分抵 1 USDT`:''}</div></div>`:''}
  <div class="card small muted">↗️ 在商品页点击分享发给好友，好友通过你的链接注册并下单，订单完成且售后期结束后你可获得推广佣金（以平台设置为准）。</div>
- <div class="card list">${entry('#/orders','📦','我的订单')}${entry('#/aftersales','🧾','我的售后')}${entry('#/favorites','❤️','我的收藏')}${entry('#/history','🕘','浏览记录')}${entry('#/coupons','🎟','我的优惠券')}${entry('#/coupons/center','🎁','领券中心')}${entry('#/addresses','📍','收货地址')}</div>`;
+ <div class="card list">${entry('#/orders','📦','我的订单')}${entry('#/messages','💬','我的消息'+(unread?` <span class="tag red">${unread}</span>`:''))}${entry('#/aftersales','🧾','我的售后')}${entry('#/favorites','❤️','我的收藏')}${entry('#/history','🕘','浏览记录')}${entry('#/coupons','🎟','我的优惠券')}${entry('#/coupons/center','🎁','领券中心')}${entry('#/addresses','📍','收货地址')}${entry('#/apply','🏪','商家入驻')}</div>`;
  if(tg?.close)$('app').insertAdjacentHTML('beforeend','<button class="btn ghost block" onclick="Telegram.WebApp.close()">返回机器人</button>')}
 
 // ---- Coupons ----

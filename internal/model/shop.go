@@ -322,3 +322,52 @@ type ShopGroup struct {
 	CreatedAt    time.Time  `json:"created_at"`
 	UpdatedAt    time.Time  `json:"updated_at"`
 }
+
+// ShopMerchantApplication is a request from a Telegram user to open a store. Approving it creates
+// the Merchant and a merchant console account. Status is pending, approved or rejected.
+type ShopMerchantApplication struct {
+	ID             uint64     `gorm:"primaryKey" json:"id"`
+	UserID         uint64     `gorm:"not null;index" json:"user_id"`
+	TelegramUserID int64      `gorm:"not null" json:"telegram_user_id"`
+	BotID          uint64     `gorm:"not null;default:0" json:"bot_id"`
+	ShopName       string     `gorm:"size:64;not null" json:"shop_name"`
+	Contact        string     `gorm:"size:128;not null" json:"contact"`
+	Category       string     `gorm:"size:64" json:"category"`
+	Address        string     `gorm:"size:256" json:"address"`
+	Description    string     `gorm:"size:1000" json:"description"`
+	Status         string     `gorm:"size:16;not null;index" json:"status"`
+	AdminNote      string     `gorm:"size:512" json:"admin_note"`
+	MerchantID     uint64     `gorm:"not null;default:0" json:"merchant_id"`
+	Username       string     `gorm:"size:64" json:"username"` // console account created on approval
+	HandledBy      string     `gorm:"size:128" json:"handled_by"`
+	HandledAt      *time.Time `json:"handled_at"`
+	CreatedAt      time.Time  `gorm:"index" json:"created_at"`
+	UpdatedAt      time.Time  `json:"updated_at"`
+}
+
+// ShopConversation is the message thread between one buyer and one merchant.
+type ShopConversation struct {
+	ID             uint64    `gorm:"primaryKey" json:"id"`
+	UserID         uint64    `gorm:"not null;uniqueIndex:uk_conversation" json:"user_id"`
+	MerchantID     uint64    `gorm:"not null;uniqueIndex:uk_conversation;index" json:"merchant_id"`
+	TelegramUserID int64     `gorm:"not null" json:"telegram_user_id"`
+	BotID          uint64    `gorm:"not null;default:0" json:"bot_id"` // bot of the buyer's latest message, used for replies
+	BuyerName      string    `gorm:"size:128" json:"buyer_name"`
+	LastMessage    string    `gorm:"size:128" json:"last_message"`
+	LastAt         time.Time `gorm:"index" json:"last_at"`
+	BuyerUnread    int       `gorm:"not null;default:0" json:"buyer_unread"`
+	MerchantUnread int       `gorm:"not null;default:0" json:"merchant_unread"`
+	CreatedAt      time.Time `json:"created_at"`
+}
+
+// ShopMessage is one message in a conversation; FromMerchant marks replies from the console.
+type ShopMessage struct {
+	ID             uint64    `gorm:"primaryKey" json:"id"`
+	ConversationID uint64    `gorm:"not null;index" json:"conversation_id"`
+	FromMerchant   bool      `gorm:"not null" json:"from_merchant"`
+	Content        string    `gorm:"type:text;not null" json:"content"`
+	ProductID      uint64    `gorm:"not null;default:0" json:"product_id"`
+	OrderID        uint64    `gorm:"not null;default:0" json:"order_id"`
+	Operator       string    `gorm:"size:128" json:"operator"`
+	CreatedAt      time.Time `gorm:"index" json:"created_at"`
+}

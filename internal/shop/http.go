@@ -106,6 +106,11 @@ func (h *Handler) Register(r *gin.Engine) {
 	api.GET("/member/points", h.pointsLog)
 	api.GET("/groups/:id", h.group)
 	api.GET("/products/:id/groups", h.productGroups)
+	api.GET("/merchant-applications/mine", h.myApplication)
+	api.POST("/merchant-applications", h.applyMerchant)
+	api.GET("/conversations", h.conversations)
+	api.GET("/conversations/merchant/:id", h.thread)
+	api.POST("/conversations/merchant/:id", h.sendMessage)
 	api.GET("/favorites", h.favorites)
 	api.POST("/favorites/:id", h.addFavorite)
 	api.DELETE("/favorites/:id", h.removeFavorite)
@@ -302,6 +307,50 @@ func (h *Handler) productGroups(c *gin.Context) {
 	h.reply(c, rows, err)
 }
 
+func (h *Handler) myApplication(c *gin.Context) {
+	a, err := h.svc.MyApplication(buyer(c).UserID)
+	h.reply(c, gin.H{"application": a}, err)
+}
+
+func (h *Handler) applyMerchant(c *gin.Context) {
+	var in ApplicationInput
+	if err := c.ShouldBindJSON(&in); err != nil {
+		h.fail(c, userErr("参数错误"))
+		return
+	}
+	a, err := h.svc.ApplyMerchant(buyer(c), in)
+	h.reply(c, a, err)
+}
+
+func (h *Handler) conversations(c *gin.Context) {
+	rows, err := h.svc.BuyerConversations(buyer(c).UserID)
+	h.reply(c, rows, err)
+}
+
+func (h *Handler) thread(c *gin.Context) {
+	t, err := h.svc.BuyerThread(buyer(c).UserID, idParam(c))
+	h.reply(c, t, err)
+}
+
+func (h *Handler) sendMessage(c *gin.Context) {
+	var in MessageInput
+	if err := c.ShouldBindJSON(&in); err != nil {
+		h.fail(c, userErr("参数错误"))
+		return
+	}
+	b := buyer(c)
+	var u model.TelegramUser
+	name := ""
+	if h.st.DB.Select("first_name", "last_name", "username").First(&u, b.UserID).Error == nil {
+		name = strings.TrimSpace(u.FirstName + " " + u.LastName)
+		if u.Username != "" {
+			name = strings.TrimSpace(name + " @" + u.Username)
+		}
+	}
+	m, err := h.svc.SendToMerchant(b, name, idParam(c), in)
+	h.reply(c, m, err)
+}
+
 func (h *Handler) favorites(c *gin.Context) {
 	rows, err := h.svc.Favorites(buyer(c).UserID)
 	h.reply(c, rows, err)
@@ -462,14 +511,14 @@ type BotNotifier struct {
 	ShopURL string // H5 shop address; enables the "view order" button when set
 }
 
-func (n BotNotifier) Notify(ctx context.Context, botID uint64, telegramUserID int64, html string, orderID uint64) error {
+func (n BotNotifier) Notify(ctx context.Context, botID uint64, telegramUserID int64, html string, link *Link) error {
 	sender, err := n.Bots.Sender(ctx, botID)
 	if err != nil {
 		return err
 	}
 	var kb *telegram.InlineKeyboardMarkup
-	if n.ShopURL != "" && orderID != 0 {
-		kb = &telegram.InlineKeyboardMarkup{InlineKeyboard: [][]telegram.InlineKeyboardButton{{telegram.ShopButton("📦 查看订单", n.ShopURL, fmt.Sprintf("/order/%d", orderID))}}}
+	if n.ShopURL != "" && link != nil {
+		kb = &telegram.InlineKeyboardMarkup{InlineKeyboard: [][]telegram.InlineKeyboardButton{{telegram.ShopButton(link.Text, n.ShopURL, link.Fragment)}}}
 	}
 	return sender.SendMessageWithParseMode(ctx, telegramUserID, html, "HTML", kb)
 }

@@ -363,7 +363,7 @@ func TestMerchantAccountGetsOnlyScopedShopPages(t *testing.T) {
 	accounts[3] = m
 	cookie := login(t, r, "shopowner", "owner-password")
 	w := authRequest(r, "GET", "/admin/api/session", "", cookie, false)
-	if !strings.Contains(w.Body.String(), `"permissions":["shop_products","shop_orders","shop_aftersales","shop_reviews","shop_reports","shop_settlements"]`) || !strings.Contains(w.Body.String(), `"merchant_name":"甲"`) {
+	if !strings.Contains(w.Body.String(), `"permissions":["shop_products","shop_orders","shop_aftersales","shop_reviews","shop_reports","shop_settlements","shop_messages"]`) || !strings.Contains(w.Body.String(), `"merchant_name":"甲"`) {
 		t.Fatal(w.Body.String())
 	}
 	for _, path := range []string{"/admin/api/configs", "/admin/api/withdrawals", "/admin/api/shop-coupons", "/admin/api/accounts"} {

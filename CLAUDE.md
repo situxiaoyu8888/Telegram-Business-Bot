@@ -16,6 +16,8 @@ docker compose up -d mariadb redis   # infra only, for local `make dev`
 make up / make down / make logs      # full stack via Docker Compose
 node --test internal/admin/ui_test.js   # admin UI JS tests (no browser needed)
 TEST_MYSQL_DSN='user:pw@tcp(host:3306)/' go test ./integration/...  # real-DB financial tests
+make test-integration                # same, in a throwaway MariaDB container
+make e2e                             # whole app + fake Telegram + headless browser (e2e/run.sh)
 ```
 
 The integration suite is skipped unless `TEST_MYSQL_DSN` is set. The DSN must **omit the database name**: the suite creates and drops its own uniquely named database and never reads `.env`.
@@ -34,6 +36,7 @@ The integration suite is skipped unless `TEST_MYSQL_DSN` is set. The DSN must **
 - **Shop v4**: `CreateOrders` locks the buyer's `telegram_users` row as its *first* statement (REPEATABLE READ: a plain read before the lock would fix a stale snapshot) so per-user limits (`limit_per_user`) hold; promo stock (`promo_stock`, nil = unlimited) is decremented conditionally and a sell-out is an error, never a silent price change. `Service.Run` also calls `GrantCommissions`, paying `shop_referral_rate` to the buyer's referrer once an order is completed and past `shop_aftersale_days` (`commission_done` makes it once-only). Share links are `/start p<productID>_<referralCode>` (parsed in the router); notifications and `/orders` use `telegram.ShopButton` web_app buttons.
 - **Shop v5**: member points/tiers live in `member.go` (`shop_members`, `shop_points_logs`; tier and points discounts are computed after the coupon in `orderDiscounts`, and spending points locks the member row). Points and member spend are granted with referral commissions in `GrantCommissions`. Group buying (`group.go`): group orders start in status `grouping` (not fulfillable), `joinGroup` locks the `shop_groups` row, the order that fills the group flips all of them to `paid`, and `ExpireGroups` (in `Service.Run`, every 2 minutes) cancels and refunds the rest. Admin logins are throttled via `internal/ratelimit` (Redis fixed windows), H5 API calls per buyer too.
 - **End-to-end checks**: `TELEGRAM_API_URL` lets the program talk to a fake Bot API server, so the whole app can run locally against temporary MariaDB/Redis and be driven with a headless browser (the H5 page needs `window.Telegram.WebApp.initData` signed with the bot token).
+- **Shop v6**: buyer↔merchant messages (`message.go`, one `shop_conversations` row per buyer and merchant, unread counters on both sides) and merchant applications (`apply.go`; approval lives in `internal/admin/applications.go` because it creates the console account). `e2e/e2e.js` is the end-to-end script: extend it when adding user-facing flows; it fails on any page error, console error or HTTP ≥ 400. CI is `.github/workflows/ci.yml`.
 - **Duplicate inserts**: do not use `OnConflict{DoNothing}` + `RowsAffected` to detect duplicates on tables with an auto-increment ID: on MariaDB GORM appends `RETURNING id`, so a skipped row still reports 1. Insert normally and check `store.IsDuplicate(err)`. Money-path tests live in `integration/shop_test.go` and need `TEST_MYSQL_DSN`.
 - **Schema changes**: add the model in `internal/model/models.go` and register it in the `AutoMigrate` list in `internal/store/store.go`.
 

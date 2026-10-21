@@ -20,7 +20,7 @@ var permissionKeys = []struct{ Key, Label string }{
 	{"merchants", "商家管理"}, {"users", "用户管理"}, {"withdrawals", "提现审核"}, {"deposits", "充值记录"},
 	{"addresses", "充值地址"}, {"tickets", "客服工单"}, {"menus", "动态菜单"}, {"configs", "系统配置"},
 	{"shop_products", "商城商品"}, {"shop_orders", "商城订单"}, {"shop_aftersales", "商城售后"}, {"shop_coupons", "商城优惠券"},
-	{"shop_reviews", "商品评价"}, {"shop_marketing", "商城运营"}, {"shop_reports", "销售报表"}, {"shop_settlements", "商家结算"}, {"shop_members", "会员积分"},
+	{"shop_reviews", "商品评价"}, {"shop_marketing", "商城运营"}, {"shop_reports", "销售报表"}, {"shop_settlements", "商家结算"}, {"shop_members", "会员积分"}, {"shop_messages", "商家消息"}, {"shop_applications", "入驻申请"},
 }
 
 func splitPermissions(s string) []string {

@@ -33,6 +33,7 @@ func New(mysqlDSN, redisAddr, redisPassword string, redisDB int) (*Store, error)
 		&model.ShopCategory{}, &model.ShopProduct{}, &model.ShopSKU{}, &model.ShopVirtualCode{}, &model.ShopCartItem{}, &model.ShopAddress{},
 		&model.ShopOrder{}, &model.ShopOrderItem{}, &model.ShopCoupon{}, &model.ShopUserCoupon{}, &model.ShopAfterSale{},
 		&model.ShopBanner{}, &model.ShopReview{}, &model.ShopMerchantEntry{}, &model.ShopSettlement{}, &model.ShopFavorite{}, &model.ShopView{}, &model.ShopMember{}, &model.ShopPointsLog{}, &model.ShopGroup{},
+		&model.ShopMerchantApplication{}, &model.ShopConversation{}, &model.ShopMessage{},
 	); err != nil {
 		return nil, fmt.Errorf("auto migrate: %w", err)
 	}
