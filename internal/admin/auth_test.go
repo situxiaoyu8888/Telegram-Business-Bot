@@ -70,6 +70,9 @@ func (m memoryAccounts) ByID(_ context.Context, id uint64) (*model.AdminUser, er
 }
 func (m memoryAccounts) TouchLogin(context.Context, uint64) error { return nil }
 
+// testAudit collects audit records written by the fixture's handler.
+var testAudit []model.AdminAuditLog
+
 // testRoles backs memoryAccounts.Role; accountFixture resets it (tests in this package are not parallel).
 var testRoles = map[uint64]*model.AdminRole{}
 
@@ -96,7 +99,8 @@ func accountFixture(t testing.TB) (*Handler, *gin.Engine, *memorySessions, memor
 	backend := &memorySessions{values: map[string]string{}}
 	testRoles = map[uint64]*model.AdminRole{}
 	accounts := memoryAccounts{1: testAccount(t, 1, "admin", "test-password", roleSuper), 2: testAccount(t, 2, "staff", "staff-password", roleAdmin)}
-	h := &Handler{sessionBackend: backend, accountBackend: accounts}
+	h := &Handler{sessionBackend: backend, accountBackend: accounts, auditSink: func(r model.AdminAuditLog) error { testAudit = append(testAudit, r); return nil }}
+	testAudit = nil
 	r := gin.New()
 	h.Register(r)
 	return h, r, backend, accounts
@@ -427,5 +431,22 @@ func TestRepeatedLoginFailuresAreThrottled(t *testing.T) {
 	// Another account from the same address is still allowed (under the per-IP limit).
 	if w := authRequest(r, "POST", "/admin/login", `{"username":"staff","password":"staff-password"}`, nil, true); w.Code != 200 {
 		t.Fatal(w.Code)
+	}
+}
+
+func TestAuditRecordsLoginsWritesAndFailuresButNotReads(t *testing.T) {
+	_, r, _, _ := accountFixture(t)
+	authRequest(r, "POST", "/admin/login", `{"username":"staff","password":"nope"}`, nil, true)
+	staff := login(t, r, "staff", "staff-password")
+	authRequest(r, "GET", "/admin/api/session", "", staff, false)
+	authRequest(r, "GET", "/admin/api/configs", "", staff, false)            // 403: no permission
+	authRequest(r, "POST", "/admin/api/account/password", `{}`, staff, true) // write
+	got := []string{}
+	for _, a := range testAudit {
+		got = append(got, fmt.Sprintf("%s %s %s %d", a.Username, a.Method, a.Path, a.Status))
+	}
+	want := []string{"staff LOGIN /admin/login (失败) 401", "staff LOGIN /admin/login 200", "staff GET /admin/api/configs 403", "staff POST /admin/api/account/password 400"}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("audit:\n%s", strings.Join(got, "\n"))
 	}
 }

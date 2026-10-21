@@ -34,7 +34,8 @@ type Handler struct {
 	accountBackend accountStore
 	limiter        ratelimit.Store // login throttling; defaults to the store's Redis
 	logger         *zap.Logger
-	publicURL      string // console address sent to approved merchants
+	publicURL      string                          // console address sent to approved merchants
+	auditSink      func(model.AdminAuditLog) error // where audit records go; defaults to the database
 	bots           *business.Service
 	st             *store.Store
 	wallet         *wallet.Service
@@ -158,6 +159,7 @@ func (h *Handler) Register(r *gin.Engine) {
 	}
 
 	api.POST("/account/password", h.changePassword)
+	api.GET("/audit-logs", requireSuper, h.auditLogs)
 	accounts := api.Group("/accounts", requireSuper)
 	accounts.GET("", h.listAccounts)
 	accounts.POST("", h.saveAccount)

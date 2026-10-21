@@ -38,6 +38,7 @@ type App struct {
 	tronWatcher   *trongrid.Watcher
 	pushService   *push.Service
 	shop          *shop.Service
+	admin         *admin.Handler
 }
 
 func New(cfg config.Config, logger *zap.Logger) (*App, error) {
@@ -104,7 +105,7 @@ func New(cfg config.Config, logger *zap.Logger) (*App, error) {
 	}).Register(engine)
 	a := &App{shop: shopSvc, businessBots: bots, cfg: cfg, logger: logger, store: st, tg: tg, tgRouter: tgRouter, adminTG: adminTG, adminTGRouter: adminTGRouter, engine: engine, pushService: pushSvc}
 	a.registerRoutes()
-	admin.New(
+	a.admin = admin.New(
 		st,
 		walletSvc,
 		supportSvc,
@@ -114,7 +115,8 @@ func New(cfg config.Config, logger *zap.Logger) (*App, error) {
 		cfg.UploadPublicBaseURL,
 		cfg.UploadMaxImageMB,
 		cfg.UploadMaxVideoMB,
-	).WithBots(bots).WithShop(shopSvc).WithLogger(logger).WithPublicURL(cfg.AdminPublicURL).Register(engine)
+	).WithBots(bots).WithShop(shopSvc).WithLogger(logger).WithPublicURL(cfg.AdminPublicURL)
+	a.admin.Register(engine)
 	tronClient := trongrid.New(cfg.TronGridBaseURL, cfg.TronGridAPIKey)
 	a.tronWatcher = trongrid.NewWatcher(st, walletSvc, refSvc, tronClient, cfg.TronUSDTContract, cfg.TronConfirmOnly, cfg.TronWatchInterval, logger)
 	return a, nil
@@ -169,6 +171,7 @@ func (a *App) StartWorkers(ctx context.Context) {
 	go a.pushService.Run(ctx)
 	go a.businessBots.Run(ctx)
 	go a.shop.Run(ctx)
+	go a.admin.PurgeAuditLogs(ctx, 180*24*time.Hour)
 	a.logger.Info("message push worker started")
 	if a.cfg.TronWatchEnabled {
 		go a.tronWatcher.Run(ctx)

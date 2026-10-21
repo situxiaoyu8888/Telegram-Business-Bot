@@ -189,9 +189,11 @@ func (h *Handler) login(c *gin.Context) {
 				_, _ = ratelimit.Hit(c.Request.Context(), limiter, k, loginWindow)
 			}
 		}
-		if h.logger != nil {
-			h.logger.Warn("admin login failed", zap.String("username", name), zap.String("ip", c.ClientIP()))
+		var id uint64
+		if u != nil {
+			id = u.ID
 		}
+		h.audit(c, id, name, "LOGIN", "/admin/login (失败)", 401, 0)
 		c.JSON(401, gin.H{"error": "用户名或密码错误"})
 		return
 	}
@@ -217,6 +219,7 @@ func (h *Handler) login(c *gin.Context) {
 		return
 	}
 	_ = h.accounts().TouchLogin(c.Request.Context(), u.ID)
+	h.audit(c, u.ID, u.Username, "LOGIN", "/admin/login", 200, 0)
 	h.cookie(c, token, int(sessionTTL.Seconds()))
 	c.JSON(200, gin.H{"ok": true})
 }
@@ -365,6 +368,15 @@ func merchantScope(c *gin.Context) uint64 {
 	return 0
 }
 
+// merchantOnly limits a route to merchant accounts (their own merchant's actions).
+func merchantOnly(c *gin.Context) {
+	if current(c).Role != roleMerchant || current(c).MerchantID == 0 {
+		c.AbortWithStatusJSON(403, gin.H{"error": "仅商家账号可操作"})
+		return
+	}
+	c.Next()
+}
+
 // platformOnly rejects merchant accounts on routes that change shared shop data.
 func platformOnly(c *gin.Context) {
 	if current(c).Role == roleMerchant {
@@ -400,10 +412,33 @@ func loginKeys(ip, username string) [2]string {
 func (h *Handler) accessLog(c *gin.Context) {
 	start := time.Now()
 	c.Next()
-	if h.logger == nil || (c.Request.Method == http.MethodGet && c.Writer.Status() < 400) {
+	if c.Request.Method == http.MethodGet && c.Writer.Status() < 400 {
 		return
 	}
-	h.logger.Info("admin request", zap.String("method", c.Request.Method), zap.String("path", c.Request.URL.Path), zap.Int("status", c.Writer.Status()), zap.Duration("took", time.Since(start)), zap.String("account", operator(c)), zap.String("ip", c.ClientIP()))
+	u := current(c)
+	h.audit(c, u.ID, u.Username, c.Request.Method, c.Request.URL.Path, c.Writer.Status(), time.Since(start))
+}
+
+// audit writes an audit record to the log file and the database. Request bodies are never kept,
+// so passwords and tokens in forms do not end up in the audit trail.
+func (h *Handler) audit(c *gin.Context, adminID uint64, username, method, path string, status int, took time.Duration) {
+	if h.logger != nil {
+		h.logger.Info("admin request", zap.String("method", method), zap.String("path", path), zap.Int("status", status), zap.Duration("took", took), zap.String("account", username), zap.String("ip", c.ClientIP()))
+	}
+	if len(path) > 255 {
+		path = path[:255]
+	}
+	rec := model.AdminAuditLog{AdminID: adminID, Username: username, Method: method, Path: path, Status: status, IP: c.ClientIP(), DurationMS: took.Milliseconds()}
+	sink := h.auditSink
+	if sink == nil {
+		if h.st == nil || h.st.DB == nil {
+			return
+		}
+		sink = func(r model.AdminAuditLog) error { return h.st.DB.Create(&r).Error }
+	}
+	if err := sink(rec); err != nil && h.logger != nil {
+		h.logger.Warn("write audit log", zap.Error(err))
+	}
 }
 
 func requireSuper(c *gin.Context) {

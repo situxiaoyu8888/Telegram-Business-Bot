@@ -1,9 +1,12 @@
 package admin
 
 import (
+	"context"
 	"errors"
+	"go.uber.org/zap"
 	"regexp"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/gin-gonic/gin"
@@ -219,4 +222,43 @@ func (h *Handler) changePassword(c *gin.Context) {
 		_ = h.sessions().Set(c.Request.Context(), sessionKey(token), sessionValue(me), sessionTTL).Err()
 	}
 	c.JSON(200, gin.H{"ok": true})
+}
+
+// auditLogs lists recent audit records, optionally by account, path and date (YYYY-MM-DD).
+func (h *Handler) auditLogs(c *gin.Context) {
+	rows := []model.AdminAuditLog{}
+	q := h.st.DB.Order("id desc").Limit(1000)
+	if u := strings.TrimSpace(c.Query("username")); u != "" {
+		q = q.Where("username = ?", u)
+	}
+	if p := strings.TrimSpace(c.Query("path")); p != "" {
+		q = q.Where("path LIKE ?", "%"+strings.NewReplacer(`\`, `\\`, "%", `\%`, "_", `\_`).Replace(p)+"%")
+	}
+	if d := c.Query("date"); d != "" {
+		day, err := time.ParseInLocation("2006-01-02", d, time.Local)
+		if err != nil {
+			c.JSON(400, gin.H{"error": "日期格式应为 YYYY-MM-DD"})
+			return
+		}
+		q = q.Where("created_at >= ? AND created_at < ?", day, day.AddDate(0, 0, 1))
+	}
+	if err := q.Find(&rows).Error; err != nil {
+		respond(c, err)
+		return
+	}
+	c.JSON(200, rows)
+}
+
+// PurgeAuditLogs deletes audit records older than keep, once a day until ctx ends.
+func (h *Handler) PurgeAuditLogs(ctx context.Context, keep time.Duration) {
+	for {
+		if err := h.st.DB.WithContext(ctx).Where("created_at < ?", time.Now().Add(-keep)).Delete(&model.AdminAuditLog{}).Error; err != nil && ctx.Err() == nil && h.logger != nil {
+			h.logger.Warn("purge audit logs", zap.Error(err))
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(24 * time.Hour):
+		}
+	}
 }

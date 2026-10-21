@@ -301,9 +301,24 @@ type Merchant struct {
 	// NotifyChatID receives shop order and after-sale notices from the primary bot (0 = none).
 	NotifyChatID int64 `gorm:"not null;default:0" json:"notify_chat_id"`
 	// CommissionRate is the platform's share of each completed shop order (0.05 = 5%).
-	CommissionRate string    `gorm:"type:decimal(10,6);not null;default:0" json:"commission_rate"`
-	Sort           int       `gorm:"not null;default:0" json:"sort"`
-	Enabled        bool      `gorm:"not null;index" json:"enabled"`
-	CreatedAt      time.Time `json:"created_at"`
-	UpdatedAt      time.Time `json:"updated_at"`
+	CommissionRate string `gorm:"type:decimal(10,6);not null;default:0" json:"commission_rate"`
+	// PayoutAddress is the merchant's last TRC20 payout address, offered again on the next request.
+	PayoutAddress string    `gorm:"size:64" json:"payout_address"`
+	Sort          int       `gorm:"not null;default:0" json:"sort"`
+	Enabled       bool      `gorm:"not null;index" json:"enabled"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
+}
+
+// AdminAuditLog records a console write, a failed console request or a login attempt.
+type AdminAuditLog struct {
+	ID         uint64    `gorm:"primaryKey" json:"id"`
+	AdminID    uint64    `gorm:"not null;default:0;index" json:"admin_id"`
+	Username   string    `gorm:"size:64;index" json:"username"`
+	Method     string    `gorm:"size:8;not null" json:"method"`
+	Path       string    `gorm:"size:255;not null" json:"path"`
+	Status     int       `gorm:"not null" json:"status"`
+	IP         string    `gorm:"size:64" json:"ip"`
+	DurationMS int64     `gorm:"not null" json:"duration_ms"`
+	CreatedAt  time.Time `gorm:"index" json:"created_at"`
 }

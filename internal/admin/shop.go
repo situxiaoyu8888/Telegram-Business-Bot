@@ -3,6 +3,7 @@ package admin
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"strconv"
 	"strings"
 	"time"
@@ -49,6 +50,10 @@ func (h *Handler) registerShop(api *gin.RouterGroup, can func(...string) gin.Han
 	api.GET("/shop-settlements/entries", can("shop_settlements"), h.shopEntries)
 	api.POST("/shop-settlements", can("shop_settlements"), platformOnly, h.createShopSettlement)
 	api.POST("/shop-settlements/:id/paid", can("shop_settlements"), platformOnly, h.payShopSettlement)
+	api.POST("/shop-settlements/payout", can("shop_settlements"), merchantOnly, h.requestPayout)
+	api.POST("/shop-settlements/:id/address", can("shop_settlements"), merchantOnly, h.setPayoutAddress)
+	api.GET("/shop-products/export", can("shop_products"), h.exportShopProducts)
+	api.POST("/shop-products/import", can("shop_products"), h.importShopProducts)
 
 	api.GET("/shop-members", can("shop_members"), h.shopMembers)
 	api.POST("/shop-members/adjust", can("shop_members"), platformOnly, h.adjustShopPoints)
@@ -462,6 +467,72 @@ func (h *Handler) replyShopMessage(c *gin.Context) {
 	}
 	_ = c.ShouldBindJSON(&b)
 	respond(c, h.shop.ReplyToBuyer(id, shop.Scope{MerchantID: merchantScope(c)}, b.Content, operator(c)))
+}
+
+func (h *Handler) requestPayout(c *gin.Context) {
+	var b struct {
+		Address string `json:"address"`
+		Note    string `json:"note"`
+	}
+	_ = c.ShouldBindJSON(&b)
+	st, err := h.shop.RequestPayout(merchantScope(c), b.Address, b.Note, operator(c))
+	if err != nil {
+		respond(c, err)
+		return
+	}
+	c.JSON(200, st)
+}
+
+func (h *Handler) setPayoutAddress(c *gin.Context) {
+	id, ok := idParam(c)
+	if !ok {
+		return
+	}
+	var b struct {
+		Address string `json:"address"`
+	}
+	_ = c.ShouldBindJSON(&b)
+	respond(c, h.shop.SetPayoutAddress(id, merchantScope(c), b.Address, operator(c)))
+}
+
+func (h *Handler) exportShopProducts(c *gin.Context) {
+	var buf bytes.Buffer
+	if err := h.shop.ExportProducts(&buf, merchantScope(c)); err != nil {
+		respond(c, err)
+		return
+	}
+	c.Header("Content-Disposition", `attachment; filename="shop-products-`+time.Now().Format("20060102")+`.csv"`)
+	c.Data(200, "text/csv; charset=utf-8", buf.Bytes())
+}
+
+// importShopProducts previews a product spreadsheet, or saves it when apply=1.
+func (h *Handler) importShopProducts(c *gin.Context) {
+	file, err := c.FormFile("file")
+	if err != nil {
+		c.JSON(400, gin.H{"error": "请选择 CSV 文件"})
+		return
+	}
+	if file.Size > 5<<20 {
+		c.JSON(400, gin.H{"error": "文件不能超过 5 MB"})
+		return
+	}
+	f, err := file.Open()
+	if err != nil {
+		respond(c, err)
+		return
+	}
+	defer f.Close()
+	data, err := io.ReadAll(io.LimitReader(f, 5<<20))
+	if err != nil {
+		respond(c, err)
+		return
+	}
+	res, err := h.shop.ImportProducts(data, merchantScope(c), c.Query("apply") == "1")
+	if err != nil {
+		respond(c, err)
+		return
+	}
+	c.JSON(200, res)
 }
 
 func listOrError(c *gin.Context, rows any, err error) {

@@ -257,20 +257,24 @@ type ShopMerchantEntry struct {
 
 // ShopSettlement groups unsettled ledger entries into one payout to a merchant.
 type ShopSettlement struct {
-	ID         uint64     `gorm:"primaryKey" json:"id"`
-	MerchantID uint64     `gorm:"not null;index" json:"merchant_id"`
-	Amount     string     `gorm:"type:decimal(24,6);not null" json:"amount"`
-	Commission string     `gorm:"type:decimal(24,6);not null" json:"commission"`
-	Net        string     `gorm:"type:decimal(24,6);not null" json:"net"` // what the merchant is paid
-	EntryCount int64      `gorm:"not null" json:"entry_count"`
-	Status     string     `gorm:"size:16;not null;index" json:"status"` // pending | paid
-	PayRef     string     `gorm:"size:255" json:"pay_ref"`
-	Note       string     `gorm:"size:512" json:"note"`
-	CreatedBy  string     `gorm:"size:128" json:"created_by"`
-	PaidBy     string     `gorm:"size:128" json:"paid_by"`
-	PaidAt     *time.Time `json:"paid_at"`
-	CreatedAt  time.Time  `gorm:"index" json:"created_at"`
-	UpdatedAt  time.Time  `json:"updated_at"`
+	ID         uint64 `gorm:"primaryKey" json:"id"`
+	MerchantID uint64 `gorm:"not null;index" json:"merchant_id"`
+	Amount     string `gorm:"type:decimal(24,6);not null" json:"amount"`
+	Commission string `gorm:"type:decimal(24,6);not null" json:"commission"`
+	Net        string `gorm:"type:decimal(24,6);not null" json:"net"` // what the merchant is paid
+	EntryCount int64  `gorm:"not null" json:"entry_count"`
+	Status     string `gorm:"size:16;not null;index" json:"status"` // pending | paid
+	PayRef     string `gorm:"size:255" json:"pay_ref"`
+	// PayoutAddress is set when the merchant requests the payout from the console.
+	PayoutAddress string     `gorm:"size:64" json:"payout_address"`
+	RequestedBy   string     `gorm:"size:128" json:"requested_by"`
+	RequestedAt   *time.Time `json:"requested_at"`
+	Note          string     `gorm:"size:512" json:"note"`
+	CreatedBy     string     `gorm:"size:128" json:"created_by"`
+	PaidBy        string     `gorm:"size:128" json:"paid_by"`
+	PaidAt        *time.Time `json:"paid_at"`
+	CreatedAt     time.Time  `gorm:"index" json:"created_at"`
+	UpdatedAt     time.Time  `json:"updated_at"`
 }
 
 // ShopFavorite is a product the buyer saved.

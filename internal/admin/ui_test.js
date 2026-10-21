@@ -176,3 +176,10 @@ test('navigation hides section titles that have no visible pages',()=>{
  assert.ok(html.includes('商城管理'));
  for(const title of ['运营工作台','业务管理','系统设置'])assert.ok(!html.includes(title),title);
 });
+test('audit log rows show logins and failed statuses distinctly',()=>{
+ const h=harness();
+ h.run("current='audit_logs'");
+ assert.ok(h.run("cell({method:'LOGIN'},'method')").includes('登录'));
+ assert.ok(h.run("cell({status:403},'status')").includes('red'));
+ assert.ok(h.run("cell({status:200},'status')").includes('green'));
+});

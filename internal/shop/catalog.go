@@ -332,137 +332,148 @@ type SKUInput struct {
 // SaveProduct creates or updates a product with its SKUs. A non-zero merchantScope (a merchant
 // account) pins the product to that merchant and refuses other merchants' products.
 func (s *Service) SaveProduct(p model.ShopProduct, skus []SKUInput, merchantScope uint64) (uint64, error) {
+	if err := s.validateProduct(&p, skus, merchantScope); err != nil {
+		return 0, err
+	}
+	err := s.st.DB.Transaction(func(tx *gorm.DB) error { return s.saveProductTx(tx, &p, skus, merchantScope) })
+	return p.ID, err
+}
+
+// validateProduct normalises a product and its SKUs before saving; it does not touch the database.
+func (s *Service) validateProduct(p *model.ShopProduct, skus []SKUInput, merchantScope uint64) error {
 	if merchantScope != 0 {
 		p.MerchantID = merchantScope
 	}
 	p.Name = strings.TrimSpace(p.Name)
 	if err := checkLen(p.Name, "商品名称", 128, true); err != nil {
-		return 0, err
+		return err
 	}
 	if p.Kind != "physical" && p.Kind != "virtual" {
-		return 0, userErr("商品类型无效")
+		return userErr("商品类型无效")
 	}
 	if p.Kind == "virtual" {
 		p.AllowExpress, p.AllowPickup = false, false
 	} else if !p.AllowExpress && !p.AllowPickup {
-		return 0, userErr("实物商品至少选择一种配送方式：快递或自提")
+		return userErr("实物商品至少选择一种配送方式：快递或自提")
 	}
 	if len(skus) == 0 {
-		return 0, userErr("至少需要一个规格")
+		return userErr("至少需要一个规格")
 	}
 	seen := map[string]bool{}
 	hasPromo := false
 	for i := range skus {
 		skus[i].Name = strings.TrimSpace(skus[i].Name)
 		if err := checkLen(skus[i].Name, "规格名称", 64, true); err != nil {
-			return 0, err
+			return err
 		}
 		if seen[skus[i].Name] {
-			return 0, userErr("规格名称重复：%s", skus[i].Name)
+			return userErr("规格名称重复：%s", skus[i].Name)
 		}
 		seen[skus[i].Name] = true
 		price, err := parseAmount(skus[i].Price, "价格")
 		if err != nil {
-			return 0, err
+			return err
 		}
 		if !price.IsPositive() {
-			return 0, userErr("规格「%s」的价格必须大于 0", skus[i].Name)
+			return userErr("规格「%s」的价格必须大于 0", skus[i].Name)
 		}
 		skus[i].Price = price.StringFixed(6)
 		promo := decimal.Zero
 		if strings.TrimSpace(skus[i].PromoPrice) != "" {
 			if promo, err = parseAmount(skus[i].PromoPrice, "活动价"); err != nil {
-				return 0, err
+				return err
 			}
 			if !promo.IsZero() && !promo.LessThan(price) {
-				return 0, userErr("规格「%s」的活动价必须低于原价", skus[i].Name)
+				return userErr("规格「%s」的活动价必须低于原价", skus[i].Name)
 			}
 		}
 		skus[i].PromoPrice = promo.StringFixed(6)
 		hasPromo = hasPromo || promo.IsPositive()
 		if skus[i].PromoStock != nil && (*skus[i].PromoStock < 0 || promo.IsZero()) {
-			return 0, userErr("规格「%s」：活动库存需为非负数，且需同时填写活动价", skus[i].Name)
+			return userErr("规格「%s」：活动库存需为非负数，且需同时填写活动价", skus[i].Name)
 		}
 		if skus[i].Stock < 0 {
-			return 0, userErr("库存不能为负数")
+			return userErr("库存不能为负数")
 		}
 	}
 	if (p.PromoStartsAt == nil) != (p.PromoEndsAt == nil) || (p.PromoStartsAt != nil && !p.PromoEndsAt.After(*p.PromoStartsAt)) {
-		return 0, userErr("限时活动需同时设置开始和结束时间，且结束晚于开始")
+		return userErr("限时活动需同时设置开始和结束时间，且结束晚于开始")
 	}
 	if p.LimitPerUser < 0 {
-		return 0, userErr("每人限购数量不能为负数")
+		return userErr("每人限购数量不能为负数")
 	}
 	if p.GroupSize != 0 {
 		rate, err := decimal.NewFromString(strings.TrimSpace(p.GroupRate))
 		if p.GroupSize < 2 || p.GroupSize > 100 || p.GroupHours < 1 || p.GroupHours > 720 || err != nil || !rate.IsPositive() || !rate.LessThan(decimal.NewFromInt(1)) {
-			return 0, userErr("拼团需 2–100 人、1–720 小时，拼团价比例在 0 到 1 之间（如 0.8）")
+			return userErr("拼团需 2–100 人、1–720 小时，拼团价比例在 0 到 1 之间（如 0.8）")
 		}
 		if p.Kind == "virtual" {
-			return 0, userErr("虚拟商品不支持拼团")
+			return userErr("虚拟商品不支持拼团")
 		}
 		p.GroupRate = rate.StringFixed(6)
 	} else {
 		p.GroupHours, p.GroupRate = 24, "1"
 	}
 	if hasPromo && p.PromoStartsAt == nil {
-		return 0, userErr("填写了活动价，请设置限时活动的开始和结束时间")
+		return userErr("填写了活动价，请设置限时活动的开始和结束时间")
 	}
-	err := s.st.DB.Transaction(func(tx *gorm.DB) error {
-		var m model.Merchant
-		if err := tx.Select("id").First(&m, p.MerchantID).Error; err != nil {
-			return userErr("请选择有效的商家")
-		}
-		var c model.ShopCategory
-		if err := tx.Select("id").First(&c, p.CategoryID).Error; err != nil {
-			return userErr("请选择有效的分类")
-		}
-		fields := map[string]any{"merchant_id": p.MerchantID, "category_id": p.CategoryID, "name": p.Name, "description": p.Description, "images": strings.TrimSpace(p.Images), "kind": p.Kind, "allow_express": p.AllowExpress, "allow_pickup": p.AllowPickup, "sort": p.Sort, "enabled": p.Enabled, "featured": p.Featured, "promo_starts_at": p.PromoStartsAt, "promo_ends_at": p.PromoEndsAt, "limit_per_user": p.LimitPerUser, "group_size": p.GroupSize, "group_hours": p.GroupHours, "group_rate": p.GroupRate}
-		if p.ID == 0 {
-			p.Images = strings.TrimSpace(p.Images)
-			if err := tx.Create(&p).Error; err != nil {
-				return err
-			}
-		} else {
-			var existing model.ShopProduct
-			if err := tx.Select("id", "kind", "merchant_id").First(&existing, p.ID).Error; err != nil || (merchantScope != 0 && existing.MerchantID != merchantScope) {
-				return userErr("商品不存在")
-			}
-			if existing.Kind != p.Kind {
-				return userErr("已创建的商品不能修改商品类型")
-			}
-			if err := tx.Model(&model.ShopProduct{}).Where("id = ?", p.ID).Updates(fields).Error; err != nil {
-				return err
-			}
-		}
-		var current []model.ShopSKU
-		if err := tx.Where("product_id = ?", p.ID).Find(&current).Error; err != nil {
+	return nil
+}
+
+// saveProductTx writes a validated product and its SKUs inside tx.
+func (s *Service) saveProductTx(tx *gorm.DB, p *model.ShopProduct, skus []SKUInput, merchantScope uint64) error {
+	var m model.Merchant
+	if err := tx.Select("id").First(&m, p.MerchantID).Error; err != nil {
+		return userErr("请选择有效的商家")
+	}
+	var c model.ShopCategory
+	if err := tx.Select("id").First(&c, p.CategoryID).Error; err != nil {
+		return userErr("请选择有效的分类")
+	}
+	fields := map[string]any{"merchant_id": p.MerchantID, "category_id": p.CategoryID, "name": p.Name, "description": p.Description, "images": strings.TrimSpace(p.Images), "kind": p.Kind, "allow_express": p.AllowExpress, "allow_pickup": p.AllowPickup, "sort": p.Sort, "enabled": p.Enabled, "featured": p.Featured, "promo_starts_at": p.PromoStartsAt, "promo_ends_at": p.PromoEndsAt, "limit_per_user": p.LimitPerUser, "group_size": p.GroupSize, "group_hours": p.GroupHours, "group_rate": p.GroupRate}
+	if p.ID == 0 {
+		p.Images = strings.TrimSpace(p.Images)
+		if err := tx.Create(p).Error; err != nil {
 			return err
 		}
-		byName := map[string]model.ShopSKU{}
-		for _, k := range current {
-			byName[k.Name] = k
+	} else {
+		var existing model.ShopProduct
+		if err := tx.Select("id", "kind", "merchant_id").First(&existing, p.ID).Error; err != nil || (merchantScope != 0 && existing.MerchantID != merchantScope) {
+			return userErr("商品不存在")
 		}
-		for i, in := range skus {
-			if old, ok := byName[in.Name]; ok {
-				if err := tx.Model(&model.ShopSKU{}).Where("id = ?", old.ID).Updates(map[string]any{"price": in.Price, "promo_price": in.PromoPrice, "promo_stock": in.PromoStock, "stock": in.Stock, "sort": i, "enabled": true}).Error; err != nil {
-					return err
-				}
-				delete(byName, in.Name)
-				continue
-			}
-			if err := tx.Create(&model.ShopSKU{ProductID: p.ID, Name: in.Name, Price: in.Price, PromoPrice: in.PromoPrice, PromoStock: in.PromoStock, Stock: in.Stock, Sort: i, Enabled: true}).Error; err != nil {
+		if existing.Kind != p.Kind {
+			return userErr("已创建的商品不能修改商品类型")
+		}
+		if err := tx.Model(&model.ShopProduct{}).Where("id = ?", p.ID).Updates(fields).Error; err != nil {
+			return err
+		}
+	}
+	var current []model.ShopSKU
+	if err := tx.Where("product_id = ?", p.ID).Find(&current).Error; err != nil {
+		return err
+	}
+	byName := map[string]model.ShopSKU{}
+	for _, k := range current {
+		byName[k.Name] = k
+	}
+	for i, in := range skus {
+		if old, ok := byName[in.Name]; ok {
+			if err := tx.Model(&model.ShopSKU{}).Where("id = ?", old.ID).Updates(map[string]any{"price": in.Price, "promo_price": in.PromoPrice, "promo_stock": in.PromoStock, "stock": in.Stock, "sort": i, "enabled": true}).Error; err != nil {
 				return err
 			}
+			delete(byName, in.Name)
+			continue
 		}
-		for _, gone := range byName {
-			if err := tx.Model(&model.ShopSKU{}).Where("id = ?", gone.ID).Update("enabled", false).Error; err != nil {
-				return err
-			}
+		if err := tx.Create(&model.ShopSKU{ProductID: p.ID, Name: in.Name, Price: in.Price, PromoPrice: in.PromoPrice, PromoStock: in.PromoStock, Stock: in.Stock, Sort: i, Enabled: true}).Error; err != nil {
+			return err
 		}
-		return nil
-	})
-	return p.ID, err
+	}
+	for _, gone := range byName {
+		if err := tx.Model(&model.ShopSKU{}).Where("id = ?", gone.ID).Update("enabled", false).Error; err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // ImportCodes adds virtual codes (one per non-empty line) to a virtual SKU and raises its stock to match.

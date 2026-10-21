@@ -272,6 +272,41 @@ async function toastText(page) { return page.$eval('#toast', e => e.hidden ? '' 
   }
   await fpage.goto(BASE + '/shop/#/apply'); await fpage.waitForTimeout(700); await shot(fpage, '45-apply-approved');
 
+  step('batch import products via the console');
+  await nav(admin, 'shop_products');
+  const exported = await admin.evaluate(async () => (await fetch('/admin/api/shop-products/export')).text());
+  if (!exported.includes('招牌宫保鸡丁')) problems.push('export missing products');
+  const importFile = SHOTS + '/../import.csv';
+  fs.writeFileSync(importFile, exported.trimEnd() + '\n,曼谷中餐馆,中餐,批量导入的炒饭,实物,快递,标准,4.5,30,,,0,是,否,0,,\n');
+  await admin.click('#importProducts'); await admin.setInputFiles('#importFile', importFile); await admin.waitForTimeout(1200);
+  await shot(admin, '46-import-preview');
+  const previewText = await admin.textContent('#importResult');
+  if (!/新建\s*1/.test(previewText)) problems.push('import preview unexpected: ' + previewText.slice(0, 120));
+  await submitModal(admin); await admin.waitForTimeout(600);
+  if (sql("select count(*) from shop_products where name='批量导入的炒饭'") !== '1') problems.push('imported product not created');
+
+  step('audit log page');
+  await nav(admin, 'audit_logs'); await shot(admin, '47-audit-log');
+  if (!(await admin.innerHTML('#content')).includes('登录')) problems.push('audit log shows no logins');
+
+  step('merchant account requests a payout');
+  await adminApi(admin, 'accounts', 'POST', { username: 'meal-owner', password: 'owner-pass-123', role: 'merchant', merchant_id: meal.merchant_id, enabled: true });
+  const groupOrder = sql(`select id from shop_orders where group_id=${groupId} order by id limit 1`);
+  await adminApi(admin, `shop-orders/${groupOrder}/fulfil`, 'POST', { carrier: '泰国邮政', tracking_no: 'TH2' });
+  await adminApi(admin, `shop-orders/${groupOrder}/complete`, 'POST', {});
+  const octx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const owner = await octx.newPage(); watch(owner, 'owner');
+  await owner.goto(BASE + '/admin/login');
+  await owner.fill('#username', 'meal-owner'); await owner.fill('#password', 'owner-pass-123');
+  await Promise.all([owner.waitForURL('**/admin/'), owner.click('#submit')]);
+  await owner.waitForTimeout(800); await nav(owner, 'shop_settlements'); await shot(owner, '48-owner-settlements');
+  await owner.click('[data-payout]'); await owner.fill('#payoutAddr', 'TLa2f6VPqDgRE67v1736s7bJ8Ray5wYjU7'); await submitModal(owner);
+  await owner.waitForTimeout(600); await shot(owner, '49-owner-payout-requested');
+  const payout = sql(`select concat(status,' ',payout_address,' ',net) from shop_settlements order by id desc limit 1`);
+  console.log('  payout', payout);
+  if (!payout.startsWith('pending TLa2f6VPqDgRE67v1736s7bJ8Ray5wYjU7')) problems.push('payout request not recorded: ' + payout);
+  await octx.close();
+
   step('bot: /orders and share link');
   const msg = (text) => fetch(TG + '/inject', { method: 'POST', body: JSON.stringify({ message: { message_id: 1, date: 1, text, from: { id: 9002, first_name: '小红' }, chat: { id: 9002, type: 'private' } } }) });
   const code = sql('select referral_code from telegram_users where telegram_user_id=9001');

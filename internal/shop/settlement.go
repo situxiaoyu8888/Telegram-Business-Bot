@@ -11,6 +11,7 @@ import (
 	"gorm.io/gorm/clause"
 
 	"telegram-business-bot/internal/model"
+	"telegram-business-bot/internal/wallet"
 )
 
 // Settlement statuses.
@@ -59,6 +60,7 @@ type MerchantBalance struct {
 	MerchantID   uint64 `json:"merchant_id"`
 	MerchantName string `json:"merchant_name"`
 	Rate         string `json:"commission_rate"`
+	PayoutAddr   string `json:"payout_address"` // last address the merchant requested a payout to
 	Entries      int64  `json:"entries"`
 	Amount       string `json:"amount"`
 	Commission   string `json:"commission"`
@@ -70,7 +72,7 @@ type MerchantBalance struct {
 // MerchantBalances lists every merchant (or the scoped one) with unsettled and settled totals.
 func (s *Service) MerchantBalances(merchantID uint64) ([]MerchantBalance, error) {
 	var merchants []model.Merchant
-	q := s.st.DB.Select("id", "name", "commission_rate").Order("id asc")
+	q := s.st.DB.Select("id", "name", "commission_rate", "payout_address").Order("id asc")
 	if merchantID != 0 {
 		q = q.Where("id = ?", merchantID)
 	}
@@ -97,7 +99,7 @@ func (s *Service) MerchantBalances(merchantID uint64) ([]MerchantBalance, error)
 	}
 	out := make([]MerchantBalance, 0, len(merchants))
 	for _, m := range merchants {
-		b := MerchantBalance{MerchantID: m.ID, MerchantName: m.Name, Rate: amount(m.CommissionRate).StringFixed(6), Amount: "0.000000", Commission: "0.000000", Net: "0.000000", SettledNet: "0.000000", PendingNet: "0.000000"}
+		b := MerchantBalance{MerchantID: m.ID, MerchantName: m.Name, PayoutAddr: m.PayoutAddress, Rate: amount(m.CommissionRate).StringFixed(6), Amount: "0.000000", Commission: "0.000000", Net: "0.000000", SettledNet: "0.000000", PendingNet: "0.000000"}
 		for _, o := range open {
 			if o.MerchantID == m.ID {
 				b.Entries, b.Amount, b.Commission, b.Net = o.N, amount(o.Amount).StringFixed(6), amount(o.Commission).StringFixed(6), amount(o.Net).StringFixed(6)
@@ -137,6 +139,20 @@ func (s *Service) CreateSettlement(merchantID uint64, note, operator string) (*m
 	}
 	var st model.ShopSettlement
 	err := s.st.DB.Transaction(func(tx *gorm.DB) error {
+		var err error
+		st, err = createSettlementTx(tx, merchantID, note, operator)
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &st, nil
+}
+
+// createSettlementTx claims the merchant's unsettled entries into a pending settlement inside tx.
+func createSettlementTx(tx *gorm.DB, merchantID uint64, note, operator string) (model.ShopSettlement, error) {
+	var st model.ShopSettlement
+	err := func() error {
 		var entries []model.ShopMerchantEntry
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("merchant_id = ? AND settlement_id = 0", merchantID).Find(&entries).Error; err != nil {
 			return err
@@ -155,11 +171,71 @@ func (s *Service) CreateSettlement(merchantID uint64, note, operator string) (*m
 			return err
 		}
 		return tx.Model(&model.ShopMerchantEntry{}).Where("id IN ?", ids).Update("settlement_id", st.ID).Error
+	}()
+	return st, err
+}
+
+// RequestPayout lets a merchant account settle its own unsettled balance to a TRC20 address in one
+// step: a pending settlement is created with the address, and the platform pays it outside the system.
+func (s *Service) RequestPayout(merchantID uint64, address, note, operator string) (*model.ShopSettlement, error) {
+	address = strings.TrimSpace(address)
+	if !wallet.ValidTRONAddress(address) {
+		return nil, userErr("请填写有效的 TRC20 收款地址")
+	}
+	if err := checkLen(note, "备注", 512, false); err != nil {
+		return nil, err
+	}
+	var st model.ShopSettlement
+	err := s.st.DB.Transaction(func(tx *gorm.DB) error {
+		var err error
+		if st, err = createSettlementTx(tx, merchantID, note, operator); err != nil {
+			return err
+		}
+		return s.setPayoutAddress(tx, &st, address, operator)
 	})
 	if err != nil {
 		return nil, err
 	}
+	s.notifyPayoutRequest(st)
 	return &st, nil
+}
+
+// SetPayoutAddress attaches the merchant's address to a pending settlement the platform created.
+func (s *Service) SetPayoutAddress(id, merchantID uint64, address, operator string) error {
+	address = strings.TrimSpace(address)
+	if !wallet.ValidTRONAddress(address) {
+		return userErr("请填写有效的 TRC20 收款地址")
+	}
+	var st model.ShopSettlement
+	err := s.st.DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND merchant_id = ?", id, merchantID).First(&st).Error; err != nil {
+			return userErr("结算单不存在")
+		}
+		if st.Status != SettlementPending {
+			return userErr("结算单已打款")
+		}
+		return s.setPayoutAddress(tx, &st, address, operator)
+	})
+	if err == nil {
+		s.notifyPayoutRequest(st)
+	}
+	return err
+}
+
+func (s *Service) setPayoutAddress(tx *gorm.DB, st *model.ShopSettlement, address, operator string) error {
+	now := time.Now()
+	st.PayoutAddress, st.RequestedBy, st.RequestedAt = address, operator, &now
+	if err := tx.Model(&model.ShopSettlement{}).Where("id = ?", st.ID).Updates(map[string]any{"payout_address": address, "requested_by": operator, "requested_at": now}).Error; err != nil {
+		return err
+	}
+	return tx.Model(&model.Merchant{}).Where("id = ?", st.MerchantID).Update("payout_address", address).Error
+}
+
+func (s *Service) notifyPayoutRequest(st model.ShopSettlement) {
+	var m model.Merchant
+	s.st.DB.Select("name").First(&m, st.MerchantID)
+	// Administrators only: the merchant's own contact made the request.
+	s.notifyStaff(0, fmt.Sprintf("💸 <b>商家申请提现</b>\n\n商家：%s\n结算单：#%d\n金额：<code>%s USDT</code>\n收款地址（TRC20）：<code>%s</code>\n\n请线下打款后在后台「商家结算」中标记已打款。", htmlEscape(m.Name), st.ID, amount(st.Net).String(), htmlEscape(st.PayoutAddress)))
 }
 
 // MarkSettlementPaid records that the platform paid a pending settlement outside the system.
