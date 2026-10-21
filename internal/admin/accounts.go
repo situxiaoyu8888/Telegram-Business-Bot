@@ -12,6 +12,7 @@ import (
 	"gorm.io/gorm/clause"
 
 	"telegram-business-bot/internal/model"
+	"telegram-business-bot/internal/store"
 )
 
 const (
@@ -140,11 +141,11 @@ func (h *Handler) saveAccount(c *gin.Context) {
 				if err != nil {
 					return err
 				}
-				res := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&model.AdminUser{Username: name, PasswordHash: hash, Role: b.Role, RoleID: b.RoleID, MerchantID: b.MerchantID, Enabled: b.Enabled})
-				if res.Error == nil && res.RowsAffected == 0 {
+				err = tx.Create(&model.AdminUser{Username: name, PasswordHash: hash, Role: b.Role, RoleID: b.RoleID, MerchantID: b.MerchantID, Enabled: b.Enabled}).Error
+				if store.IsDuplicate(err) {
 					return errors.New("用户名已存在")
 				}
-				return res.Error
+				return err
 			}
 			updates := map[string]any{"role": b.Role, "role_id": b.RoleID, "merchant_id": b.MerchantID, "enabled": b.Enabled}
 			if b.Password != "" {

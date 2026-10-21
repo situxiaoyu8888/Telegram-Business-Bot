@@ -333,7 +333,7 @@ func requirePermission(pages ...string) gin.HandlerFunc {
 	}
 }
 
-var merchantPermissions = []string{"shop_products", "shop_orders", "shop_aftersales"}
+var merchantPermissions = []string{"shop_products", "shop_orders", "shop_aftersales", "shop_reviews", "shop_reports", "shop_settlements"}
 
 // merchantScope is the merchant a merchant account is limited to, or 0 for platform accounts.
 func merchantScope(c *gin.Context) uint64 {

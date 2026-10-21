@@ -362,7 +362,7 @@ func TestMerchantAccountGetsOnlyScopedShopPages(t *testing.T) {
 	accounts[3] = m
 	cookie := login(t, r, "shopowner", "owner-password")
 	w := authRequest(r, "GET", "/admin/api/session", "", cookie, false)
-	if !strings.Contains(w.Body.String(), `"permissions":["shop_products","shop_orders","shop_aftersales"]`) || !strings.Contains(w.Body.String(), `"merchant_name":"甲"`) {
+	if !strings.Contains(w.Body.String(), `"permissions":["shop_products","shop_orders","shop_aftersales","shop_reviews","shop_reports","shop_settlements"]`) || !strings.Contains(w.Body.String(), `"merchant_name":"甲"`) {
 		t.Fatal(w.Body.String())
 	}
 	for _, path := range []string{"/admin/api/configs", "/admin/api/withdrawals", "/admin/api/shop-coupons", "/admin/api/accounts"} {
@@ -372,6 +372,15 @@ func TestMerchantAccountGetsOnlyScopedShopPages(t *testing.T) {
 	}
 	if w := authRequest(r, "POST", "/admin/api/shop-categories", `{"name":"x"}`, cookie, true); w.Code != 403 {
 		t.Fatal("merchant changed shared categories", w.Code)
+	}
+	if w := authRequest(r, "POST", "/admin/api/shop-settlements", `{"merchant_id":9}`, cookie, true); w.Code != 403 {
+		t.Fatal("merchant created its own settlement", w.Code)
+	}
+	if w := authRequest(r, "POST", "/admin/api/shop-reviews/1/hidden", `{"hidden":true}`, cookie, true); w.Code != 403 {
+		t.Fatal("merchant hid a review", w.Code)
+	}
+	if w := authRequest(r, "GET", "/admin/api/shop-banners", "", cookie, false); w.Code != 403 {
+		t.Fatal("merchant opened marketing", w.Code)
 	}
 	if w := authRequest(r, "GET", "/admin/api/dashboard", "", cookie, false); w.Code != 200 || w.Body.String() != "{}" {
 		t.Fatal("platform figures shown to merchant", w.Body.String())

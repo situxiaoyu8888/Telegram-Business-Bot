@@ -21,7 +21,7 @@ function harness(){
  parse(html.split('<script>')[0]);
  const fixtures={bots:[],routes:[],dashboard:{},pushes:[]};
  const document={getElementById:id=>elements.get(id),body:{style:{}},activeElement:null,addEventListener(){},createElement:tag=>new Element('',tag)};
- const context=vm.createContext({document,window:{innerHeight:900,addEventListener(){}},Event,location:{replace(){}},console,setTimeout(){return 1},clearTimeout(){},Date,Intl,FormData:class{},fetch:async(url,options={})=>{requests.push({url,options});return {ok:true,json:async()=>options.method?{id:1,ok:true}:(fixtures[url.replace('/admin/api/','')]||[])}}});
+ const context=vm.createContext({document,window:{innerHeight:900,addEventListener(){}},Event,location:{replace(){}},console,URLSearchParams,setTimeout(){return 1},clearTimeout(){},Date,Intl,FormData:class{},fetch:async(url,options={})=>{requests.push({url,options});return {ok:true,json:async()=>options.method?{id:1,ok:true}:(fixtures[url.replace('/admin/api/','')]||[])}}});
  const script=html.split('<script>')[1].split('</script>')[0];
  vm.runInContext(script.slice(0,script.lastIndexOf("$('brandIcon').innerHTML")),context);
  return {run:code=>vm.runInContext(code,context),elements,requests};
@@ -159,4 +159,13 @@ test('merchant accounts see their shop pages but not categories or platform stat
  for(const page of ['shop_products','shop_orders','shop_aftersales'])assert.ok(html.includes(`data-nav="${page}"`),page);
  assert.ok(!html.includes('data-nav="shop_categories"'));
  assert.equal(h.elements.get('stats').innerHTML,'');
+});
+test('merchant accounts get reports, settlements and reviews but not marketing',()=>{
+ const h=harness();
+ h.run("me={id:3,role:'merchant',permissions:['shop_products','shop_orders','shop_aftersales','shop_reviews','shop_reports','shop_settlements']};nav()");
+ const html=h.elements.get('navigation').innerHTML;
+ for(const page of ['shop_reports','shop_settlements','shop_reviews'])assert.ok(html.includes(`data-nav="${page}"`),page);
+ assert.ok(!html.includes('data-nav="shop_marketing"'));
+ h.run("reportRange={from:'2026-10-01',to:'2026-10-07'}");
+ assert.equal(h.run("reportQuery()"),'?from=2026-10-01&to=2026-10-07');
 });

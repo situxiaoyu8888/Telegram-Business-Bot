@@ -162,6 +162,16 @@ func (s *Service) configString(key string) string {
 	return strings.TrimSpace(c.Value)
 }
 
+// effectivePrice is the SKU price at now: its promo price while the product's promo window is
+// open, otherwise the regular price. Nothing is stored, so prices revert by themselves.
+func effectivePrice(price, promoPrice string, startsAt, endsAt *time.Time, now time.Time) (current string, onPromo bool) {
+	promo := amount(promoPrice)
+	if promo.IsPositive() && startsAt != nil && endsAt != nil && !now.Before(*startsAt) && now.Before(*endsAt) {
+		return promo.StringFixed(6), true
+	}
+	return price, false
+}
+
 // firstImage returns the cover image of a newline-separated image list.
 func firstImage(images string) string {
 	for _, line := range strings.Split(images, "\n") {

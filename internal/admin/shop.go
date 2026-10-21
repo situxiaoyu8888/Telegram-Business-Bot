@@ -1,6 +1,8 @@
 package admin
 
 import (
+	"bytes"
+	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -30,6 +32,23 @@ func (h *Handler) registerShop(api *gin.RouterGroup, can func(...string) gin.Han
 	api.POST("/shop-aftersales/:id/approve", can("shop_aftersales"), h.approveShopAfterSale)
 	api.POST("/shop-aftersales/:id/refund", can("shop_aftersales"), h.refundShopAfterSale)
 	api.POST("/shop-aftersales/:id/reject", can("shop_aftersales"), h.rejectShopAfterSale)
+
+	api.GET("/shop-reviews", can("shop_reviews"), h.shopReviews)
+	api.POST("/shop-reviews/:id/reply", can("shop_reviews"), h.replyShopReview)
+	api.POST("/shop-reviews/:id/hidden", can("shop_reviews"), platformOnly, h.hideShopReview)
+
+	api.GET("/shop-banners", can("shop_marketing"), h.shopBanners)
+	api.POST("/shop-banners", can("shop_marketing"), h.saveShopBanner)
+	api.DELETE("/shop-banners/:id", can("shop_marketing"), h.deleteShopBanner)
+
+	api.GET("/shop-reports", can("shop_reports"), h.shopReport)
+	api.GET("/shop-orders/export", can("shop_orders", "shop_reports"), h.exportShopOrders)
+
+	api.GET("/shop-settlements", can("shop_settlements"), h.shopSettlements)
+	api.GET("/shop-settlements/balances", can("shop_settlements"), h.shopBalances)
+	api.GET("/shop-settlements/entries", can("shop_settlements"), h.shopEntries)
+	api.POST("/shop-settlements", can("shop_settlements"), platformOnly, h.createShopSettlement)
+	api.POST("/shop-settlements/:id/paid", can("shop_settlements"), platformOnly, h.payShopSettlement)
 
 	api.GET("/shop-coupons", can("shop_coupons"), h.shopCoupons)
 	api.POST("/shop-coupons", can("shop_coupons"), h.saveShopCoupon)
@@ -234,6 +253,156 @@ func (h *Handler) rejectShopAfterSale(c *gin.Context) {
 	}
 	_ = c.ShouldBindJSON(&b)
 	respond(c, h.shop.RejectAfterSale(id, shop.Scope{MerchantID: merchantScope(c)}, b.Note, operator(c)))
+}
+
+func (h *Handler) shopReviews(c *gin.Context) {
+	rows, err := h.shop.AdminReviews(merchantScope(c))
+	listOrError(c, rows, err)
+}
+
+func (h *Handler) replyShopReview(c *gin.Context) {
+	id, ok := idParam(c)
+	if !ok {
+		return
+	}
+	var b struct {
+		Reply string `json:"reply"`
+	}
+	_ = c.ShouldBindJSON(&b)
+	respond(c, h.shop.ReplyReview(id, shop.Scope{MerchantID: merchantScope(c)}, b.Reply))
+}
+
+func (h *Handler) hideShopReview(c *gin.Context) {
+	id, ok := idParam(c)
+	if !ok {
+		return
+	}
+	var b struct {
+		Hidden bool `json:"hidden"`
+	}
+	_ = c.ShouldBindJSON(&b)
+	respond(c, h.shop.SetReviewHidden(id, b.Hidden))
+}
+
+func (h *Handler) shopBanners(c *gin.Context) {
+	rows, err := h.shop.AdminBanners()
+	listOrError(c, rows, err)
+}
+
+func (h *Handler) saveShopBanner(c *gin.Context) {
+	var b model.ShopBanner
+	if err := c.ShouldBindJSON(&b); err != nil {
+		respond(c, err)
+		return
+	}
+	respond(c, h.shop.SaveBanner(b))
+}
+
+func (h *Handler) deleteShopBanner(c *gin.Context) {
+	id, ok := idParam(c)
+	if !ok {
+		return
+	}
+	respond(c, h.shop.DeleteBanner(id))
+}
+
+// dateRange reads from/to (YYYY-MM-DD, both inclusive, server time) and defaults to the last 30 days.
+func dateRange(c *gin.Context) (time.Time, time.Time, bool) {
+	today := time.Now()
+	today = time.Date(today.Year(), today.Month(), today.Day(), 0, 0, 0, 0, time.Local)
+	from, to := today.AddDate(0, 0, -29), today
+	var err error
+	if s := c.Query("from"); s != "" {
+		if from, err = time.ParseInLocation("2006-01-02", s, time.Local); err != nil {
+			c.JSON(400, gin.H{"error": "开始日期格式应为 YYYY-MM-DD"})
+			return from, to, false
+		}
+	}
+	if s := c.Query("to"); s != "" {
+		if to, err = time.ParseInLocation("2006-01-02", s, time.Local); err != nil {
+			c.JSON(400, gin.H{"error": "结束日期格式应为 YYYY-MM-DD"})
+			return from, to, false
+		}
+	}
+	return from, to.AddDate(0, 0, 1), true
+}
+
+func (h *Handler) shopReport(c *gin.Context) {
+	from, to, ok := dateRange(c)
+	if !ok {
+		return
+	}
+	r, err := h.shop.SalesReport(merchantScope(c), from, to)
+	if err != nil {
+		respond(c, err)
+		return
+	}
+	c.JSON(200, r)
+}
+
+func (h *Handler) exportShopOrders(c *gin.Context) {
+	from, to, ok := dateRange(c)
+	if !ok {
+		return
+	}
+	var buf bytes.Buffer
+	if err := h.shop.ExportOrders(&buf, merchantScope(c), c.Query("status"), from, to); err != nil {
+		respond(c, err)
+		return
+	}
+	name := fmt.Sprintf("shop-orders-%s-%s.csv", from.Format("20060102"), to.AddDate(0, 0, -1).Format("20060102"))
+	c.Header("Content-Disposition", `attachment; filename="`+name+`"`)
+	c.Data(200, "text/csv; charset=utf-8", buf.Bytes())
+}
+
+func (h *Handler) shopSettlements(c *gin.Context) {
+	rows, err := h.shop.Settlements(merchantScope(c))
+	listOrError(c, rows, err)
+}
+
+func (h *Handler) shopBalances(c *gin.Context) {
+	rows, err := h.shop.MerchantBalances(merchantScope(c))
+	listOrError(c, rows, err)
+}
+
+func (h *Handler) shopEntries(c *gin.Context) {
+	settlementID, _ := strconv.ParseUint(c.Query("settlement_id"), 10, 64)
+	merchantID, _ := strconv.ParseUint(c.Query("merchant_id"), 10, 64)
+	if scope := merchantScope(c); scope != 0 {
+		merchantID = scope
+	}
+	rows, err := h.shop.MerchantEntries(merchantID, settlementID)
+	listOrError(c, rows, err)
+}
+
+func (h *Handler) createShopSettlement(c *gin.Context) {
+	var b struct {
+		MerchantID uint64 `json:"merchant_id"`
+		Note       string `json:"note"`
+	}
+	if err := c.ShouldBindJSON(&b); err != nil || b.MerchantID == 0 {
+		c.JSON(400, gin.H{"error": "请选择商家"})
+		return
+	}
+	st, err := h.shop.CreateSettlement(b.MerchantID, b.Note, operator(c))
+	if err != nil {
+		respond(c, err)
+		return
+	}
+	c.JSON(200, st)
+}
+
+func (h *Handler) payShopSettlement(c *gin.Context) {
+	id, ok := idParam(c)
+	if !ok {
+		return
+	}
+	var b struct {
+		PayRef string `json:"pay_ref"`
+		Note   string `json:"note"`
+	}
+	_ = c.ShouldBindJSON(&b)
+	respond(c, h.shop.MarkSettlementPaid(id, b.PayRef, b.Note, operator(c)))
 }
 
 func listOrError(c *gin.Context, rows any, err error) {

@@ -72,9 +72,11 @@ func (h *Handler) Register(r *gin.Engine) {
 
 	api := r.Group("/shop/api", h.authenticate)
 	api.GET("/me", h.me)
+	api.GET("/home", h.home)
 	api.GET("/categories", h.categories)
 	api.GET("/products", h.products)
 	api.GET("/products/:id", h.product)
+	api.GET("/products/:id/reviews", h.productReviews)
 	api.GET("/cart", h.cart)
 	api.POST("/cart", h.setCart)
 	api.GET("/addresses", h.addresses)
@@ -89,6 +91,7 @@ func (h *Handler) Register(r *gin.Engine) {
 	api.GET("/orders/:id", h.order)
 	api.POST("/orders/:id/cancel", h.cancelOrder)
 	api.POST("/orders/:id/confirm", h.confirmOrder)
+	api.POST("/orders/:id/review", h.reviewOrder)
 	api.GET("/aftersales", h.myAfterSales)
 	api.POST("/aftersales", h.applyAfterSale)
 	api.POST("/aftersales/:id/cancel", h.cancelAfterSale)
@@ -187,6 +190,28 @@ func (h *Handler) me(c *gin.Context) {
 		name = u.Username
 	}
 	c.JSON(http.StatusOK, gin.H{"name": name, "username": u.Username, "telegram_user_id": u.TelegramUserID, "balance": available.StringFixed(6)})
+}
+
+func (h *Handler) home(c *gin.Context) {
+	home, err := h.svc.Home()
+	h.reply(c, home, err)
+}
+
+func (h *Handler) productReviews(c *gin.Context) {
+	page, _ := strconv.Atoi(c.Query("page"))
+	rows, err := h.svc.ProductReviews(idParam(c), page)
+	h.reply(c, rows, err)
+}
+
+func (h *Handler) reviewOrder(c *gin.Context) {
+	var b struct {
+		Reviews []ReviewInput `json:"reviews"`
+	}
+	if err := c.ShouldBindJSON(&b); err != nil {
+		h.fail(c, userErr("参数错误"))
+		return
+	}
+	h.reply(c, gin.H{"ok": true}, h.svc.Review(buyer(c).UserID, idParam(c), b.Reviews))
 }
 
 func (h *Handler) categories(c *gin.Context) {

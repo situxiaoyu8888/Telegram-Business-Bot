@@ -265,6 +265,12 @@ func (s *Service) RefundAfterSale(id uint64, scope Scope, amountText, note, oper
 		if err := tx.Model(&model.ShopOrder{}).Where("id = ?", o.ID).Update("refunded_amount", refunded.Add(pay).StringFixed(6)).Error; err != nil {
 			return err
 		}
+		// Refunds before completion already lower the sale entry; later ones reverse it.
+		if o.Status == StatusCompleted {
+			if err := s.recordRefund(tx, o, a.ID, pay); err != nil {
+				return err
+			}
+		}
 		a.RefundAmount = pay.StringFixed(6)
 		return closeAfterSale(tx, a, map[string]any{"status": AfterSaleRefunded, "refund_amount": a.RefundAmount, "admin_note": strings.TrimSpace(note), "handled_by": operator})
 	})

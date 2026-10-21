@@ -3,6 +3,7 @@ package admin
 import (
 	"errors"
 	"github.com/gin-gonic/gin"
+	"github.com/shopspring/decimal"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 	"strings"
@@ -44,6 +45,14 @@ func validateMerchant(b *model.Merchant) error {
 	if b.NotifyChatID < 0 {
 		return errors.New("订单通知 Telegram ID 无效")
 	}
+	if strings.TrimSpace(b.CommissionRate) == "" {
+		b.CommissionRate = "0"
+	}
+	rate, err := decimal.NewFromString(strings.TrimSpace(b.CommissionRate))
+	if err != nil || rate.IsNegative() || !rate.LessThan(decimal.NewFromInt(1)) || !rate.Equal(rate.Truncate(6)) {
+		return errors.New("平台佣金比例需在 0 到 1 之间（如 0.05 表示 5%），最多 6 位小数")
+	}
+	b.CommissionRate = rate.StringFixed(6)
 	if b.ContactURL != "" && !telegram.IsTelegramURL(b.ContactURL) {
 		return errors.New("联系链接必须是有效的 HTTPS 地址，例如 https://t.me/用户名")
 	}

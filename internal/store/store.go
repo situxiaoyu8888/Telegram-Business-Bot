@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	mysqldriver "github.com/go-sql-driver/mysql"
 	"time"
 
 	"telegram-business-bot/internal/model"
@@ -31,6 +32,7 @@ func New(mysqlDSN, redisAddr, redisPassword string, redisDB int) (*Store, error)
 		&model.Merchant{}, &model.BusinessBot{}, &model.BotSubscription{}, &model.PushRoute{}, &model.PushCampaign{}, &model.PushRecipient{}, &model.ReferralGrant{}, &model.SeedMigration{}, &model.AdminUser{}, &model.AdminRole{},
 		&model.ShopCategory{}, &model.ShopProduct{}, &model.ShopSKU{}, &model.ShopVirtualCode{}, &model.ShopCartItem{}, &model.ShopAddress{},
 		&model.ShopOrder{}, &model.ShopOrderItem{}, &model.ShopCoupon{}, &model.ShopUserCoupon{}, &model.ShopAfterSale{},
+		&model.ShopBanner{}, &model.ShopReview{}, &model.ShopMerchantEntry{}, &model.ShopSettlement{},
 	); err != nil {
 		return nil, fmt.Errorf("auto migrate: %w", err)
 	}
@@ -51,6 +53,7 @@ func New(mysqlDSN, redisAddr, redisPassword string, redisDB int) (*Store, error)
 		{Key: "shop_auto_complete_days", Value: "7", Remark: "商城快递订单发货后自动确认收货的天数（0 为不自动确认）"},
 		{Key: "shop_aftersale_days", Value: "7", Remark: "商城订单完成后可申请售后的天数（0 为不允许完成后申请）"},
 		{Key: "shop_return_address", Value: "", Remark: "商城退货寄回地址（留空则使用商家地址）"},
+		{Key: "shop_low_stock", Value: "5", Remark: "商城销售报表中的低库存预警阈值"},
 	} {
 		if err := db.Clauses(clause.OnConflict{DoNothing: true}).Create(&c).Error; err != nil {
 			return nil, err
@@ -174,4 +177,12 @@ func (s *Store) seedSubscriptions() error {
 		}
 		return tx.Exec("INSERT IGNORE INTO bot_subscriptions (bot_id, telegram_user_id, created_at) SELECT 0, telegram_user_id, CURRENT_TIMESTAMP FROM telegram_users").Error
 	})
+}
+
+// IsDuplicate reports whether err is a MySQL/MariaDB unique-key violation (error 1062).
+// Use it instead of OnConflict{DoNothing} plus RowsAffected for tables with an auto-increment ID:
+// on MariaDB GORM adds RETURNING to those inserts, so a skipped duplicate still reports one row.
+func IsDuplicate(err error) bool {
+	var me *mysqldriver.MySQLError
+	return errors.As(err, &me) && me.Number == 1062
 }

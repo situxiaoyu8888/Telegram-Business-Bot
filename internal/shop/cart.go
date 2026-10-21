@@ -3,6 +3,7 @@ package shop
 import (
 	"errors"
 	"strings"
+	"time"
 
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -21,6 +22,7 @@ type CartLine struct {
 	SKUName      string `json:"sku_name"`
 	Cover        string `json:"cover"`
 	Price        string `json:"price"`
+	ListPrice    string `json:"list_price"`
 	Quantity     int64  `json:"quantity"`
 	Stock        int64  `json:"stock"`
 	Kind         string `json:"kind"`
@@ -44,6 +46,10 @@ type line struct {
 	MerchantName    string
 	MerchantEnabled bool
 	MerchantAddress string
+	PromoStartsAt   *time.Time
+	PromoEndsAt     *time.Time
+	// ListPrice is the regular price; Price is what the buyer pays now (see effectivePrice).
+	ListPrice string
 }
 
 func (s *Service) lines(db *gorm.DB, skuIDs []uint64) (map[uint64]line, error) {
@@ -53,11 +59,14 @@ func (s *Service) lines(db *gorm.DB, skuIDs []uint64) (map[uint64]line, error) {
 	}
 	var rows []line
 	err := db.Table("shop_skus").
-		Select("shop_skus.*, shop_products.name AS product_name, shop_products.enabled AS product_enabled, shop_products.images, shop_products.kind, shop_products.allow_express, shop_products.allow_pickup, merchants.id AS merchant_id, merchants.name AS merchant_name, merchants.enabled AS merchant_enabled, merchants.address AS merchant_address").
+		Select("shop_skus.*, shop_products.name AS product_name, shop_products.enabled AS product_enabled, shop_products.images, shop_products.kind, shop_products.allow_express, shop_products.allow_pickup, merchants.id AS merchant_id, merchants.name AS merchant_name, merchants.enabled AS merchant_enabled, merchants.address AS merchant_address, shop_products.promo_starts_at, shop_products.promo_ends_at").
 		Joins("JOIN shop_products ON shop_products.id = shop_skus.product_id").
 		Joins("JOIN merchants ON merchants.id = shop_products.merchant_id").
 		Where("shop_skus.id IN ?", skuIDs).Scan(&rows).Error
+	now := time.Now()
 	for _, r := range rows {
+		r.ListPrice = r.Price
+		r.Price, _ = effectivePrice(r.Price, r.PromoPrice, r.PromoStartsAt, r.PromoEndsAt, now)
 		out[r.ID] = r
 	}
 	return out, err
@@ -84,7 +93,7 @@ func (s *Service) Cart(userID uint64) ([]CartLine, error) {
 		if !ok {
 			continue
 		}
-		out = append(out, CartLine{SKUID: l.ID, ProductID: l.ProductID, ProductName: l.ProductName, SKUName: l.Name, Cover: firstImage(l.Images), Price: l.Price, Quantity: it.Quantity, Stock: l.Stock, Kind: l.Kind, AllowExpress: l.AllowExpress, AllowPickup: l.AllowPickup, MerchantID: l.MerchantID, MerchantName: l.MerchantName, Available: l.available() && l.Stock >= it.Quantity})
+		out = append(out, CartLine{SKUID: l.ID, ProductID: l.ProductID, ProductName: l.ProductName, SKUName: l.Name, Cover: firstImage(l.Images), Price: l.Price, ListPrice: l.ListPrice, Quantity: it.Quantity, Stock: l.Stock, Kind: l.Kind, AllowExpress: l.AllowExpress, AllowPickup: l.AllowPickup, MerchantID: l.MerchantID, MerchantName: l.MerchantName, Available: l.available() && l.Stock >= it.Quantity})
 	}
 	return out, nil
 }

@@ -396,7 +396,10 @@ func (s *Service) assignCodes(tx *gorm.DB, order *model.ShopOrder, items []price
 	}
 	now := time.Now()
 	order.Status, order.DeliveryNote, order.CompletedAt, order.HandledBy = StatusCompleted, strings.Join(lines, "\n"), &now, "auto"
-	return tx.Model(&model.ShopOrder{}).Where("id = ?", order.ID).Updates(map[string]any{"status": order.Status, "delivery_note": order.DeliveryNote, "completed_at": now, "handled_by": order.HandledBy}).Error
+	if err := tx.Model(&model.ShopOrder{}).Where("id = ?", order.ID).Updates(map[string]any{"status": order.Status, "delivery_note": order.DeliveryNote, "completed_at": now, "handled_by": order.HandledBy}).Error; err != nil {
+		return err
+	}
+	return s.recordSale(tx, order.ID)
 }
 
 // OrderDetail is an order with its items (and, for a single order, its after-sale requests).
@@ -406,6 +409,9 @@ type OrderDetail struct {
 	AfterSales []model.ShopAfterSale `json:"after_sales,omitempty"`
 	// CanApplyAfterSale tells the buyer's page whether to offer an after-sale request.
 	CanApplyAfterSale bool `json:"can_apply_after_sale"`
+	// CanReview is set while the buyer can still review items not in ReviewedItems.
+	CanReview     bool     `json:"can_review"`
+	ReviewedItems []uint64 `json:"reviewed_items,omitempty"`
 }
 
 func (s *Service) withItems(orders []model.ShopOrder) ([]OrderDetail, error) {
@@ -465,6 +471,12 @@ func (s *Service) Order(userID, id uint64) (*OrderDetail, error) {
 		return nil, err
 	}
 	d.CanApplyAfterSale = s.afterSaleAllowed(o, time.Now()) == nil
+	if o.Status == StatusCompleted && o.CompletedAt != nil && time.Since(*o.CompletedAt) <= reviewWindowDays*24*time.Hour {
+		if d.ReviewedItems, err = s.reviewedItems(o.ID); err != nil {
+			return nil, err
+		}
+		d.CanReview = len(d.ReviewedItems) < len(d.Items)
+	}
 	return d, nil
 }
 
@@ -588,7 +600,10 @@ func (s *Service) complete(id uint64, scope Scope, operator string) error {
 		if operator != "" {
 			updates["handled_by"] = operator
 		}
-		return tx.Model(&model.ShopOrder{}).Where("id = ?", o.ID).Updates(updates).Error
+		if err := tx.Model(&model.ShopOrder{}).Where("id = ?", o.ID).Updates(updates).Error; err != nil {
+			return err
+		}
+		return s.recordSale(tx, o.ID)
 	})
 	if err == nil && scope.UserID == 0 {
 		msg := fmt.Sprintf("✅ <b>订单已完成</b>\n\n订单号：<code>%s</code>\n感谢您的购买！", o.OrderNo)
@@ -638,7 +653,13 @@ func (s *Service) Fulfil(id uint64, scope Scope, carrier, trackingNo, note, oper
 			updates["status"], updates["delivery_note"], updates["completed_at"] = StatusCompleted, strings.TrimSpace(note), now
 			msg = fmt.Sprintf("🎁 <b>虚拟商品已发放</b>\n\n订单号：<code>%s</code>\n请在商城「订单详情」中查看。", o.OrderNo)
 		}
-		return tx.Model(&model.ShopOrder{}).Where("id = ?", o.ID).Updates(updates).Error
+		if err := tx.Model(&model.ShopOrder{}).Where("id = ?", o.ID).Updates(updates).Error; err != nil {
+			return err
+		}
+		if updates["status"] == StatusCompleted {
+			return s.recordSale(tx, o.ID)
+		}
+		return nil
 	})
 	if err == nil {
 		s.notify(o.BotID, o.TelegramUserID, msg)

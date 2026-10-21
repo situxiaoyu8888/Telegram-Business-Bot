@@ -299,9 +299,11 @@ type Merchant struct {
 	Phone       string `gorm:"size:64" json:"phone"`
 	ContactURL  string `gorm:"size:1024" json:"contact_url"`
 	// NotifyChatID receives shop order and after-sale notices from the primary bot (0 = none).
-	NotifyChatID int64     `gorm:"not null;default:0" json:"notify_chat_id"`
-	Sort         int       `gorm:"not null;default:0" json:"sort"`
-	Enabled      bool      `gorm:"not null;index" json:"enabled"`
-	CreatedAt    time.Time `json:"created_at"`
-	UpdatedAt    time.Time `json:"updated_at"`
+	NotifyChatID int64 `gorm:"not null;default:0" json:"notify_chat_id"`
+	// CommissionRate is the platform's share of each completed shop order (0.05 = 5%).
+	CommissionRate string    `gorm:"type:decimal(10,6);not null;default:0" json:"commission_rate"`
+	Sort           int       `gorm:"not null;default:0" json:"sort"`
+	Enabled        bool      `gorm:"not null;index" json:"enabled"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
 }

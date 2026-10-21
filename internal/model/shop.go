@@ -18,33 +18,38 @@ type ShopCategory struct {
 // ShopProduct is sold by a Merchant. Physical products allow express and/or pickup;
 // virtual products are fulfilled with codes (ShopVirtualCode) or a manual note.
 type ShopProduct struct {
-	ID           uint64    `gorm:"primaryKey" json:"id"`
-	MerchantID   uint64    `gorm:"not null;index" json:"merchant_id"`
-	CategoryID   uint64    `gorm:"not null;index" json:"category_id"`
-	Name         string    `gorm:"size:128;not null" json:"name"`
-	Description  string    `gorm:"type:text" json:"description"`
-	Images       string    `gorm:"type:text" json:"images"`                       // newline-separated URLs; the first is the cover
-	Kind         string    `gorm:"size:16;not null;default:physical" json:"kind"` // physical | virtual
-	AllowExpress bool      `gorm:"not null;default:false" json:"allow_express"`
-	AllowPickup  bool      `gorm:"not null;default:false" json:"allow_pickup"`
-	Sales        int64     `gorm:"not null;default:0" json:"sales"`
-	Sort         int       `gorm:"not null;default:0;index" json:"sort"`
-	Enabled      bool      `gorm:"not null;index" json:"enabled"`
-	CreatedAt    time.Time `json:"created_at"`
-	UpdatedAt    time.Time `json:"updated_at"`
+	ID           uint64 `gorm:"primaryKey" json:"id"`
+	MerchantID   uint64 `gorm:"not null;index" json:"merchant_id"`
+	CategoryID   uint64 `gorm:"not null;index" json:"category_id"`
+	Name         string `gorm:"size:128;not null" json:"name"`
+	Description  string `gorm:"type:text" json:"description"`
+	Images       string `gorm:"type:text" json:"images"`                       // newline-separated URLs; the first is the cover
+	Kind         string `gorm:"size:16;not null;default:physical" json:"kind"` // physical | virtual
+	AllowExpress bool   `gorm:"not null;default:false" json:"allow_express"`
+	AllowPickup  bool   `gorm:"not null;default:false" json:"allow_pickup"`
+	Sales        int64  `gorm:"not null;default:0" json:"sales"`
+	Featured     bool   `gorm:"not null;default:false;index" json:"featured"` // shown in the home page's recommended section
+	// SKU promo prices apply only between PromoStartsAt and PromoEndsAt.
+	PromoStartsAt *time.Time `json:"promo_starts_at"`
+	PromoEndsAt   *time.Time `json:"promo_ends_at"`
+	Sort          int        `gorm:"not null;default:0;index" json:"sort"`
+	Enabled       bool       `gorm:"not null;index" json:"enabled"`
+	CreatedAt     time.Time  `json:"created_at"`
+	UpdatedAt     time.Time  `json:"updated_at"`
 }
 
 // ShopSKU is a purchasable variant of a product; every product has at least one.
 type ShopSKU struct {
-	ID        uint64    `gorm:"primaryKey" json:"id"`
-	ProductID uint64    `gorm:"not null;index" json:"product_id"`
-	Name      string    `gorm:"size:64;not null" json:"name"`
-	Price     string    `gorm:"type:decimal(24,6);not null" json:"price"`
-	Stock     int64     `gorm:"not null;default:0" json:"stock"`
-	Sort      int       `gorm:"not null;default:0" json:"sort"`
-	Enabled   bool      `gorm:"not null" json:"enabled"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	ID         uint64    `gorm:"primaryKey" json:"id"`
+	ProductID  uint64    `gorm:"not null;index" json:"product_id"`
+	Name       string    `gorm:"size:64;not null" json:"name"`
+	Price      string    `gorm:"type:decimal(24,6);not null" json:"price"`
+	PromoPrice string    `gorm:"type:decimal(24,6);not null;default:0" json:"promo_price"` // 0 = no promo price
+	Stock      int64     `gorm:"not null;default:0" json:"stock"`
+	Sort       int       `gorm:"not null;default:0" json:"sort"`
+	Enabled    bool      `gorm:"not null" json:"enabled"`
+	CreatedAt  time.Time `json:"created_at"`
+	UpdatedAt  time.Time `json:"updated_at"`
 }
 
 // ShopVirtualCode is one pre-loaded code for a virtual SKU, assigned to an order on payment.
@@ -178,4 +183,75 @@ type ShopAfterSale struct {
 	ClosedAt       *time.Time `json:"closed_at"`
 	CreatedAt      time.Time  `gorm:"index" json:"created_at"`
 	UpdatedAt      time.Time  `json:"updated_at"`
+}
+
+// ShopBanner is a slide in the H5 home page carousel. LinkType is none, product, category or url.
+type ShopBanner struct {
+	ID        uint64     `gorm:"primaryKey" json:"id"`
+	Title     string     `gorm:"size:64" json:"title"`
+	ImageURL  string     `gorm:"size:1024;not null" json:"image_url"`
+	LinkType  string     `gorm:"size:16;not null;default:none" json:"link_type"`
+	LinkValue string     `gorm:"size:1024" json:"link_value"`
+	Sort      int        `gorm:"not null;default:0" json:"sort"`
+	Enabled   bool       `gorm:"not null;index" json:"enabled"`
+	StartsAt  *time.Time `json:"starts_at"`
+	EndsAt    *time.Time `json:"ends_at"`
+	CreatedAt time.Time  `json:"created_at"`
+	UpdatedAt time.Time  `json:"updated_at"`
+}
+
+// ShopReview is a buyer's rating of one purchased item from a completed order.
+type ShopReview struct {
+	ID          uint64     `gorm:"primaryKey" json:"id"`
+	OrderItemID uint64     `gorm:"not null;uniqueIndex" json:"order_item_id"`
+	OrderID     uint64     `gorm:"not null;index" json:"order_id"`
+	ProductID   uint64     `gorm:"not null;index" json:"product_id"`
+	MerchantID  uint64     `gorm:"not null;index" json:"merchant_id"`
+	UserID      uint64     `gorm:"not null;index" json:"user_id"`
+	BuyerName   string     `gorm:"size:64" json:"buyer_name"` // masked display name
+	ProductName string     `gorm:"size:128" json:"product_name"`
+	SKUName     string     `gorm:"size:64" json:"sku_name"`
+	Rating      int        `gorm:"not null" json:"rating"` // 1–5
+	Content     string     `gorm:"size:1000" json:"content"`
+	Hidden      bool       `gorm:"not null;default:false;index" json:"hidden"`
+	Reply       string     `gorm:"size:1000" json:"reply"`
+	RepliedAt   *time.Time `json:"replied_at"`
+	CreatedAt   time.Time  `gorm:"index" json:"created_at"`
+	UpdatedAt   time.Time  `json:"updated_at"`
+}
+
+// ShopMerchantEntry is one line of a merchant's settlement ledger. A completed order adds a
+// "sale" entry; a refund after completion adds a negative "refund" entry. EntryKey records each
+// event once. SettlementID is 0 until the entry is included in a settlement.
+type ShopMerchantEntry struct {
+	ID           uint64    `gorm:"primaryKey" json:"id"`
+	EntryKey     string    `gorm:"size:64;uniqueIndex;not null" json:"entry_key"`
+	MerchantID   uint64    `gorm:"not null;index:idx_merchant_settlement" json:"merchant_id"`
+	SettlementID uint64    `gorm:"not null;default:0;index:idx_merchant_settlement" json:"settlement_id"`
+	OrderID      uint64    `gorm:"not null;index" json:"order_id"`
+	OrderNo      string    `gorm:"size:32" json:"order_no"`
+	Type         string    `gorm:"size:16;not null" json:"type"`                  // sale | refund
+	Amount       string    `gorm:"type:decimal(24,6);not null" json:"amount"`     // order money, negative for refunds
+	Commission   string    `gorm:"type:decimal(24,6);not null" json:"commission"` // platform share, same sign
+	Net          string    `gorm:"type:decimal(24,6);not null" json:"net"`        // Amount − Commission
+	Rate         string    `gorm:"type:decimal(10,6);not null" json:"rate"`
+	CreatedAt    time.Time `gorm:"index" json:"created_at"`
+}
+
+// ShopSettlement groups unsettled ledger entries into one payout to a merchant.
+type ShopSettlement struct {
+	ID         uint64     `gorm:"primaryKey" json:"id"`
+	MerchantID uint64     `gorm:"not null;index" json:"merchant_id"`
+	Amount     string     `gorm:"type:decimal(24,6);not null" json:"amount"`
+	Commission string     `gorm:"type:decimal(24,6);not null" json:"commission"`
+	Net        string     `gorm:"type:decimal(24,6);not null" json:"net"` // what the merchant is paid
+	EntryCount int64      `gorm:"not null" json:"entry_count"`
+	Status     string     `gorm:"size:16;not null;index" json:"status"` // pending | paid
+	PayRef     string     `gorm:"size:255" json:"pay_ref"`
+	Note       string     `gorm:"size:512" json:"note"`
+	CreatedBy  string     `gorm:"size:128" json:"created_by"`
+	PaidBy     string     `gorm:"size:128" json:"paid_by"`
+	PaidAt     *time.Time `json:"paid_at"`
+	CreatedAt  time.Time  `gorm:"index" json:"created_at"`
+	UpdatedAt  time.Time  `json:"updated_at"`
 }
