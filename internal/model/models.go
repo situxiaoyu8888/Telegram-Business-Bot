@@ -134,18 +134,21 @@ type MenuItem struct {
 }
 
 // AdminUser is a web console account. Role is "super" (manages accounts), "admin" (pages from
-// its AdminRole) or "merchant" (only its own merchant's shop products, orders and after-sales).
+// its AdminRole), "merchant" (its own merchant's shop pages) or "merchant_staff" (a subset of
+// those pages, created by the merchant account).
 type AdminUser struct {
-	ID           uint64     `gorm:"primaryKey" json:"id"`
-	Username     string     `gorm:"size:64;uniqueIndex;not null" json:"username"`
-	PasswordHash string     `gorm:"size:100;not null" json:"-"`
-	Role         string     `gorm:"size:16;not null" json:"role"`
-	RoleID       uint64     `gorm:"not null;default:0;index" json:"role_id"`     // AdminRole for role "admin"; ignored for "super"
-	MerchantID   uint64     `gorm:"not null;default:0;index" json:"merchant_id"` // the merchant a "merchant" account manages
-	Enabled      bool       `gorm:"not null" json:"enabled"`
-	LastLoginAt  *time.Time `json:"last_login_at"`
-	CreatedAt    time.Time  `json:"created_at"`
-	UpdatedAt    time.Time  `json:"updated_at"`
+	ID           uint64 `gorm:"primaryKey" json:"id"`
+	Username     string `gorm:"size:64;uniqueIndex;not null" json:"username"`
+	PasswordHash string `gorm:"size:100;not null" json:"-"`
+	Role         string `gorm:"size:16;not null" json:"role"`
+	RoleID       uint64 `gorm:"not null;default:0;index" json:"role_id"`     // AdminRole for role "admin"; ignored for "super"
+	MerchantID   uint64 `gorm:"not null;default:0;index" json:"merchant_id"` // the merchant a "merchant" account manages
+	// Permissions are the pages a merchant_staff account may use (comma-separated), chosen by its owner.
+	Permissions string     `gorm:"type:text" json:"permissions"`
+	Enabled     bool       `gorm:"not null" json:"enabled"`
+	LastLoginAt *time.Time `json:"last_login_at"`
+	CreatedAt   time.Time  `json:"created_at"`
+	UpdatedAt   time.Time  `json:"updated_at"`
 }
 
 // AdminRole is a permission template: the console pages its accounts may use.

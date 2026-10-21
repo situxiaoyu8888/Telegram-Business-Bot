@@ -58,6 +58,11 @@ type Config struct {
 	AdminPublicURL   string // optional console address included in merchant approval messages
 	ShopH5ButtonText string
 
+	// Daily database backups to BackupDir (empty disables), keeping BackupKeep files, at BackupHour.
+	BackupDir  string
+	BackupKeep int
+	BackupHour int
+
 	LogDir        string
 	LogMaxSizeMB  int
 	LogMaxBackups int
@@ -150,6 +155,17 @@ func load(path string) (Config, error) {
 	}
 
 	cfg.TelegramAPIURL = strings.TrimRight(mustEnv("TELEGRAM_API_URL"), "/")
+	cfg.BackupDir, cfg.BackupKeep, cfg.BackupHour = mustEnv("BACKUP_DIR"), 7, 3
+	if v := mustEnv("BACKUP_KEEP"); v != "" {
+		if cfg.BackupKeep, err = strconv.Atoi(v); err != nil || cfg.BackupKeep < 1 {
+			return Config{}, fmt.Errorf("BACKUP_KEEP must be a positive number")
+		}
+	}
+	if v := mustEnv("BACKUP_HOUR"); v != "" {
+		if cfg.BackupHour, err = strconv.Atoi(v); err != nil || cfg.BackupHour < 0 || cfg.BackupHour > 23 {
+			return Config{}, fmt.Errorf("BACKUP_HOUR must be 0-23")
+		}
+	}
 	cfg.AdminPublicURL = mustEnv("ADMIN_PUBLIC_URL")
 	cfg.ShopH5URL = mustEnv("SHOP_H5_URL")
 	cfg.ShopH5ButtonText = mustEnv("SHOP_H5_BUTTON_TEXT")

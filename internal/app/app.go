@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"telegram-business-bot/internal/admin"
+	"telegram-business-bot/internal/backup"
 	"telegram-business-bot/internal/business"
 	"telegram-business-bot/internal/config"
 	"telegram-business-bot/internal/menu"
@@ -172,6 +173,12 @@ func (a *App) StartWorkers(ctx context.Context) {
 	go a.businessBots.Run(ctx)
 	go a.shop.Run(ctx)
 	go a.admin.PurgeAuditLogs(ctx, 180*24*time.Hour)
+	if a.cfg.BackupDir != "" {
+		if sqlDB, err := a.store.DB.DB(); err == nil {
+			go backup.RunDaily(ctx, sqlDB, a.store.Redis, a.cfg.BackupDir, a.cfg.BackupKeep, a.cfg.BackupHour, a.logger)
+			a.logger.Info("daily database backup enabled", zap.String("dir", a.cfg.BackupDir), zap.Int("keep", a.cfg.BackupKeep), zap.Int("hour", a.cfg.BackupHour))
+		}
+	}
 	a.logger.Info("message push worker started")
 	if a.cfg.TronWatchEnabled {
 		go a.tronWatcher.Run(ctx)

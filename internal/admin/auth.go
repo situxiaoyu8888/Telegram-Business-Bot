@@ -318,10 +318,18 @@ func (h *Handler) permissionsOf(ctx context.Context, u *model.AdminUser) (map[st
 		}
 		return perms, nil
 	}
-	if u.Role == roleMerchant {
-		// Merchant accounts get fixed shop pages; every handler then limits data to merchantScope.
-		if u.MerchantID != 0 {
-			for _, p := range merchantPermissions {
+	if u.Role == roleMerchant || u.Role == roleStaff {
+		// Merchant accounts get fixed shop pages and staff a subset chosen by the owner; every
+		// handler then limits data to merchantScope.
+		if u.MerchantID == 0 {
+			return perms, nil
+		}
+		chosen := map[string]bool{}
+		for _, p := range strings.Split(u.Permissions, ",") {
+			chosen[strings.TrimSpace(p)] = true
+		}
+		for _, p := range merchantPermissions {
+			if u.Role == roleMerchant || chosen[p] {
 				perms[p] = true
 			}
 		}
@@ -362,13 +370,13 @@ var merchantPermissions = []string{"shop_products", "shop_orders", "shop_aftersa
 
 // merchantScope is the merchant a merchant account is limited to, or 0 for platform accounts.
 func merchantScope(c *gin.Context) uint64 {
-	if u := current(c); u.Role == roleMerchant {
+	if u := current(c); u.Role == roleMerchant || u.Role == roleStaff {
 		return u.MerchantID
 	}
 	return 0
 }
 
-// merchantOnly limits a route to merchant accounts (their own merchant's actions).
+// merchantOnly limits a route to merchant owner accounts (payouts, staff); staff are refused.
 func merchantOnly(c *gin.Context) {
 	if current(c).Role != roleMerchant || current(c).MerchantID == 0 {
 		c.AbortWithStatusJSON(403, gin.H{"error": "仅商家账号可操作"})
@@ -379,7 +387,7 @@ func merchantOnly(c *gin.Context) {
 
 // platformOnly rejects merchant accounts on routes that change shared shop data.
 func platformOnly(c *gin.Context) {
-	if current(c).Role == roleMerchant {
+	if r := current(c).Role; r == roleMerchant || r == roleStaff {
 		c.AbortWithStatusJSON(403, gin.H{"error": "商家账号不能执行此操作"})
 		return
 	}

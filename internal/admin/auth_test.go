@@ -450,3 +450,31 @@ func TestAuditRecordsLoginsWritesAndFailuresButNotReads(t *testing.T) {
 		t.Fatalf("audit:\n%s", strings.Join(got, "\n"))
 	}
 }
+func TestMerchantStaffGetsChosenPagesOnly(t *testing.T) {
+	h, r, _, accounts := accountFixture(t)
+	h.shop = &shop.Service{}
+	r = gin.New()
+	h.Register(r)
+	owner := testAccount(t, 3, "owner", "owner-password", roleMerchant)
+	owner.MerchantID = 9
+	staff := testAccount(t, 4, "packer", "packer-password", roleStaff)
+	staff.MerchantID, staff.Permissions = 9, "shop_orders,configs"
+	accounts[3], accounts[4] = owner, staff
+	cookie := login(t, r, "packer", "packer-password")
+	h.st = &store.Store{DB: testutil.DB(t, testutil.Step{Contains: "merchants", Columns: []string{"id", "name"}, Rows: [][]driver.Value{{int64(9), "甲"}}})}
+	w := authRequest(r, "GET", "/admin/api/session", "", cookie, false)
+	// "configs" is not a merchant page, so it is ignored even if stored.
+	if !strings.Contains(w.Body.String(), `"permissions":["shop_orders"]`) || !strings.Contains(w.Body.String(), `"role":"merchant_staff"`) {
+		t.Fatal(w.Body.String())
+	}
+	for _, tt := range []struct{ method, path, body string }{
+		{"GET", "/admin/api/shop-products", ""},
+		{"GET", "/admin/api/merchant-staff", ""},
+		{"POST", "/admin/api/shop-settlements/payout", `{"address":"T"}`},
+		{"POST", "/admin/api/shop-categories", `{}`},
+	} {
+		if w := authRequest(r, tt.method, tt.path, tt.body, cookie, true); w.Code != 403 {
+			t.Fatal(tt.path, w.Code)
+		}
+	}
+}

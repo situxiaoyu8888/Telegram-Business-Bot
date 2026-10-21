@@ -6,6 +6,7 @@ import (
 	"go.uber.org/zap"
 	"regexp"
 	"strings"
+	"telegram-business-bot/internal/backup"
 	"time"
 	"unicode/utf8"
 
@@ -21,7 +22,8 @@ import (
 const (
 	roleSuper    = "super"
 	roleAdmin    = "admin"
-	roleMerchant = "merchant" // manages one merchant's shop products, orders and after-sales
+	roleMerchant = "merchant"       // manages one merchant's shop products, orders and after-sales
+	roleStaff    = "merchant_staff" // works for a merchant on the pages its owner allows
 
 )
 
@@ -45,7 +47,7 @@ func (h *Handler) session(c *gin.Context) {
 		}
 	}
 	res := gin.H{"ok": true, "id": u.ID, "username": u.Username, "role": u.Role, "permissions": list}
-	if u.Role == roleMerchant && u.MerchantID != 0 {
+	if (u.Role == roleMerchant || u.Role == roleStaff) && u.MerchantID != 0 {
 		var m model.Merchant
 		if h.st.DB.Select("id", "name").First(&m, u.MerchantID).Error == nil {
 			res["merchant_id"], res["merchant_name"] = m.ID, m.Name
@@ -99,7 +101,7 @@ func (h *Handler) saveAccount(c *gin.Context) {
 		c.JSON(400, gin.H{"error": "参数错误"})
 		return
 	}
-	if b.Role != roleSuper && b.Role != roleAdmin && b.Role != roleMerchant {
+	if b.Role != roleSuper && b.Role != roleAdmin && b.Role != roleMerchant && b.Role != roleStaff {
 		c.JSON(400, gin.H{"error": "角色无效"})
 		return
 	}
@@ -117,7 +119,7 @@ func (h *Handler) saveAccount(c *gin.Context) {
 	if b.Role != roleAdmin {
 		b.RoleID = 0
 	}
-	if b.Role != roleMerchant {
+	if b.Role != roleMerchant && b.Role != roleStaff {
 		b.MerchantID = 0
 	} else if b.MerchantID == 0 {
 		c.JSON(400, gin.H{"error": "请选择商家账号管理的商家"})
@@ -261,4 +263,27 @@ func (h *Handler) PurgeAuditLogs(ctx context.Context, keep time.Duration) {
 		case <-time.After(24 * time.Hour):
 		}
 	}
+}
+
+// downloadBackup streams a gzip SQL dump of the whole database. It contains password hashes and
+// encrypted bot tokens, so it is super-admin only and always audited.
+func (h *Handler) downloadBackup(c *gin.Context) {
+	sqlDB, err := h.st.DB.DB()
+	if err != nil {
+		respond(c, err)
+		return
+	}
+	start := time.Now()
+	c.Header("Content-Type", "application/gzip")
+	c.Header("Content-Disposition", `attachment; filename="`+backup.FileName(start)+`"`)
+	err = backup.WriteGzip(c.Request.Context(), sqlDB, c.Writer)
+	status := 200
+	if err != nil {
+		status = 500
+		if h.logger != nil {
+			h.logger.Error("backup download failed", zap.Error(err))
+		}
+	}
+	u := current(c)
+	h.audit(c, u.ID, u.Username, "BACKUP", c.Request.URL.Path, status, time.Since(start))
 }

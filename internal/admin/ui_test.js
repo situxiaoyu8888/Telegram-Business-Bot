@@ -171,7 +171,7 @@ test('merchant accounts get reports, settlements and reviews but not marketing',
 });
 test('navigation hides section titles that have no visible pages',()=>{
  const h=harness();
- h.run("me={id:3,role:'merchant',permissions:['shop_orders']};nav()");
+ h.run("me={id:3,role:'merchant_staff',permissions:['shop_orders']};nav()");
  const html=h.elements.get('navigation').innerHTML;
  assert.ok(html.includes('商城管理'));
  for(const title of ['运营工作台','业务管理','系统设置'])assert.ok(!html.includes(title),title);
@@ -182,4 +182,13 @@ test('audit log rows show logins and failed statuses distinctly',()=>{
  assert.ok(h.run("cell({method:'LOGIN'},'method')").includes('登录'));
  assert.ok(h.run("cell({status:403},'status')").includes('red'));
  assert.ok(h.run("cell({status:200},'status')").includes('green'));
+});
+test('only merchant owners see staff management; staff and super admins do not',()=>{
+ const h=harness();
+ h.run("me={id:3,role:'merchant',permissions:['shop_orders']};nav()");
+ assert.ok(h.elements.get('navigation').innerHTML.includes('data-nav="merchant_staff"'));
+ h.run("me={id:4,role:'merchant_staff',permissions:['shop_orders']};nav()");
+ assert.ok(!h.elements.get('navigation').innerHTML.includes('data-nav="merchant_staff"'));
+ h.run("me={id:1,role:'super',permissions:[]};nav()");
+ assert.ok(!h.elements.get('navigation').innerHTML.includes('data-nav="merchant_staff"'));
 });

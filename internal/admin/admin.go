@@ -160,6 +160,14 @@ func (h *Handler) Register(r *gin.Engine) {
 
 	api.POST("/account/password", h.changePassword)
 	api.GET("/audit-logs", requireSuper, h.auditLogs)
+	api.GET("/backup", requireSuper, h.downloadBackup)
+	if h.shop != nil {
+		api.POST("/shop-digest/send", requireSuper, h.sendDigest)
+	}
+	// A merchant account manages its own staff; staff and platform accounts are refused.
+	api.GET("/merchant-staff", merchantOnly, h.listStaff)
+	api.POST("/merchant-staff", merchantOnly, h.saveStaff)
+	api.DELETE("/merchant-staff/:id", merchantOnly, h.deleteStaff)
 	accounts := api.Group("/accounts", requireSuper)
 	accounts.GET("", h.listAccounts)
 	accounts.POST("", h.saveAccount)

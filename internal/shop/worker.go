@@ -28,6 +28,9 @@ func (s *Service) Run(ctx context.Context) {
 			if err := s.ExpireGroups(ctx, time.Now()); err != nil {
 				return err
 			}
+			if err := s.maybeSendDigest(ctx, time.Now()); err != nil {
+				return err
+			}
 			return s.GrantCommissions(ctx, time.Now())
 		}); err != nil && err != lease.ErrBusy && ctx.Err() == nil && s.logger != nil {
 			s.logger.Warn("shop background pass failed", zap.Error(err))

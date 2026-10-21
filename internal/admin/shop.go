@@ -535,6 +535,16 @@ func (h *Handler) importShopProducts(c *gin.Context) {
 	c.JSON(200, res)
 }
 
+// sendDigest sends today's to-do reminders now, e.g. to check what merchants will receive.
+func (h *Handler) sendDigest(c *gin.Context) {
+	d, err := h.shop.SendDigest(c.Request.Context(), time.Now())
+	if err != nil {
+		respond(c, err)
+		return
+	}
+	c.JSON(200, d)
+}
+
 func listOrError(c *gin.Context, rows any, err error) {
 	if err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})

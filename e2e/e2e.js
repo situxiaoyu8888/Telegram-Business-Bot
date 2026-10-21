@@ -305,7 +305,31 @@ async function toastText(page) { return page.$eval('#toast', e => e.hidden ? '' 
   const payout = sql(`select concat(status,' ',payout_address,' ',net) from shop_settlements order by id desc limit 1`);
   console.log('  payout', payout);
   if (!payout.startsWith('pending TLa2f6VPqDgRE67v1736s7bJ8Ray5wYjU7')) problems.push('payout request not recorded: ' + payout);
+
+  step('merchant owner adds a staff account');
+  await nav(owner, 'merchant_staff'); await owner.click('#create');
+  await owner.fill('#stUser', 'packer1'); await owner.fill('#stPass', 'packer-pass-123'); await owner.check('#stp_shop_orders');
+  await shot(owner, '50-staff-form'); await submitModal(owner);
   await octx.close();
+  const sctx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const staffPage = await sctx.newPage(); watch(staffPage, 'staff');
+  await staffPage.goto(BASE + '/admin/login');
+  await staffPage.fill('#username', 'packer1'); await staffPage.fill('#password', 'packer-pass-123');
+  await Promise.all([staffPage.waitForURL('**/admin/'), staffPage.click('#submit')]);
+  await staffPage.waitForTimeout(900); await shot(staffPage, '51-staff-console');
+  const staffNav = await staffPage.innerHTML('#navigation');
+  if (!staffNav.includes('data-nav="shop_orders"') || staffNav.includes('data-nav="shop_settlements"') || staffNav.includes('data-nav="merchant_staff"')) problems.push('staff sees the wrong pages');
+  await sctx.close();
+
+  step('to-do digest and database backup');
+  await nav(admin, 'shop_reports'); await admin.click('#rpDigest'); await admin.waitForTimeout(800);
+  const digestMsg = (await (await fetch(TG + '/sent')).json()).find(m => m.chat_id === 777 && /今日待办汇总/.test(m.text || ''));
+  console.log('  digest to admins:', !!digestMsg);
+  await nav(admin, 'configs'); await shot(admin, '52-configs-backup');
+  const backupInfo = await admin.evaluate(async () => { const r = await fetch('/admin/api/backup'); const b = new Uint8Array(await r.arrayBuffer()); return { status: r.status, size: b.length, magic: b[0] === 0x1f && b[1] === 0x8b, name: r.headers.get('content-disposition') }; });
+  console.log('  backup', JSON.stringify(backupInfo));
+  if (backupInfo.status !== 200 || !backupInfo.magic || backupInfo.size < 1000) problems.push('backup download failed: ' + JSON.stringify(backupInfo));
+  if (sql("select count(*) from admin_audit_logs where method='BACKUP'") !== '1') problems.push('backup not audited');
 
   step('bot: /orders and share link');
   const msg = (text) => fetch(TG + '/inject', { method: 'POST', body: JSON.stringify({ message: { message_id: 1, date: 1, text, from: { id: 9002, first_name: '小红' }, chat: { id: 9002, type: 'private' } } }) });

@@ -45,9 +45,11 @@ services:
       REDIS_ADDR: redis:6379
       UPLOAD_DIR: /app/uploads
       LOG_DIR: /app/logs
+      BACKUP_DIR: /app/backups
     volumes:
       - bot_uploads:/app/uploads
       - ./logs:/app/logs
+      - ./backups:/app/backups
     ports:
       - "8080:8080"
     depends_on:
