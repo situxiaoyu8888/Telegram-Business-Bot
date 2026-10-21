@@ -7,6 +7,18 @@ cd "$(dirname "$0")"
 ROOT=$(cd .. && pwd)
 WORK="$PWD/.work"
 APP_PORT=${E2E_APP_PORT:-18731}
+# Split listeners by default: shop page, API, operator console and merchant console on their own
+# ports. E2E_SINGLE_PORT=1 serves everything on APP_PORT, as deployments without them do.
+SHOP_PORT=$((APP_PORT + 1)) API_PORT=$((APP_PORT + 2)) OPS_PORT=$((APP_PORT + 3)) MERCHANT_PORT=$((APP_PORT + 4))
+local_url() { echo "http://127.0.0.1:$1"; }
+if [[ "${E2E_SINGLE_PORT:-}" == 1 ]]; then
+  SPLIT_ENV=(API_HTTP_ADDR= OPERATOR_HTTP_ADDR= MERCHANT_HTTP_ADDR= SHOP_HTTP_ADDR=)
+  SHOP_PORT=$APP_PORT API_PORT=$APP_PORT OPS_PORT=$APP_PORT MERCHANT_PORT=$APP_PORT
+else
+  SPLIT_ENV=(API_HTTP_ADDR=127.0.0.1:$API_PORT OPERATOR_HTTP_ADDR=127.0.0.1:$OPS_PORT MERCHANT_HTTP_ADDR=127.0.0.1:$MERCHANT_PORT
+    SHOP_HTTP_ADDR=127.0.0.1:$SHOP_PORT API_PUBLIC_URL=$(local_url $API_PORT) OPERATOR_PUBLIC_URL=$(local_url $OPS_PORT)
+    MERCHANT_PUBLIC_URL=$(local_url $MERCHANT_PORT) MAIN_PUBLIC_URL=$(local_url $APP_PORT) API_ALLOWED_ORIGINS=$(local_url $SHOP_PORT))
+fi
 TG_PORT=${E2E_TG_PORT:-38081}
 DB_PORT=${E2E_DB_PORT:-33199}
 REDIS_PORT=${E2E_REDIS_PORT:-36399}
@@ -30,6 +42,7 @@ python3 fake_telegram.py "$TG_PORT" > "$WORK/fake_telegram.log" 2>&1 &
 TG_PID=$!
 (
   cd "$WORK"
+  export "${SPLIT_ENV[@]}"
   export APP_ENV=prod HTTP_ADDR="127.0.0.1:$APP_PORT" TELEGRAM_BOT_TOKEN=111:primary TELEGRAM_MODE=polling ADMIN_IDS=777 \
     ADMIN_WEB_USER=admin ADMIN_WEB_PASSWORD=e2e-password-123 \
     MYSQL_DSN="root:e2e@tcp(127.0.0.1:$DB_PORT)/e2e?charset=utf8mb4&parseTime=True&loc=Local" \
@@ -45,4 +58,5 @@ for i in $(seq 1 60); do curl -sf "http://127.0.0.1:$APP_PORT/healthz" >/dev/nul
 curl -sf "http://127.0.0.1:$APP_PORT/healthz" >/dev/null || { echo "app did not start"; tail -30 "$WORK/app.log"; exit 1; }
 
 [[ -d node_modules ]] || npm ci --silent
-E2E_BASE="http://127.0.0.1:$APP_PORT" E2E_TG="http://127.0.0.1:$TG_PORT" E2E_SHOTS="$WORK/shots" node e2e.js
+E2E_BASE=$(local_url $APP_PORT) E2E_SHOP_BASE=$(local_url $SHOP_PORT) E2E_API_BASE=$(local_url $API_PORT) \
+  E2E_OPS_BASE=$(local_url $OPS_PORT) E2E_MERCHANT_BASE=$(local_url $MERCHANT_PORT) E2E_TG="http://127.0.0.1:$TG_PORT" E2E_SHOTS="$WORK/shots" node e2e.js

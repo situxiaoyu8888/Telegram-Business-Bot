@@ -73,28 +73,36 @@ func main() {
 		}
 	}()
 
-	server := &http.Server{
-		Addr:              cfg.HTTPAddr,
-		Handler:           application.Router(),
-		ReadHeaderTimeout: 5 * time.Second,
-		ReadTimeout:       15 * time.Second,
-		WriteTimeout:      15 * time.Second,
-		IdleTimeout:       60 * time.Second,
-	}
-
-	go func() {
-		logger.Info("http server started", zap.String("addr", cfg.HTTPAddr))
-		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			logger.Error("http server error", zap.Error(err))
-			cancel()
+	newServer := func(addr string, h http.Handler) *http.Server {
+		return &http.Server{
+			Addr:              addr,
+			Handler:           h,
+			ReadHeaderTimeout: 5 * time.Second,
+			ReadTimeout:       15 * time.Second,
+			WriteTimeout:      15 * time.Second,
+			IdleTimeout:       60 * time.Second,
 		}
-	}()
+	}
+	var servers []*http.Server
+	for _, l := range application.Listeners() {
+		server := newServer(l.Addr, l.Handler)
+		servers = append(servers, server)
+		go func(server *http.Server, kind string) {
+			logger.Info("http server started", zap.String("addr", server.Addr), zap.String("serves", kind))
+			if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				logger.Error("http server error", zap.String("addr", server.Addr), zap.Error(err))
+				cancel()
+			}
+		}(server, l.Serves)
+	}
 
 	<-ctx.Done()
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer shutdownCancel()
-	_ = server.Shutdown(shutdownCtx)
+	for _, server := range servers {
+		_ = server.Shutdown(shutdownCtx)
+	}
 	_ = application.Close()
 	logger.Info("application stopped")
 }

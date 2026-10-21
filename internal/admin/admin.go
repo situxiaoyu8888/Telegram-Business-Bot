@@ -36,13 +36,20 @@ type Handler struct {
 	logger         *zap.Logger
 	publicURL      string                          // console address sent to approved merchants
 	auditSink      func(model.AdminAuditLog) error // where audit records go; defaults to the database
-	bots           *business.Service
-	st             *store.Store
-	wallet         *wallet.Service
-	support        *support.Service
-	tg             *telegram.Client
-	push           *push.Service
-	shop           *shop.Service
+
+	// Split listeners: pages call the API at apiBase, uploads go to uploadURL, and the API tells
+	// the operator and merchant consoles apart by request origin (portals: origin → portal).
+	split     bool
+	apiBase   string
+	uploadURL string
+	portals   map[string]string
+	bots      *business.Service
+	st        *store.Store
+	wallet    *wallet.Service
+	support   *support.Service
+	tg        *telegram.Client
+	push      *push.Service
+	shop      *shop.Service
 
 	uploadDir           string
 	uploadPublicBaseURL string
@@ -80,14 +87,61 @@ func (h *Handler) WithPublicURL(u string) *Handler { h.publicURL = u; return h }
 // WithLogger enables the access log of console actions.
 func (h *Handler) WithLogger(l *zap.Logger) *Handler { h.logger = l; return h }
 
+// Console portals in split mode.
+const (
+	portalOperator = "operator"
+	portalMerchant = "merchant"
+)
+
+// WithSplit configures separate listeners: the console pages call the API at apiBase, upload to
+// mainBase, and sign-ins are bound to the console (operator or merchant) they came from.
+func (h *Handler) WithSplit(apiBase, mainBase, operatorOrigin, merchantOrigin string) *Handler {
+	h.split, h.apiBase, h.uploadURL = true, apiBase, mainBase+"/admin/api/upload"
+	h.portals = map[string]string{operatorOrigin: portalOperator, merchantOrigin: portalMerchant}
+	return h
+}
+
+// Register serves the whole console (pages, API and uploads) on one listener.
 func (h *Handler) Register(r *gin.Engine) {
-	r.GET("/admin/login", h.loginPage)
+	h.RegisterConsole(r)
+	h.RegisterAPI(r)
+	h.RegisterUpload(r)
+}
+
+// RegisterConsole serves the console pages. With split listeners the page holds no data and
+// signs in through the API (whose cookie this listener may not see), so it needs no session.
+// Console names shown on the login page in split mode.
+const (
+	ConsoleOperator = "运营后台"
+	ConsoleMerchant = "商户后台"
+)
+
+func (h *Handler) RegisterConsole(r *gin.Engine, name ...string) {
+	title := ""
+	if len(name) > 0 {
+		title = name[0]
+	}
+	portal := map[string]string{ConsoleOperator: portalOperator, ConsoleMerchant: portalMerchant}[title]
+	page := func(c *gin.Context) { h.page(c, portal) }
+	r.GET("/admin/login", func(c *gin.Context) { h.loginPage(c, title) })
+	if h.split {
+		r.GET("/admin/", page)
+	} else {
+		r.GET("/admin/", h.requireSession, page)
+	}
+}
+
+// RegisterUpload serves file uploads, authorised by a one-time token from POST /admin/api/upload-token.
+func (h *Handler) RegisterUpload(r *gin.Engine) {
+	r.POST("/admin/api/upload", h.uploadAuth, h.accessLog, h.uploadMedia)
+}
+
+// RegisterAPI serves sign-in and every console API except uploads.
+func (h *Handler) RegisterAPI(r *gin.Engine) {
 	r.POST("/admin/login", h.login)
 	r.POST("/admin/logout", h.logout)
 	g := r.Group("/admin", h.requireSession, h.accessLog)
 	g.GET("/api/session", h.session)
-
-	g.GET("/", h.page)
 
 	api := g.Group("/api")
 	// Each route names the pages that may use it; super administrators pass every check.
@@ -137,7 +191,7 @@ func (h *Handler) Register(r *gin.Engine) {
 	api.GET("/configs", can("configs"), h.configs)
 	api.POST("/configs", can("configs"), h.saveConfig)
 
-	api.POST("/upload", can("pushes", "menus", "shop_products"), h.uploadMedia)
+	api.POST("/upload-token", can(uploadPages...), h.uploadToken)
 
 	api.GET("/pushes", can("pushes"), h.pushes)
 	api.POST("/pushes", can("pushes"), h.createPush)
@@ -178,9 +232,16 @@ func (h *Handler) Register(r *gin.Engine) {
 	roles.DELETE("/:id", h.deleteRole)
 }
 
-func (h *Handler) page(c *gin.Context) {
+func (h *Handler) page(c *gin.Context, portal string) {
 	c.Header("Content-Type", "text/html; charset=utf-8")
-	c.String(http.StatusOK, adminHTML)
+	c.Header("Cache-Control", "no-store")
+	html := withAPIBase(adminHTML, h.apiBase)
+	c.String(http.StatusOK, strings.Replace(html, `<meta name="portal" content="">`, `<meta name="portal" content="`+portal+`">`, 1))
+}
+
+// withAPIBase fills the page's api-base meta tag, which its scripts prefix to API paths.
+func withAPIBase(html, base string) string {
+	return strings.Replace(html, `<meta name="api-base" content="">`, `<meta name="api-base" content="`+base+`">`, 1)
 }
 
 func (h *Handler) dashboard(c *gin.Context) {

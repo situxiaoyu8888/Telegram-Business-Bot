@@ -406,6 +406,18 @@ SHOP_H5_URL=https://bot.example.com/shop/
 SHOP_H5_BUTTON_TEXT=商城
 ```
 
+**分端口部署（可选）**：把后台、商户后台、商城和接口拆到不同端口，便于分别做网络访问控制。以下四个监听地址要么全部设置，要么全部留空（留空时与以前一样所有功能共用 `HTTP_ADDR`）：
+
+| 变量 | 提供的内容 | 示例 |
+|---|---|---|
+| `HTTP_ADDR` | Telegram Webhook、后台文件上传、`/uploads` 图片 | `:8080` |
+| `OPERATOR_HTTP_ADDR` | 运营后台页面，只允许超管/管理员登录 | `:8090` |
+| `MERCHANT_HTTP_ADDR` | 商户后台页面，只允许商家及其员工登录 | `:8091` |
+| `SHOP_HTTP_ADDR` | H5 商城页面 `/shop/` | `:8081` |
+| `API_HTTP_ADDR` | 全部后台和商城接口（`/admin/api/*`、`/shop/api/*`、登录） | `:8082` |
+
+每个端口都有 `/healthz`。页面会跨端口调用接口，所以还要填写浏览器实际访问的公网地址：`API_PUBLIC_URL`、`OPERATOR_PUBLIC_URL`、`MERCHANT_PUBLIC_URL`、`MAIN_PUBLIC_URL`（`HTTP_ADDR` 的地址，默认取 `UPLOAD_PUBLIC_BASE_URL` 去掉 `/uploads`）。接口只接受运营后台、商户后台和 `SHOP_H5_URL` 这几个来源的跨域请求，其他来源可写在 `API_ALLOWED_ORIGINS`（逗号分隔）。后台和接口必须在同一个主域名下（例如 `ops.example.com`、`seller.example.com`、`api.example.com`），否则浏览器不会带上登录 Cookie。商家入驻审核通过的通知里会附上商户后台地址。Docker Compose 需同时映射这些端口。
+
 重启后，主机器人和所有业务机器人输入框左侧的菜单按钮会变成「商城」，点开即自动登录（使用 Telegram 签名，无需注册），商城账号就是机器人里的同一个用户、同一个钱包。管理机器人不显示商城按钮。
 
 - **商品**：挂在「商家管理」的商家下，支持多规格（价格、库存）、多图、实物（快递 / 到店自提）和虚拟商品（卡密）。

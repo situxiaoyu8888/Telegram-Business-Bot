@@ -45,6 +45,7 @@ type Handler struct {
 	now      func() time.Time
 
 	botUsername func(ctx context.Context, botID uint64) string
+	apiBase     string
 }
 
 // WithBotUsernames lets the shop build share links that open the bot the buyer is using.
@@ -72,14 +73,27 @@ func (h *Handler) botTokens(ctx context.Context) ([]business.BotToken, error) {
 	return list, nil
 }
 
-func (h *Handler) Register(r *gin.Engine) {
-	page := func(c *gin.Context) {
-		c.Header("Cache-Control", "no-cache")
-		c.Data(http.StatusOK, "text/html; charset=utf-8", indexHTML)
-	}
-	r.GET("/shop", func(c *gin.Context) { c.Redirect(http.StatusMovedPermanently, "/shop/") })
-	r.GET("/shop/", page)
+// WithAPIBase makes the shop page call the API at base (a separate API listener).
+func (h *Handler) WithAPIBase(base string) *Handler { h.apiBase = base; return h }
 
+// Register serves the shop page and its API on one listener.
+func (h *Handler) Register(r *gin.Engine) {
+	h.RegisterPage(r)
+	h.RegisterAPI(r)
+}
+
+// RegisterPage serves the H5 shop page.
+func (h *Handler) RegisterPage(r *gin.Engine) {
+	page := []byte(strings.Replace(string(indexHTML), `<meta name="api-base" content="">`, `<meta name="api-base" content="`+h.apiBase+`">`, 1))
+	r.GET("/shop", func(c *gin.Context) { c.Redirect(http.StatusMovedPermanently, "/shop/") })
+	r.GET("/shop/", func(c *gin.Context) {
+		c.Header("Cache-Control", "no-cache")
+		c.Data(http.StatusOK, "text/html; charset=utf-8", page)
+	})
+}
+
+// RegisterAPI serves the shop API.
+func (h *Handler) RegisterAPI(r *gin.Engine) {
 	api := r.Group("/shop/api", h.authenticate, h.throttle("rl:shop:", maxRequestsPerMinute))
 	api.GET("/me", h.me)
 	api.GET("/home", h.home)

@@ -5,7 +5,8 @@ const crypto = require('crypto');
 const fs = require('fs');
 const { execSync } = require('child_process');
 
-const BASE = process.env.E2E_BASE || 'http://127.0.0.1:18731', TG = process.env.E2E_TG || 'http://127.0.0.1:38081', TOKEN = '111:primary';
+const BASE = process.env.E2E_BASE || 'http://127.0.0.1:18731', SHOP_BASE = process.env.E2E_SHOP_BASE || BASE, API_BASE = process.env.E2E_API_BASE || BASE,
+  OPS_BASE = process.env.E2E_OPS_BASE || BASE, MERCHANT_BASE = process.env.E2E_MERCHANT_BASE || BASE, TG = process.env.E2E_TG || 'http://127.0.0.1:38081', TOKEN = '111:primary';
 const SHOTS = process.env.E2E_SHOTS || __dirname + '/.work/shots';
 const DB = process.env.E2E_DB_CONTAINER || 'e2e-db';
 fs.mkdirSync(SHOTS, { recursive: true });
@@ -25,12 +26,12 @@ const IMG = (color, label) => 'data:image/svg+xml;utf8,' + encodeURIComponent(`<
 function watch(page, name) {
   page.on('pageerror', e => problems.push(`[${name}] page error: ${e.message}`));
   page.on('console', m => { if (m.type() === 'error') problems.push(`[${name}] console: ${m.text()}`); });
-  page.on('response', r => { if (r.status() >= 400) problems.push(`[${name}] HTTP ${r.status()} ${r.url()}`); });
+  page.on('response', async r => { if (r.status() >= 400) { const body = await r.text().catch(() => ''); problems.push(`[${name}] HTTP ${r.status()} ${r.url()} ${body.slice(0, 200)}`); } });
 }
 async function shot(page, name) { await page.waitForTimeout(400); await page.screenshot({ path: `${SHOTS}/${name}.png`, fullPage: false }); }
 async function adminApi(page, path, method = 'GET', body) {
   return page.evaluate(async ([path, method, body]) => {
-    const r = await fetch('/admin/api/' + path, { method, headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'admin-console' }, body: body ? JSON.stringify(body) : undefined });
+    const r = await fetch(API + '/admin/api/' + path, { credentials: 'include', method, headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'admin-console' }, body: body ? JSON.stringify(body) : undefined });
     const data = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(path + ': ' + (data.error || r.status));
     return data;
@@ -44,14 +45,43 @@ async function toastText(page) { return page.$eval('#toast', e => e.hidden ? '' 
 (async () => {
   const browser = await chromium.launch(process.env.CHROME ? { executablePath: process.env.CHROME } : {});
 
+  step('listeners are separated');
+  const status = async url => (await fetch(url)).status;
+  // Each listener serves only its own part; /healthz is everywhere.
+  const checks = [
+    [BASE + '/shop/', 404], [BASE + '/admin/login', 404], [BASE + '/admin/api/session', 404], [BASE + '/shop/api/me', 404],
+    [SHOP_BASE + '/shop/', 200], [SHOP_BASE + '/shop/api/me', 404], [SHOP_BASE + '/admin/login', 404],
+    [API_BASE + '/shop/api/me', 401], [API_BASE + '/admin/api/session', 401], [API_BASE + '/shop/', 404], [API_BASE + '/admin/login', 404],
+    [OPS_BASE + '/admin/login', 200], [OPS_BASE + '/admin/', 200], [OPS_BASE + '/admin/api/session', 404], [OPS_BASE + '/shop/', 404],
+    [MERCHANT_BASE + '/admin/login', 200], [MERCHANT_BASE + '/admin/api/session', 404], [MERCHANT_BASE + '/telegram/webhook', 404],
+  ];
+  if (SHOP_BASE !== BASE) {
+    for (const [url, want] of checks) { const got = await status(url); if (got !== want) problems.push(`${url} returned ${got}, want ${want}`); }
+    for (const b of [BASE, SHOP_BASE, API_BASE, OPS_BASE, MERCHANT_BASE]) if (await status(b + '/healthz') !== 200) problems.push(b + ' /healthz failed');
+    const hook = await fetch(BASE + '/telegram/webhook', { method: 'POST', body: '{}' });
+    if (hook.status === 404 && (await hook.text()).includes('page not found')) problems.push('webhook route missing on the main port');
+    // The API answers CORS only for the configured consoles and shop.
+    const pre = async origin => (await fetch(API_BASE + '/admin/login', { method: 'OPTIONS', headers: { Origin: origin, 'Access-Control-Request-Method': 'POST' } })).status;
+    if (await pre(OPS_BASE) !== 204 || await pre('http://evil.example') !== 403) problems.push('API CORS allowlist wrong');
+  }
+
   // ---------- Admin ----------
   const actx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
   const admin = await actx.newPage(); watch(admin, 'admin');
   step('admin login');
-  await admin.goto(BASE + '/admin/login');
+  await admin.goto(OPS_BASE + '/admin/login');
   await admin.fill('#username', 'admin'); await admin.fill('#password', 'e2e-password-123');
   await Promise.all([admin.waitForURL('**/admin/'), admin.click('#submit')]);
   await admin.waitForTimeout(800); await shot(admin, '01-admin-home');
+
+  step('console upload');
+  // A 1x1 PNG through the page's own upload helper (one-time token; main listener when split).
+  const uploaded = await admin.evaluate(async () => {
+    const png = Uint8Array.from(atob('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='), c => c.charCodeAt(0));
+    const body = new FormData(); body.append('file', new Blob([png], { type: 'image/png' }), 'dot.png'); body.append('type', 'image');
+    const r = await sendUpload(body); return { status: r.status, data: await r.json() };
+  });
+  if (uploaded.status !== 200 || !String(uploaded.data.url).includes('/uploads/')) problems.push('upload failed: ' + JSON.stringify(uploaded));
 
   step('setup menus and merchant');
   await adminApi(admin, 'menus', 'POST', { code: 'food', title: '美食', action_type: 'submenu', placement: 'inline', role: 'user', enabled: true, row_no: 1, sort: 1 });
@@ -115,19 +145,19 @@ async function toastText(page) { return page.$eval('#toast', e => e.hidden ? '' 
   const shopPage = await bctx.newPage(); watch(shopPage, 'shop');
 
   step('shop home');
-  await shopPage.goto(BASE + '/shop/#/');
+  await shopPage.goto(SHOP_BASE + '/shop/#/');
   await shopPage.waitForTimeout(1200); await shot(shopPage, '10-shop-home');
-  await shopPage.goto(BASE + '/shop/#/me'); await shopPage.waitForTimeout(800);
+  await shopPage.goto(SHOP_BASE + '/shop/#/me'); await shopPage.waitForTimeout(800);
   const uid = sql("select id from telegram_users where telegram_user_id=9001");
   sql(`update wallet_accounts set available=100 where user_id=${uid}`);
   await shopPage.reload(); await shopPage.waitForTimeout(800); await shot(shopPage, '11-shop-me');
 
   step('claim coupon');
-  await shopPage.goto(BASE + '/shop/#/coupons/center'); await shopPage.waitForTimeout(800);
+  await shopPage.goto(SHOP_BASE + '/shop/#/coupons/center'); await shopPage.waitForTimeout(800);
   await shopPage.click('[data-claim]'); await shopPage.waitForTimeout(600); await shot(shopPage, '12-coupon-center');
 
   step('product page → cart');
-  await shopPage.goto(BASE + '/shop/#/'); await shopPage.waitForTimeout(800);
+  await shopPage.goto(SHOP_BASE + '/shop/#/'); await shopPage.waitForTimeout(800);
   await shopPage.locator('#grid .tile').filter({ hasText: '宫保鸡丁' }).first().click();
   await shopPage.waitForTimeout(800); await shot(shopPage, '13-product');
   await shopPage.click('[data-sku]:has-text("大份")'); await shopPage.click('#plus');
@@ -138,7 +168,7 @@ async function toastText(page) { return page.$eval('#toast', e => e.hidden ? '' 
   if (!shared.includes('start%3Dp' + meal.id + '_')) problems.push('share link wrong: ' + shared);
 
   step('cart → checkout (express, new address, coupon)');
-  await shopPage.goto(BASE + '/shop/#/cart'); await shopPage.waitForTimeout(800); await shot(shopPage, '15-cart');
+  await shopPage.goto(SHOP_BASE + '/shop/#/cart'); await shopPage.waitForTimeout(800); await shot(shopPage, '15-cart');
   await shopPage.click('[data-checkout]'); await shopPage.waitForTimeout(1200); await shot(shopPage, '16-checkout');
   await shopPage.click('text=添加收货地址'); await shopPage.waitForTimeout(600);
   await shopPage.click('text=新增收货地址'); await shopPage.waitForTimeout(500);
@@ -154,7 +184,7 @@ async function toastText(page) { return page.$eval('#toast', e => e.hidden ? '' 
   if (pay !== '15.600000') problems.push('unexpected pay amount ' + pay);
 
   step('virtual product buy now');
-  await shopPage.goto(BASE + '/shop/#/product/' + card.id); await shopPage.waitForTimeout(800);
+  await shopPage.goto(SHOP_BASE + '/shop/#/product/' + card.id); await shopPage.waitForTimeout(800);
   await shopPage.click('#buyNow'); await shopPage.waitForTimeout(1200);
   await shopPage.click('#pay'); await shopPage.waitForTimeout(1500); await shot(shopPage, '19-virtual-delivered');
   const note = await shopPage.textContent('.code').catch(() => '');
@@ -168,13 +198,13 @@ async function toastText(page) { return page.$eval('#toast', e => e.hidden ? '' 
   await submitModal(admin);
 
   step('buyer confirms, reviews, applies after-sale');
-  await shopPage.goto(BASE + '/shop/#/order/' + orderId); await shopPage.waitForTimeout(900); await shot(shopPage, '21-order-shipped');
+  await shopPage.goto(SHOP_BASE + '/shop/#/order/' + orderId); await shopPage.waitForTimeout(900); await shot(shopPage, '21-order-shipped');
   await shopPage.click('#confirmOrder'); await shopPage.waitForTimeout(1000);
-  await shopPage.goto(BASE + '/shop/#/review/' + orderId); await shopPage.waitForTimeout(800);
+  await shopPage.goto(SHOP_BASE + '/shop/#/review/' + orderId); await shopPage.waitForTimeout(800);
   await shopPage.click('[data-star$=":4"]'); await shopPage.fill('[data-text]', '味道正宗，送得很快！');
   await shot(shopPage, '22-review-form');
   await shopPage.click('#rvSubmit'); await shopPage.waitForTimeout(900);
-  await shopPage.goto(BASE + '/shop/#/aftersale/' + orderId); await shopPage.waitForTimeout(800);
+  await shopPage.goto(SHOP_BASE + '/shop/#/aftersale/' + orderId); await shopPage.waitForTimeout(800);
   await shopPage.fill('#asAmount', '5'); await shopPage.fill('#asReason', '少了一份米饭');
   await shot(shopPage, '23-aftersale-form');
   await shopPage.click('#asSubmit'); await shopPage.waitForTimeout(1000); await shot(shopPage, '24-order-aftersale');
@@ -195,12 +225,12 @@ async function toastText(page) { return page.$eval('#toast', e => e.hidden ? '' 
   await nav(admin, 'shop_reports'); await admin.waitForTimeout(600); await shot(admin, '29-admin-report');
 
   step('buyer sees product rating and order history');
-  await shopPage.goto(BASE + '/shop/#/product/' + meal.id); await shopPage.waitForTimeout(900);
+  await shopPage.goto(SHOP_BASE + '/shop/#/product/' + meal.id); await shopPage.waitForTimeout(900);
   await shopPage.evaluate(() => window.scrollTo(0, document.body.scrollHeight)); await shot(shopPage, '30-product-reviews');
-  await shopPage.goto(BASE + '/shop/#/orders'); await shopPage.waitForTimeout(800); await shot(shopPage, '31-orders');
+  await shopPage.goto(SHOP_BASE + '/shop/#/orders'); await shopPage.waitForTimeout(800); await shot(shopPage, '31-orders');
 
   step('group buying: start, share, friend joins');
-  await shopPage.goto(BASE + '/shop/#/product/' + meal.id); await shopPage.waitForTimeout(900);
+  await shopPage.goto(SHOP_BASE + '/shop/#/product/' + meal.id); await shopPage.waitForTimeout(900);
   await shopPage.click('[data-sku]:has-text("小份")');
   await shot(shopPage, '32-product-group');
   await shopPage.click('#startGroup'); await shopPage.waitForTimeout(1200); await shot(shopPage, '33-group-checkout');
@@ -211,10 +241,10 @@ async function toastText(page) { return page.$eval('#toast', e => e.hidden ? '' 
   const fctx = await browser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true });
   await fctx.route('https://telegram.org/js/telegram-web-app.js', r => r.fulfill({ contentType: 'application/javascript', body: fakeTG(initData(friend)) }));
   const fpage = await fctx.newPage(); watch(fpage, 'friend');
-  await fpage.goto(BASE + '/shop/#/me'); await fpage.waitForTimeout(800);
+  await fpage.goto(SHOP_BASE + '/shop/#/me'); await fpage.waitForTimeout(800);
   const fid = sql('select id from telegram_users where telegram_user_id=9003');
   sql(`update wallet_accounts set available=50 where user_id=${fid}`);
-  await fpage.goto(BASE + '/shop/#/group/' + groupId); await fpage.waitForTimeout(900); await shot(fpage, '35-friend-group');
+  await fpage.goto(SHOP_BASE + '/shop/#/group/' + groupId); await fpage.waitForTimeout(900); await shot(fpage, '35-friend-group');
   await fpage.click('text=我也要参团'); await fpage.waitForTimeout(900);
   await fpage.click('#joinGroup'); await fpage.waitForTimeout(1200);
   await fpage.click('text=添加收货地址'); await fpage.waitForTimeout(500);
@@ -229,10 +259,10 @@ async function toastText(page) { return page.$eval('#toast', e => e.hidden ? '' 
 
   step('points shown to buyer');
   sql(`update shop_orders set completed_at = NOW() - INTERVAL 10 DAY where status='completed'`);
-  await shopPage.goto(BASE + '/shop/#/me'); await shopPage.waitForTimeout(800);
+  await shopPage.goto(SHOP_BASE + '/shop/#/me'); await shopPage.waitForTimeout(800);
 
   step('buyer contacts merchant, admin replies');
-  await shopPage.goto(BASE + '/shop/#/product/' + meal.id); await shopPage.waitForTimeout(900);
+  await shopPage.goto(SHOP_BASE + '/shop/#/product/' + meal.id); await shopPage.waitForTimeout(900);
   await shopPage.click('text=联系商家'); await shopPage.waitForTimeout(800);
   await shopPage.fill('#chatText', '请问大份可以少放辣吗？'); await shopPage.click('#chatSend'); await shopPage.waitForTimeout(900);
   await shot(shopPage, '37-chat-buyer');
@@ -241,12 +271,12 @@ async function toastText(page) { return page.$eval('#toast', e => e.hidden ? '' 
   await admin.click(`[data-action="chat"][data-id="${convId}"]`); await admin.waitForTimeout(600);
   await admin.fill('#chatReply', '可以，下单时备注“少辣”即可。'); await shot(admin, '39-admin-chat');
   await submitModal(admin);
-  await shopPage.goto(BASE + '/shop/#/chat/' + meal.merchant_id); await shopPage.waitForTimeout(900); await shot(shopPage, '40-chat-replied');
+  await shopPage.goto(SHOP_BASE + '/shop/#/chat/' + meal.merchant_id); await shopPage.waitForTimeout(900); await shot(shopPage, '40-chat-replied');
   const replyNotice = (await (await fetch(TG + '/sent')).json()).find(m => m.chat_id === 9001 && /回复了你/.test(m.text || ''));
   if (!replyNotice || !JSON.stringify(replyNotice.reply_markup || {}).includes('#/chat/')) problems.push('buyer not notified of merchant reply');
 
   step('friend applies to become a merchant, admin approves');
-  await fpage.goto(BASE + '/shop/#/apply'); await fpage.waitForTimeout(800);
+  await fpage.goto(SHOP_BASE + '/shop/#/apply'); await fpage.waitForTimeout(800);
   await fpage.fill('#apName', '阿强水果铺'); await fpage.fill('#apContact', '@aqiang'); await fpage.fill('#apCategory', '水果'); await fpage.fill('#apDesc', '每日新鲜进货');
   await shot(fpage, '41-apply-form');
   await fpage.click('#apSubmit'); await fpage.waitForTimeout(900); await shot(fpage, '42-apply-pending');
@@ -262,7 +292,7 @@ async function toastText(page) { return page.$eval('#toast', e => e.hidden ? '' 
   if (password) {
     const mctx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
     const mpage = await mctx.newPage(); watch(mpage, 'merchant');
-    await mpage.goto(BASE + '/admin/login');
+    await mpage.goto(MERCHANT_BASE + '/admin/login');
     await mpage.fill('#username', appRow.split(' ')[1]); await mpage.fill('#password', password);
     await Promise.all([mpage.waitForURL('**/admin/'), mpage.click('#submit')]);
     await mpage.waitForTimeout(1000); await shot(mpage, '44-merchant-console');
@@ -270,11 +300,11 @@ async function toastText(page) { return page.$eval('#toast', e => e.hidden ? '' 
     if (!navHtml.includes('data-nav="shop_products"') || navHtml.includes('data-nav="configs"') || navHtml.includes('data-nav="withdrawals"')) problems.push('merchant console shows wrong pages');
     await mctx.close();
   }
-  await fpage.goto(BASE + '/shop/#/apply'); await fpage.waitForTimeout(700); await shot(fpage, '45-apply-approved');
+  await fpage.goto(SHOP_BASE + '/shop/#/apply'); await fpage.waitForTimeout(700); await shot(fpage, '45-apply-approved');
 
   step('batch import products via the console');
   await nav(admin, 'shop_products');
-  const exported = await admin.evaluate(async () => (await fetch('/admin/api/shop-products/export')).text());
+  const exported = await admin.evaluate(async () => (await fetch(dl('shop-products/export'), { credentials: 'include' })).text());
   if (!exported.includes('招牌宫保鸡丁')) problems.push('export missing products');
   const importFile = SHOTS + '/../import.csv';
   fs.writeFileSync(importFile, exported.trimEnd() + '\n,曼谷中餐馆,中餐,批量导入的炒饭,实物,快递,标准,4.5,30,,,0,是,否,0,,\n');
@@ -296,7 +326,16 @@ async function toastText(page) { return page.$eval('#toast', e => e.hidden ? '' 
   await adminApi(admin, `shop-orders/${groupOrder}/complete`, 'POST', {});
   const octx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
   const owner = await octx.newPage(); watch(owner, 'owner');
-  await owner.goto(BASE + '/admin/login');
+  if (OPS_BASE !== MERCHANT_BASE) {
+    // A merchant account cannot sign in to the operator console.
+    await owner.goto(OPS_BASE + '/admin/login');
+    await owner.fill('#username', 'meal-owner'); await owner.fill('#password', 'owner-pass-123'); await owner.click('#submit');
+    await owner.waitForTimeout(600);
+    const err = await owner.textContent('#error');
+    if (!err.includes('商户后台')) problems.push('merchant login on operator console: ' + err);
+    problems.splice(0, problems.length, ...problems.filter(p => !(p.startsWith('[owner]') && /\b403\b/.test(p)))); // the expected refusal
+  }
+  await owner.goto(MERCHANT_BASE + '/admin/login');
   await owner.fill('#username', 'meal-owner'); await owner.fill('#password', 'owner-pass-123');
   await Promise.all([owner.waitForURL('**/admin/'), owner.click('#submit')]);
   await owner.waitForTimeout(800); await nav(owner, 'shop_settlements'); await shot(owner, '48-owner-settlements');
@@ -313,7 +352,7 @@ async function toastText(page) { return page.$eval('#toast', e => e.hidden ? '' 
   await octx.close();
   const sctx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
   const staffPage = await sctx.newPage(); watch(staffPage, 'staff');
-  await staffPage.goto(BASE + '/admin/login');
+  await staffPage.goto(MERCHANT_BASE + '/admin/login');
   await staffPage.fill('#username', 'packer1'); await staffPage.fill('#password', 'packer-pass-123');
   await Promise.all([staffPage.waitForURL('**/admin/'), staffPage.click('#submit')]);
   await staffPage.waitForTimeout(900); await shot(staffPage, '51-staff-console');
@@ -326,7 +365,7 @@ async function toastText(page) { return page.$eval('#toast', e => e.hidden ? '' 
   const digestMsg = (await (await fetch(TG + '/sent')).json()).find(m => m.chat_id === 777 && /今日待办汇总/.test(m.text || ''));
   console.log('  digest to admins:', !!digestMsg);
   await nav(admin, 'configs'); await shot(admin, '52-configs-backup');
-  const backupInfo = await admin.evaluate(async () => { const r = await fetch('/admin/api/backup'); const b = new Uint8Array(await r.arrayBuffer()); return { status: r.status, size: b.length, magic: b[0] === 0x1f && b[1] === 0x8b, name: r.headers.get('content-disposition') }; });
+  const backupInfo = await admin.evaluate(async () => { const r = await fetch(dl('backup'), { credentials: 'include' }); const b = new Uint8Array(await r.arrayBuffer()); return { status: r.status, size: b.length, magic: b[0] === 0x1f && b[1] === 0x8b, name: r.headers.get('content-disposition') }; });
   console.log('  backup', JSON.stringify(backupInfo));
   if (backupInfo.status !== 200 || !backupInfo.magic || backupInfo.size < 1000) problems.push('backup download failed: ' + JSON.stringify(backupInfo));
   if (sql("select count(*) from admin_audit_logs where method='BACKUP'") !== '1') problems.push('backup not audited');

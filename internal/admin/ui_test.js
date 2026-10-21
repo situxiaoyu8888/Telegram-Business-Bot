@@ -20,7 +20,7 @@ function harness(){
  }
  parse(html.split('<script>')[0]);
  const fixtures={bots:[],routes:[],dashboard:{},pushes:[]};
- const document={getElementById:id=>elements.get(id),body:{style:{}},activeElement:null,addEventListener(){},createElement:tag=>new Element('',tag)};
+ const document={getElementById:id=>elements.get(id),querySelector:()=>({content:''}),body:{style:{}},activeElement:null,addEventListener(){},createElement:tag=>new Element('',tag)};
  const context=vm.createContext({document,window:{innerHeight:900,addEventListener(){}},Event,location:{replace(){}},console,URLSearchParams,setTimeout(){return 1},clearTimeout(){},Date,Intl,FormData:class{},fetch:async(url,options={})=>{requests.push({url,options});return {ok:true,json:async()=>options.method?{id:1,ok:true}:(fixtures[url.replace('/admin/api/','')]||[])}}});
  const script=html.split('<script>')[1].split('</script>')[0];
  vm.runInContext(script.slice(0,script.lastIndexOf("$('brandIcon').innerHTML")),context);

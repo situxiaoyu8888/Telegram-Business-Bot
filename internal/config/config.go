@@ -53,10 +53,22 @@ type Config struct {
 	UploadMaxVideoMB    int64
 
 	// SHOP_H5_URL makes the user bots' menu button open the H5 shop; empty keeps the command list.
-	ShopH5URL        string
-	TelegramAPIURL   string // optional Bot API server; empty uses https://api.telegram.org
-	AdminPublicURL   string // optional console address included in merchant approval messages
-	ShopH5ButtonText string
+	ShopH5URL      string
+	TelegramAPIURL string // optional Bot API server; empty uses https://api.telegram.org
+	// Split listeners (all set, or none): HTTPAddr keeps webhooks, uploads and /uploads; the
+	// operator and merchant consoles, the shop page and every API get their own addresses.
+	// The public URLs are what browsers use, for cross-origin API calls and console checks.
+	APIHTTPAddr       string
+	OperatorHTTPAddr  string
+	MerchantHTTPAddr  string
+	ShopHTTPAddr      string
+	APIPublicURL      string
+	OperatorPublicURL string
+	MerchantPublicURL string
+	MainPublicURL     string   // public address of HTTPAddr, where consoles upload files
+	ExtraOrigins      []string // more origins allowed to call the API (API_ALLOWED_ORIGINS)
+	AdminPublicURL    string   // optional console address included in merchant approval messages
+	ShopH5ButtonText  string
 
 	// Daily database backups to BackupDir (empty disables), keeping BackupKeep files, at BackupHour.
 	BackupDir  string
@@ -155,6 +167,17 @@ func load(path string) (Config, error) {
 	}
 
 	cfg.TelegramAPIURL = strings.TrimRight(mustEnv("TELEGRAM_API_URL"), "/")
+	cfg.APIHTTPAddr, cfg.OperatorHTTPAddr, cfg.MerchantHTTPAddr, cfg.ShopHTTPAddr = mustEnv("API_HTTP_ADDR"), mustEnv("OPERATOR_HTTP_ADDR"), mustEnv("MERCHANT_HTTP_ADDR"), mustEnv("SHOP_HTTP_ADDR")
+	cfg.APIPublicURL, cfg.OperatorPublicURL, cfg.MerchantPublicURL = origin(mustEnv("API_PUBLIC_URL")), origin(mustEnv("OPERATOR_PUBLIC_URL")), origin(mustEnv("MERCHANT_PUBLIC_URL"))
+	cfg.MainPublicURL = origin(mustEnv("MAIN_PUBLIC_URL"))
+	if cfg.MainPublicURL == "" {
+		cfg.MainPublicURL = origin(strings.TrimSuffix(cfg.UploadPublicBaseURL, "/uploads"))
+	}
+	for _, o := range strings.Split(mustEnv("API_ALLOWED_ORIGINS"), ",") {
+		if o = origin(o); o != "" {
+			cfg.ExtraOrigins = append(cfg.ExtraOrigins, o)
+		}
+	}
 	cfg.BackupDir, cfg.BackupKeep, cfg.BackupHour = mustEnv("BACKUP_DIR"), 7, 3
 	if v := mustEnv("BACKUP_KEEP"); v != "" {
 		if cfg.BackupKeep, err = strconv.Atoi(v); err != nil || cfg.BackupKeep < 1 {
@@ -209,6 +232,63 @@ func load(path string) (Config, error) {
 	return cfg, nil
 }
 
+// Split reports whether the console, merchant console, shop page and API listen separately.
+func (c Config) Split() bool { return c.APIHTTPAddr != "" }
+
+// validateSplit checks the split-listener settings: all of them or none.
+func (c Config) validateSplit() error {
+	addrs := map[string]string{"OPERATOR_HTTP_ADDR": c.OperatorHTTPAddr, "MERCHANT_HTTP_ADDR": c.MerchantHTTPAddr, "SHOP_HTTP_ADDR": c.ShopHTTPAddr}
+	if !c.Split() {
+		for name, v := range addrs {
+			if v != "" {
+				return fmt.Errorf("%s needs API_HTTP_ADDR as well: set all split listeners or none", name)
+			}
+		}
+		return nil
+	}
+	addrs["API_HTTP_ADDR"], addrs["HTTP_ADDR"] = c.APIHTTPAddr, c.HTTPAddr
+	seen := map[string]string{}
+	for name, v := range addrs {
+		if v == "" {
+			return fmt.Errorf("%s is required when API_HTTP_ADDR is set", name)
+		}
+		if other, dup := seen[v]; dup {
+			return fmt.Errorf("%s and %s must use different addresses", name, other)
+		}
+		seen[v] = name
+	}
+	for name, v := range map[string]string{"API_PUBLIC_URL": c.APIPublicURL, "OPERATOR_PUBLIC_URL": c.OperatorPublicURL, "MERCHANT_PUBLIC_URL": c.MerchantPublicURL, "MAIN_PUBLIC_URL": c.MainPublicURL} {
+		if v == "" {
+			return fmt.Errorf("%s must be the http(s) address browsers use when API_HTTP_ADDR is set", name)
+		}
+	}
+	if c.OperatorPublicURL == c.MerchantPublicURL {
+		return fmt.Errorf("OPERATOR_PUBLIC_URL and MERCHANT_PUBLIC_URL must differ: the API tells the consoles apart by address")
+	}
+	return nil
+}
+
+// origin reduces an http(s) URL to scheme://host[:port]; anything else becomes "".
+func origin(raw string) string {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return ""
+	}
+	return u.Scheme + "://" + u.Host
+}
+
+// AllowedOrigins are the browser origins that may call the API in split mode.
+func (c Config) AllowedOrigins() []string {
+	out := []string{c.OperatorPublicURL, c.MerchantPublicURL}
+	if o := origin(c.ShopH5URL); o != "" {
+		out = append(out, o)
+	}
+	return append(out, c.ExtraOrigins...)
+}
+
+// publicHost matches a DNS name with a dot (internationalised names must be in punycode).
+var publicHost = regexp.MustCompile(`^(?i)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z][a-z0-9-]{0,61}[a-z0-9]$`)
+
 func mustEnv(key string) string { return strings.TrimSpace(os.Getenv(key)) }
 
 func parseIDs(s string) (map[int64]struct{}, error) {
@@ -239,6 +319,9 @@ func (c Config) Validate() error {
 	if e1 != nil || e2 != nil || e3 != nil || !min.IsPositive() || fee.IsNegative() || rate.IsNegative() || rate.GreaterThan(decimal.NewFromInt(1)) || !min.Equal(min.Truncate(6)) || !fee.Equal(fee.Truncate(6)) {
 		return fmt.Errorf("invalid withdrawal minimum, fee or referral rate")
 	}
+	if err := c.validateSplit(); err != nil {
+		return err
+	}
 	if c.TelegramAPIURL != "" {
 		if u, err := url.Parse(c.TelegramAPIURL); err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
 			return fmt.Errorf("TELEGRAM_API_URL must be an http(s) URL")
@@ -248,6 +331,11 @@ func (c Config) Validate() error {
 		u, err := url.Parse(c.ShopH5URL)
 		if err != nil || u.Scheme != "https" || u.Host == "" {
 			return fmt.Errorf("SHOP_H5_URL must be an https URL")
+		}
+		// Telegram rejects such menu buttons only at runtime (and the bot then retries forever), so
+		// catch placeholders such as "https://你的H5商城地址/" at startup.
+		if !publicHost.MatchString(u.Hostname()) {
+			return fmt.Errorf("SHOP_H5_URL %q is not a real public address; use your domain, e.g. https://bot.example.com/shop/", c.ShopH5URL)
 		}
 		if n := utf8.RuneCountInString(c.ShopH5ButtonText); n == 0 || n > 64 {
 			return fmt.Errorf("SHOP_H5_BUTTON_TEXT must be 1-64 characters")

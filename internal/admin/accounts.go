@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"go.uber.org/zap"
+	"net/http"
 	"regexp"
 	"strings"
 	"telegram-business-bot/internal/backup"
@@ -220,8 +221,8 @@ func (h *Handler) changePassword(c *gin.Context) {
 	}
 	// Other sessions of this account are revoked by the new hash; re-bind this one.
 	me.PasswordHash = hash
-	if token, err := c.Cookie(sessionCookie); err == nil && validToken(token) {
-		_ = h.sessions().Set(c.Request.Context(), sessionKey(token), sessionValue(me), sessionTTL).Err()
+	if token, err := c.Cookie(h.cookieName(c)); err == nil && validToken(token) {
+		_ = h.sessions().Set(c.Request.Context(), sessionKey(token), sessionValue(me)+"|"+c.GetString(portalKey), sessionTTL).Err()
 	}
 	c.JSON(200, gin.H{"ok": true})
 }
@@ -274,6 +275,8 @@ func (h *Handler) downloadBackup(c *gin.Context) {
 		return
 	}
 	start := time.Now()
+	// The server's 15-second write timeout would cut large backups off mid-download.
+	_ = http.NewResponseController(c.Writer).SetWriteDeadline(time.Now().Add(30 * time.Minute))
 	c.Header("Content-Type", "application/gzip")
 	c.Header("Content-Disposition", `attachment; filename="`+backup.FileName(start)+`"`)
 	err = backup.WriteGzip(c.Request.Context(), sqlDB, c.Writer)

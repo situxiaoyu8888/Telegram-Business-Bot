@@ -52,6 +52,11 @@ services:
       - ./backups:/app/backups
     ports:
       - "8080:8080"
+      # With split listeners in .env, publish their ports too, e.g.:
+      # - "8081:8081"   # SHOP_HTTP_ADDR
+      # - "8082:8082"   # API_HTTP_ADDR
+      # - "8090:8090"   # OPERATOR_HTTP_ADDR
+      # - "8091:8091"   # MERCHANT_HTTP_ADDR
     depends_on:
       mariadb:
         condition: service_healthy

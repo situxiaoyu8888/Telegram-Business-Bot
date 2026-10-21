@@ -10,6 +10,7 @@ import (
 	"telegram-business-bot/internal/backup"
 	"telegram-business-bot/internal/business"
 	"telegram-business-bot/internal/config"
+	"telegram-business-bot/internal/cors"
 	"telegram-business-bot/internal/menu"
 	"telegram-business-bot/internal/model"
 	"telegram-business-bot/internal/push"
@@ -36,6 +37,7 @@ type App struct {
 	adminTG       *telegram.Client
 	adminTGRouter *telegram.Router
 	engine        *gin.Engine
+	listeners     []Listener
 	tronWatcher   *trongrid.Watcher
 	pushService   *push.Service
 	shop          *shop.Service
@@ -71,8 +73,16 @@ func New(cfg config.Config, logger *zap.Logger) (*App, error) {
 	if cfg.AppEnv != "dev" {
 		gin.SetMode(gin.ReleaseMode)
 	}
-	engine := gin.New()
-	engine.Use(gin.Recovery())
+	newEngine := func() *gin.Engine {
+		e := gin.New()
+		e.Use(gin.Recovery())
+		return e
+	}
+	engine := newEngine()
+	if cfg.Split() {
+		// The consoles upload files to the main listener from their own origins.
+		engine.Use(cors.Allow([]string{cfg.OperatorPublicURL, cfg.MerchantPublicURL}))
+	}
 	engine.Static(
 		"/uploads",
 		cfg.UploadDir,
@@ -95,7 +105,7 @@ func New(cfg config.Config, logger *zap.Logger) (*App, error) {
 		staffIDs = append(staffIDs, id)
 	}
 	shopSvc := shop.New(st, walletSvc, shop.BotNotifier{Bots: bots, Staff: staffSender, ShopURL: cfg.ShopH5URL}, logger).WithStaff(staffIDs)
-	shop.NewHandler(shopSvc, st, bots, logger).WithBotUsernames(func(ctx context.Context, botID uint64) string {
+	shopHandler := shop.NewHandler(shopSvc, st, bots, logger).WithBotUsernames(func(ctx context.Context, botID uint64) string {
 		if botID == 0 {
 			name, _ := tg.Username(ctx)
 			return name
@@ -103,7 +113,7 @@ func New(cfg config.Config, logger *zap.Logger) (*App, error) {
 		var b model.BusinessBot
 		_ = st.DB.WithContext(ctx).Select("username").First(&b, botID).Error
 		return b.Username
-	}).Register(engine)
+	})
 	a := &App{shop: shopSvc, businessBots: bots, cfg: cfg, logger: logger, store: st, tg: tg, tgRouter: tgRouter, adminTG: adminTG, adminTGRouter: adminTGRouter, engine: engine, pushService: pushSvc}
 	a.registerRoutes()
 	a.admin = admin.New(
@@ -117,20 +127,53 @@ func New(cfg config.Config, logger *zap.Logger) (*App, error) {
 		cfg.UploadMaxImageMB,
 		cfg.UploadMaxVideoMB,
 	).WithBots(bots).WithShop(shopSvc).WithLogger(logger).WithPublicURL(cfg.AdminPublicURL)
-	a.admin.Register(engine)
+	a.listeners = []Listener{{Addr: cfg.HTTPAddr, Handler: engine, Serves: "webhooks, uploads"}}
+	if !cfg.Split() {
+		shopHandler.Register(engine)
+		a.admin.Register(engine)
+		a.listeners[0].Serves = "everything"
+	} else {
+		// Pages, consoles and APIs each listen on their own address; the API answers only the
+		// configured origins and tells the consoles apart by them.
+		api, operator, merchant, shopPage := newEngine(), newEngine(), newEngine(), newEngine()
+		api.Use(cors.Allow(cfg.AllowedOrigins()))
+		a.admin.WithSplit(cfg.APIPublicURL, cfg.MainPublicURL, cfg.OperatorPublicURL, cfg.MerchantPublicURL).WithPublicURL(cfg.MerchantPublicURL + "/admin/")
+		a.admin.RegisterConsole(operator, admin.ConsoleOperator)
+		a.admin.RegisterConsole(merchant, admin.ConsoleMerchant)
+		a.admin.RegisterAPI(api)
+		a.admin.RegisterUpload(engine)
+		shopHandler.WithAPIBase(cfg.APIPublicURL)
+		shopHandler.RegisterPage(shopPage)
+		shopHandler.RegisterAPI(api)
+		for _, e := range []*gin.Engine{api, operator, merchant, shopPage} {
+			a.registerHealth(e)
+		}
+		a.listeners = append(a.listeners,
+			Listener{Addr: cfg.OperatorHTTPAddr, Handler: operator, Serves: "operator console"},
+			Listener{Addr: cfg.MerchantHTTPAddr, Handler: merchant, Serves: "merchant console"},
+			Listener{Addr: cfg.ShopHTTPAddr, Handler: shopPage, Serves: "shop page"},
+			Listener{Addr: cfg.APIHTTPAddr, Handler: api, Serves: "API"},
+		)
+	}
 	tronClient := trongrid.New(cfg.TronGridBaseURL, cfg.TronGridAPIKey)
 	a.tronWatcher = trongrid.NewWatcher(st, walletSvc, refSvc, tronClient, cfg.TronUSDTContract, cfg.TronConfirmOnly, cfg.TronWatchInterval, logger)
 	return a, nil
 }
 
+// registerRoutes adds health checks and Telegram webhooks to every listener: webhooks must stay
+// reachable from Telegram even when the console port is private.
 func (a *App) registerRoutes() {
-	a.engine.GET("/healthz", func(c *gin.Context) {
+	a.registerHealth(a.engine)
+	a.engine.POST("/telegram/webhook", a.webhookHandler(false))
+	a.engine.POST("/telegram/admin/webhook", a.webhookHandler(true))
+}
+
+func (a *App) registerHealth(e *gin.Engine) {
+	e.GET("/healthz", func(c *gin.Context) {
 		dbOK := a.store.DB.Exec("SELECT 1").Error == nil
 		redisOK := a.store.Redis.Ping(c.Request.Context()).Err() == nil
 		c.JSON(http.StatusOK, gin.H{"ok": dbOK && redisOK, "db": dbOK, "redis": redisOK, "tron_watcher": a.cfg.TronWatchEnabled, "admin_bot": a.adminTG != nil})
 	})
-	a.engine.POST("/telegram/webhook", a.webhookHandler(false))
-	a.engine.POST("/telegram/admin/webhook", a.webhookHandler(true))
 }
 
 func (a *App) webhookHandler(adminBot bool) gin.HandlerFunc {
@@ -167,6 +210,17 @@ func (a *App) webhookHandler(adminBot bool) gin.HandlerFunc {
 }
 
 func (a *App) Router() http.Handler { return a.engine }
+
+// ShopRouter is the separate shop listener's handler, or nil when the shop shares Router.
+// Listener is one HTTP address the program serves and what it is for.
+type Listener struct {
+	Addr    string
+	Handler http.Handler
+	Serves  string
+}
+
+// Listeners returns the HTTP listeners to start: one, or five with split listeners.
+func (a *App) Listeners() []Listener { return a.listeners }
 
 func (a *App) StartWorkers(ctx context.Context) {
 	go a.pushService.Run(ctx)

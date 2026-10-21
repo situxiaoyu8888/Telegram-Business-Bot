@@ -2,6 +2,7 @@ package admin
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 	"io"
@@ -9,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -157,4 +159,70 @@ func secureRandomName(bytesLen int) (string, error) {
 		return "", err
 	}
 	return hex.EncodeToString(b), nil
+}
+
+const uploadTokenTTL = 10 * time.Minute
+
+func uploadTokenKey(token string) string {
+	sum := sha256.Sum256([]byte(token))
+	return "admin:upload:" + hex.EncodeToString(sum[:])
+}
+
+// uploadToken issues a one-time upload token for the signed-in account. Uploads go to the main
+// listener, which with split listeners may not receive the console's session cookie.
+func (h *Handler) uploadToken(c *gin.Context) {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		respond(c, err)
+		return
+	}
+	token := hex.EncodeToString(b)
+	if err := h.sessions().Set(c.Request.Context(), uploadTokenKey(token), strconv.FormatUint(current(c).ID, 10), uploadTokenTTL).Err(); err != nil {
+		c.JSON(503, gin.H{"error": "会话服务暂不可用"})
+		return
+	}
+	url := h.uploadURL
+	if url == "" {
+		url = "/admin/api/upload"
+	}
+	c.JSON(200, gin.H{"token": token, "url": url})
+}
+
+// uploadAuth accepts an upload with a valid one-time token from an enabled account that may still
+// use a page with uploads.
+func (h *Handler) uploadAuth(c *gin.Context) {
+	token := c.GetHeader("X-Upload-Token")
+	if !validToken(token) {
+		c.AbortWithStatusJSON(401, gin.H{"error": "上传凭证无效，请重试"})
+		return
+	}
+	key := uploadTokenKey(token)
+	idText, err := h.sessions().Get(c.Request.Context(), key).Result()
+	if err != nil {
+		c.AbortWithStatusJSON(401, gin.H{"error": "上传凭证已过期，请重试"})
+		return
+	}
+	_ = h.sessions().Del(c.Request.Context(), key).Err() // single use
+	id, _ := strconv.ParseUint(idText, 10, 64)
+	u, err := h.accounts().ByID(c.Request.Context(), id)
+	if err != nil || !u.Enabled {
+		c.AbortWithStatusJSON(401, gin.H{"error": "账号不可用"})
+		return
+	}
+	perms, err := h.permissionsOf(c.Request.Context(), u)
+	if err != nil {
+		c.AbortWithStatusJSON(503, gin.H{"error": "账号服务暂不可用"})
+		return
+	}
+	allowed := false
+	for _, p := range uploadPages {
+		allowed = allowed || perms[p]
+	}
+	if !allowed {
+		c.AbortWithStatusJSON(403, gin.H{"error": "没有上传权限"})
+		return
+	}
+	c.Set(accountKey, u)
+	c.Set(permissionsKey, perms)
+	c.Next()
 }

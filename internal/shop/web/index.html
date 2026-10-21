@@ -2,6 +2,7 @@
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
+<meta name="api-base" content="">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,viewport-fit=cover">
 <title>商城</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 32 32%22%3E%3Crect width=%2232%22 height=%2232%22 rx=%228%22 fill=%22%235264e8%22/%3E%3Cpath d=%22M24 8 14 18M24 8l-6 16-4-6-6-4z%22 fill=%22none%22 stroke=%22white%22 stroke-width=%222%22 stroke-linejoin=%22round%22/%3E%3C/svg%3E">
@@ -135,7 +136,7 @@ function toast(msg){const t=document.createElement('div');t.className='toast';t.
 function confirmBox(msg){return new Promise(res=>{if(tg?.showConfirm)tg.showConfirm(msg,ok=>res(ok));else res(window.confirm(msg))})}
 function haptic(type){try{tg?.HapticFeedback?.notificationOccurred(type)}catch(e){}}
 async function api(path,opt={}){
- const res=await fetch('/shop/api/'+path,{...opt,headers:{'Content-Type':'application/json','X-Telegram-Init-Data':initData}});
+ const res=await fetch(document.querySelector('meta[name=api-base]').content+'/shop/api/'+path,{...opt,headers:{'Content-Type':'application/json','X-Telegram-Init-Data':initData}});
  let data;try{data=await res.json()}catch(e){throw Error('服务暂时不可用，请稍后重试')}
  if(!res.ok)throw Error(data.error||'请求失败');return data}
 const post=(path,body={})=>api(path,{method:'POST',body:JSON.stringify(body)});

@@ -28,6 +28,10 @@ const sessionCookie = "admin_session"
 const sessionTTL = 12 * time.Hour
 const accountKey = "admin_account"
 const permissionsKey = "admin_permissions"
+const portalKey = "admin_portal"
+
+// uploadPages are the pages whose forms upload files.
+var uploadPages = []string{"pushes", "menus", "shop_products"}
 
 //go:embed login.html
 var loginHTML string
@@ -142,12 +146,43 @@ func csrfOK(c *gin.Context) bool {
 }
 func (h *Handler) cookie(c *gin.Context, token string, age int) {
 	c.SetSameSite(http.SameSiteStrictMode)
-	c.SetCookie(sessionCookie, token, age, "/admin", "", c.Request.TLS != nil || c.GetHeader("X-Forwarded-Proto") == "https", true)
+	c.SetCookie(h.cookieName(c), token, age, "/admin", "", c.Request.TLS != nil || c.GetHeader("X-Forwarded-Proto") == "https", true)
 }
-func (h *Handler) loginPage(c *gin.Context) {
+func (h *Handler) loginPage(c *gin.Context, console string) {
 	c.Header("Cache-Control", "no-store")
-	c.Data(200, "text/html; charset=utf-8", []byte(loginHTML))
+	html := withAPIBase(loginHTML, h.apiBase)
+	html = strings.Replace(html, `<meta name="console" content="">`, `<meta name="console" content="`+console+`">`, 1)
+	c.Data(200, "text/html; charset=utf-8", []byte(html))
 }
+
+// requestPortal is the console a split-mode API request comes from, by its Origin ("" if unknown);
+// it is always "" with a single listener.
+func (h *Handler) requestPortal(c *gin.Context) string {
+	if !h.split {
+		return ""
+	}
+	if origin := c.GetHeader("Origin"); origin != "" {
+		return h.portals[origin]
+	}
+	// Downloads are plain navigations, which carry no Origin; they name their console instead.
+	if c.Request.Method == http.MethodGet {
+		if p := c.Query("portal"); p == portalOperator || p == portalMerchant {
+			return p
+		}
+	}
+	return ""
+}
+
+// cookieName is the session cookie of the request's console. Cookies ignore ports, so with split
+// listeners each console keeps its own cookie and both can be signed in from one browser.
+func (h *Handler) cookieName(c *gin.Context) string {
+	if p := h.requestPortal(c); p != "" {
+		return sessionCookie + "_" + p
+	}
+	return sessionCookie
+}
+
+func isMerchantRole(role string) bool { return role == roleMerchant || role == roleStaff }
 func (h *Handler) login(c *gin.Context) {
 	c.Header("Cache-Control", "no-store")
 	if !csrfOK(c) {
@@ -201,6 +236,20 @@ func (h *Handler) login(c *gin.Context) {
 		c.JSON(403, gin.H{"error": "账号已停用，请联系超级管理员"})
 		return
 	}
+	portal := h.requestPortal(c)
+	if h.split {
+		switch {
+		case portal == "":
+			c.JSON(403, gin.H{"error": "请从运营后台或商户后台页面登录"})
+			return
+		case portal == portalOperator && isMerchantRole(u.Role):
+			c.JSON(403, gin.H{"error": "商家账号请从商户后台登录"})
+			return
+		case portal == portalMerchant && !isMerchantRole(u.Role):
+			c.JSON(403, gin.H{"error": "平台账号请从运营后台登录"})
+			return
+		}
+	}
 	tokenBytes := make([]byte, 32)
 	if _, err := rand.Read(tokenBytes); err != nil {
 		c.JSON(500, gin.H{"error": "无法创建登录会话"})
@@ -208,13 +257,13 @@ func (h *Handler) login(c *gin.Context) {
 	}
 	token := hex.EncodeToString(tokenBytes)
 	// Rotate a previous cookie rather than leaving a second live session behind.
-	if old, err := c.Cookie(sessionCookie); err == nil && validToken(old) {
+	if old, err := c.Cookie(h.cookieName(c)); err == nil && validToken(old) {
 		if err = h.sessions().Del(c.Request.Context(), sessionKey(old)).Err(); err != nil {
 			c.JSON(503, gin.H{"error": "会话服务暂不可用"})
 			return
 		}
 	}
-	if err := h.sessions().Set(c.Request.Context(), sessionKey(token), sessionValue(u), sessionTTL).Err(); err != nil {
+	if err := h.sessions().Set(c.Request.Context(), sessionKey(token), sessionValue(u)+"|"+portal, sessionTTL).Err(); err != nil {
 		c.JSON(503, gin.H{"error": "会话服务暂不可用"})
 		return
 	}
@@ -228,7 +277,7 @@ func (h *Handler) logout(c *gin.Context) {
 	if !csrfOK(c) {
 		return
 	}
-	if token, err := c.Cookie(sessionCookie); err == nil && validToken(token) {
+	if token, err := c.Cookie(h.cookieName(c)); err == nil && validToken(token) {
 		if err = h.sessions().Del(c.Request.Context(), sessionKey(token)).Err(); err != nil {
 			c.JSON(503, gin.H{"error": "退出失败，请稍后重试"})
 			return
@@ -238,8 +287,15 @@ func (h *Handler) logout(c *gin.Context) {
 	c.JSON(200, gin.H{"ok": true})
 }
 
-// sessionAccount resolves the session to an enabled account whose password has not changed since login.
-func (h *Handler) sessionAccount(ctx context.Context, value string) (*model.AdminUser, error) {
+// sessionAccount resolves the session to an enabled account whose password has not changed since
+// login. A session is "<sessionValue>|<portal>"; the portal is the console it was opened from.
+func (h *Handler) sessionAccount(ctx context.Context, stored string) (*model.AdminUser, string, error) {
+	value, portal, _ := strings.Cut(stored, "|")
+	u, err := h.sessionUser(ctx, value)
+	return u, portal, err
+}
+
+func (h *Handler) sessionUser(ctx context.Context, value string) (*model.AdminUser, error) {
 	idText, _, ok := strings.Cut(value, ":")
 	id, err := strconv.ParseUint(idText, 10, 64)
 	if !ok || err != nil {
@@ -259,7 +315,7 @@ func (h *Handler) sessionAccount(ctx context.Context, value string) (*model.Admi
 }
 func (h *Handler) requireSession(c *gin.Context) {
 	c.Header("Cache-Control", "no-store")
-	token, err := c.Cookie(sessionCookie)
+	token, err := c.Cookie(h.cookieName(c))
 	if err == nil && validToken(token) {
 		var value string
 		value, err = h.sessions().Get(c.Request.Context(), sessionKey(token)).Result()
@@ -268,12 +324,17 @@ func (h *Handler) requireSession(c *gin.Context) {
 			return
 		}
 		if err == nil {
-			u, err := h.sessionAccount(c.Request.Context(), value)
+			u, portal, err := h.sessionAccount(c.Request.Context(), value)
 			if err != nil {
 				c.AbortWithStatusJSON(503, gin.H{"error": "账号服务暂不可用"})
 				return
 			}
+			// A split-mode session only works from the console it was opened in.
+			if u != nil && portal != h.requestPortal(c) {
+				u = nil
+			}
 			if u != nil {
+				c.Set(portalKey, portal)
 				if c.Request.Method != "GET" && c.Request.Method != "HEAD" && !csrfOK(c) {
 					return
 				}
