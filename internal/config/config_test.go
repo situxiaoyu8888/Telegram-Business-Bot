@@ -38,7 +38,7 @@ func TestEnvironmentOverridesDotEnv(t *testing.T) {
 	}
 }
 func TestInvalidConfigReturnsError(t *testing.T) {
-	for _, item := range []struct{ k, v string }{{"ADMIN_IDS", "bad"}, {"UPLOAD_DIR", ""}, {"WITHDRAW_FEE_USDT", "-1"}, {"WITHDRAW_MIN_USDT", "nonsense"}, {"REFERRAL_RATE", "1.1"}} {
+	for _, item := range []struct{ k, v string }{{"ADMIN_IDS", "bad"}, {"UPLOAD_DIR", ""}, {"WITHDRAW_FEE_USDT", "-1"}, {"WITHDRAW_MIN_USDT", "nonsense"}, {"REFERRAL_RATE", "1.1"}, {"SHOP_H5_URL", "http://shop.example.com"}, {"SHOP_H5_URL", "shop.example.com"}} {
 		t.Run(item.k, func(t *testing.T) {
 			setupEnv(t)
 			t.Setenv(item.k, item.v)
@@ -60,5 +60,15 @@ func TestWebhookSecretsRequired(t *testing.T) {
 	t.Setenv("ADMIN_TELEGRAM_BOT_TOKEN", "admin-token")
 	if _, err := load(filepath.Join(t.TempDir(), "missing")); err == nil {
 		t.Fatal("admin secret absent")
+	}
+}
+
+func TestShopH5ButtonDefaults(t *testing.T) {
+	setupEnv(t)
+	t.Setenv("SHOP_H5_URL", "https://shop.example.com/")
+	t.Setenv("SHOP_H5_BUTTON_TEXT", "")
+	c, err := load(filepath.Join(t.TempDir(), "missing"))
+	if err != nil || c.ShopH5URL != "https://shop.example.com/" || c.ShopH5ButtonText != "商城" {
+		t.Fatal(c.ShopH5URL, c.ShopH5ButtonText, err)
 	}
 }

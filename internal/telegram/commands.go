@@ -19,12 +19,27 @@ func defaultCommands(adminOnly bool) []BotCommand {
 	return []BotCommand{{"start", "开始使用"}, {"contactus", "联系客服"}}
 }
 
-// Register the private-chat command list and the input field's command button.
-func (c *Client) RegisterCommandMenu(ctx context.Context, adminOnly bool) error {
+// MenuButton is the button left of the input field. With a URL it opens that H5 page as a
+// Telegram Web App; otherwise it shows the command list.
+type MenuButton struct {
+	Text string
+	URL  string
+}
+
+func (b MenuButton) payload() any {
+	if b.URL == "" {
+		return map[string]string{"type": "commands"}
+	}
+	return map[string]any{"type": "web_app", "text": b.Text, "web_app": map[string]string{"url": b.URL}}
+}
+
+// Register the private-chat command list and the input field's menu button.
+// Commands stay available by typing "/" when the button opens the H5 page.
+func (c *Client) RegisterCommandMenu(ctx context.Context, adminOnly bool, button MenuButton) error {
 	if err := c.call(ctx, "setMyCommands", map[string]any{"commands": defaultCommands(adminOnly), "scope": map[string]string{"type": "all_private_chats"}, "language_code": ""}, nil); err != nil {
 		return err
 	}
-	return c.call(ctx, "setChatMenuButton", map[string]any{"menu_button": map[string]string{"type": "commands"}}, nil)
+	return c.call(ctx, "setChatMenuButton", map[string]any{"menu_button": button.payload()}, nil)
 }
 
 // Registration failure must not stop message delivery. Retry transient failures
@@ -32,7 +47,7 @@ func (c *Client) RegisterCommandMenu(ctx context.Context, adminOnly bool) error 
 func (r *Router) SyncCommandMenu(ctx context.Context) {
 	for ctx.Err() == nil {
 		attempt, cancel := context.WithTimeout(ctx, 20*time.Second)
-		err := r.client.RegisterCommandMenu(attempt, r.adminOnly)
+		err := r.client.RegisterCommandMenu(attempt, r.adminOnly, r.menuButton)
 		cancel()
 		if err == nil {
 			return

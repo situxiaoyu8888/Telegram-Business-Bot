@@ -33,6 +33,7 @@ type Router struct {
 	adminIDs        map[int64]struct{}
 	fallbackDeposit string
 	adminOnly       bool
+	menuButton      MenuButton
 	logger          *zap.Logger
 }
 
@@ -511,3 +512,6 @@ func (r *Router) editHome(ctx context.Context, chatID int64, msgID int, userID i
 }
 
 func (r *Router) WithBotID(id uint64) *Router { r.botID = id; return r }
+
+// WithMenuButton sets the input field's menu button registered by SyncCommandMenu.
+func (r *Router) WithMenuButton(b MenuButton) *Router { r.menuButton = b; return r }

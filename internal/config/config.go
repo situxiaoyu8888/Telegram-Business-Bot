@@ -3,11 +3,13 @@ package config
 import (
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"regexp"
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/shopspring/decimal"
 
@@ -49,6 +51,10 @@ type Config struct {
 	UploadPublicBaseURL string
 	UploadMaxImageMB    int64
 	UploadMaxVideoMB    int64
+
+	// SHOP_H5_URL makes the user bots' menu button open the H5 shop; empty keeps the command list.
+	ShopH5URL        string
+	ShopH5ButtonText string
 
 	LogDir        string
 	LogMaxSizeMB  int
@@ -141,6 +147,12 @@ func load(path string) (Config, error) {
 		return Config{}, fmt.Errorf("UPLOAD_MAX_VIDEO_MB invalid")
 	}
 
+	cfg.ShopH5URL = mustEnv("SHOP_H5_URL")
+	cfg.ShopH5ButtonText = mustEnv("SHOP_H5_BUTTON_TEXT")
+	if cfg.ShopH5ButtonText == "" {
+		cfg.ShopH5ButtonText = "商城"
+	}
+
 	// Log settings are optional so existing .env files keep working; LOG_DIR=off disables file output.
 	cfg.LogDir = mustEnv("LOG_DIR")
 	if cfg.LogDir == "" {
@@ -206,6 +218,15 @@ func (c Config) Validate() error {
 	rate, e3 := decimal.NewFromString(c.ReferralRate)
 	if e1 != nil || e2 != nil || e3 != nil || !min.IsPositive() || fee.IsNegative() || rate.IsNegative() || rate.GreaterThan(decimal.NewFromInt(1)) || !min.Equal(min.Truncate(6)) || !fee.Equal(fee.Truncate(6)) {
 		return fmt.Errorf("invalid withdrawal minimum, fee or referral rate")
+	}
+	if c.ShopH5URL != "" {
+		u, err := url.Parse(c.ShopH5URL)
+		if err != nil || u.Scheme != "https" || u.Host == "" {
+			return fmt.Errorf("SHOP_H5_URL must be an https URL")
+		}
+		if n := utf8.RuneCountInString(c.ShopH5ButtonText); n == 0 || n > 64 {
+			return fmt.Errorf("SHOP_H5_BUTTON_TEXT must be 1-64 characters")
+		}
 	}
 	if c.WalletCurrency != "USDT" {
 		return fmt.Errorf("only USDT wallets are supported")

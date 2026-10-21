@@ -37,7 +37,7 @@ func TestRegisterPrivateCommandsAndMenuButton(t *testing.T) {
 		tr := &commandTransport{t: t}
 		c := NewClient("test")
 		c.http = &http.Client{Transport: tr}
-		if err := c.RegisterCommandMenu(context.Background(), admin); err != nil {
+		if err := c.RegisterCommandMenu(context.Background(), admin, MenuButton{}); err != nil {
 			t.Fatal(err)
 		}
 		if len(tr.calls) != 2 || !strings.HasSuffix(tr.calls[0].method, "/setMyCommands") || !strings.HasSuffix(tr.calls[1].method, "/setChatMenuButton") {
@@ -58,11 +58,23 @@ func TestRegisterPrivateCommandsAndMenuButton(t *testing.T) {
 		}
 	}
 }
+func TestMenuButtonOpensH5WhenConfigured(t *testing.T) {
+	tr := &commandTransport{t: t}
+	c := NewClient("test")
+	c.http = &http.Client{Transport: tr}
+	if err := c.RegisterCommandMenu(context.Background(), false, MenuButton{Text: "商城", URL: "https://shop.example.com/"}); err != nil {
+		t.Fatal(err)
+	}
+	button := tr.calls[1].payload["menu_button"].(map[string]any)
+	if button["type"] != "web_app" || button["text"] != "商城" || button["web_app"].(map[string]any)["url"] != "https://shop.example.com/" {
+		t.Fatal(button)
+	}
+}
 func TestCommandRegistrationReportsFailureAndHonorsCancellation(t *testing.T) {
 	tr := &commandTransport{t: t, fail: true}
 	c := NewClient("test")
 	c.http = &http.Client{Transport: tr}
-	if err := c.RegisterCommandMenu(context.Background(), false); err == nil {
+	if err := c.RegisterCommandMenu(context.Background(), false, MenuButton{}); err == nil {
 		t.Fatal("registration error lost")
 	}
 	if len(tr.calls) != 1 {

@@ -17,6 +17,7 @@ import (
 	"telegram-business-bot/internal/business"
 	"telegram-business-bot/internal/model"
 	"telegram-business-bot/internal/push"
+	"telegram-business-bot/internal/shop"
 	"telegram-business-bot/internal/store"
 	"telegram-business-bot/internal/support"
 	"telegram-business-bot/internal/telegram"
@@ -34,6 +35,7 @@ type Handler struct {
 	support        *support.Service
 	tg             *telegram.Client
 	push           *push.Service
+	shop           *shop.Service
 
 	uploadDir           string
 	uploadPublicBaseURL string
@@ -110,7 +112,8 @@ func (h *Handler) Register(r *gin.Engine) {
 	api.GET("/tickets", can("tickets"), h.tickets)
 	api.POST("/tickets/:id/reply", can("tickets"), h.replyTicket)
 
-	api.GET("/merchants", can("merchants"), h.merchants)
+	// Product and coupon forms pick a merchant from this list.
+	api.GET("/merchants", can("merchants", "shop_products", "shop_coupons"), h.merchants)
 	api.POST("/merchants", can("merchants"), h.saveMerchant)
 	api.DELETE("/merchants/:id", can("merchants"), h.deleteMerchant)
 	// The merchant form picks its category from the menu list.
@@ -121,7 +124,7 @@ func (h *Handler) Register(r *gin.Engine) {
 	api.GET("/configs", can("configs"), h.configs)
 	api.POST("/configs", can("configs"), h.saveConfig)
 
-	api.POST("/upload", can("pushes", "menus"), h.uploadMedia)
+	api.POST("/upload", can("pushes", "menus", "shop_products"), h.uploadMedia)
 
 	api.GET("/pushes", can("pushes"), h.pushes)
 	api.POST("/pushes", can("pushes"), h.createPush)
@@ -137,6 +140,10 @@ func (h *Handler) Register(r *gin.Engine) {
 	api.GET("/routes", can("routes", "pushes"), h.listRoutes)
 	api.POST("/routes", can("routes"), h.saveRoute)
 	api.DELETE("/routes/:id", can("routes"), h.deleteRoute)
+
+	if h.shop != nil {
+		h.registerShop(api, can)
+	}
 
 	api.POST("/account/password", h.changePassword)
 	accounts := api.Group("/accounts", requireSuper)

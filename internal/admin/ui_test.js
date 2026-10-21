@@ -144,3 +144,11 @@ test('navigation lists only pages granted by the account role',()=>{
  h.run("me={id:1,role:'super',permissions:[]};nav()");
  assert.ok(h.elements.get('navigation').innerHTML.includes('data-nav="roles"'));
 });
+test('shop categories follow the shop products permission and are not a grantable key',()=>{
+ const h=harness();
+ h.run("me={id:2,role:'admin',permissions:['shop_products']};nav()");
+ const html=h.elements.get('navigation').innerHTML;
+ assert.ok(html.includes('data-nav="shop_products"')&&html.includes('data-nav="shop_categories"'));
+ assert.ok(!html.includes('data-nav="shop_orders"'));
+ assert.equal(h.run("apiPath('shop_products')"),'shop-products');
+});

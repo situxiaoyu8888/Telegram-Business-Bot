@@ -1,0 +1,287 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,viewport-fit=cover">
+<title>商城</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+:root{--bg:var(--tg-theme-secondary-bg-color,#f2f3f7);--card:var(--tg-theme-bg-color,#fff);--ink:var(--tg-theme-text-color,#17212b);--muted:var(--tg-theme-hint-color,#8a94a6);--brand:var(--tg-theme-button-color,#2f80ed);--brand-ink:var(--tg-theme-button-text-color,#fff);--link:var(--tg-theme-link-color,#2f80ed);--danger:var(--tg-theme-destructive-text-color,#e5484d);--line:color-mix(in srgb,var(--muted) 22%,transparent);--price:#f2554c;--radius:14px;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;background:var(--bg);color:var(--ink);font-size:14px;line-height:1.5}
+body{padding-bottom:calc(64px + env(safe-area-inset-bottom))}
+button,input,textarea,select{font:inherit;color:inherit}
+button{cursor:pointer;border:0;background:none;padding:0}
+img{display:block;max-width:100%}
+.wrap{padding:12px 12px 20px;max-width:720px;margin:0 auto}
+.card{background:var(--card);border-radius:var(--radius);padding:14px;margin-bottom:10px}
+.row{display:flex;align-items:center;gap:10px}
+.between{justify-content:space-between}
+.muted{color:var(--muted)}.small{font-size:12px}.bold{font-weight:600}
+.price{color:var(--price);font-weight:700}.price small{font-size:11px;font-weight:500;margin-left:2px}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;height:42px;padding:0 18px;border-radius:21px;background:var(--brand);color:var(--brand-ink);font-weight:600;white-space:nowrap}
+.btn.ghost{background:color-mix(in srgb,var(--brand) 12%,transparent);color:var(--brand)}
+.btn.sm{height:30px;padding:0 12px;font-size:12px;border-radius:15px}
+.btn.danger{background:color-mix(in srgb,var(--danger) 12%,transparent);color:var(--danger)}
+.btn:disabled{opacity:.45}
+.block{display:flex;width:100%}
+.search{display:flex;align-items:center;gap:8px;background:var(--card);border-radius:20px;padding:0 14px;height:40px;margin-bottom:12px}
+.search input{flex:1;border:0;outline:0;background:none;min-width:0}
+.chips{display:flex;gap:8px;overflow-x:auto;padding-bottom:4px;margin-bottom:12px;scrollbar-width:none}
+.chips::-webkit-scrollbar{display:none}
+.chip{flex:none;padding:6px 14px;border-radius:16px;background:var(--card);color:var(--ink);font-size:13px}
+.chip.on{background:var(--brand);color:var(--brand-ink)}
+.grid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}
+@media(min-width:560px){.grid{grid-template-columns:repeat(3,1fr)}}
+.tile{background:var(--card);border-radius:var(--radius);overflow:hidden;text-align:left;display:flex;flex-direction:column}
+.tile .img,.thumb{background:color-mix(in srgb,var(--muted) 14%,transparent);display:grid;place-items:center;color:var(--muted)}
+.tile .img{aspect-ratio:1}
+.tile .img img,.thumb img{width:100%;height:100%;object-fit:cover}
+.tile .body{padding:8px 10px 10px;display:flex;flex-direction:column;gap:4px;flex:1}
+.clamp2{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.thumb{width:72px;height:72px;border-radius:10px;overflow:hidden;flex:none}
+.tag{display:inline-block;padding:1px 7px;border-radius:6px;font-size:11px;background:color-mix(in srgb,var(--brand) 12%,transparent);color:var(--brand)}
+.tag.gray{background:color-mix(in srgb,var(--muted) 16%,transparent);color:var(--muted)}
+.tag.red{background:color-mix(in srgb,var(--danger) 14%,transparent);color:var(--danger)}
+.tag.green{background:#1fa36a22;color:#1a8f5c}
+.gallery{display:flex;overflow-x:auto;scroll-snap-type:x mandatory;margin:-12px -12px 10px;scrollbar-width:none;background:var(--card)}
+.gallery::-webkit-scrollbar{display:none}
+.gallery img,.gallery .ph{flex:none;width:100%;aspect-ratio:1;object-fit:cover;scroll-snap-align:start}
+.gallery .ph{display:grid;place-items:center;color:var(--muted)}
+.skus{display:flex;flex-wrap:wrap;gap:8px}
+.sku{padding:7px 14px;border-radius:10px;border:1px solid var(--line);background:var(--card)}
+.sku.on{border-color:var(--brand);color:var(--brand);background:color-mix(in srgb,var(--brand) 8%,transparent)}
+.sku:disabled{opacity:.4;text-decoration:line-through}
+.stepper{display:inline-flex;align-items:center;border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.stepper button{width:32px;height:30px;font-size:16px}
+.stepper span{min-width:34px;text-align:center}
+.bar{position:fixed;left:0;right:0;bottom:0;background:var(--card);border-top:1px solid var(--line);padding:8px 12px calc(8px + env(safe-area-inset-bottom));display:flex;gap:10px;align-items:center;z-index:5}
+.bar .grow{flex:1}
+.tabbar{position:fixed;left:0;right:0;bottom:0;background:var(--card);border-top:1px solid var(--line);display:grid;grid-template-columns:repeat(4,1fr);padding-bottom:env(safe-area-inset-bottom);z-index:5}
+.tabbar button{height:56px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;font-size:11px;color:var(--muted);position:relative}
+.tabbar button.on{color:var(--brand)}
+.tabbar svg{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.badge{position:absolute;top:6px;left:calc(50% + 6px);min-width:16px;height:16px;padding:0 4px;border-radius:8px;background:var(--price);color:#fff;font-size:10px;line-height:16px}
+.tabs{display:flex;gap:4px;overflow-x:auto;margin-bottom:10px;scrollbar-width:none}
+.tabs::-webkit-scrollbar{display:none}
+.tabs button{flex:none;padding:6px 12px;border-radius:16px;color:var(--muted)}
+.tabs button.on{background:var(--card);color:var(--ink);font-weight:600}
+.list>*+*{border-top:1px solid var(--line)}
+.item{display:flex;gap:10px;padding:10px 0}
+.item:first-child{padding-top:0}.item:last-child{padding-bottom:0}
+.field{display:flex;flex-direction:column;gap:6px;margin-bottom:12px}
+.field input,.field textarea,.field select{border:1px solid var(--line);border-radius:10px;background:var(--card);padding:10px 12px;outline:0;width:100%}
+.field textarea{resize:vertical;min-height:70px}
+.radio{display:flex;align-items:center;gap:10px;padding:10px 0;width:100%;text-align:left}
+.radio i{width:18px;height:18px;border-radius:50%;border:2px solid var(--line);flex:none}
+.radio.on i{border:5px solid var(--brand)}
+.coupon{display:flex;border-radius:12px;overflow:hidden;background:var(--card);margin-bottom:10px}
+.coupon .l{width:96px;background:color-mix(in srgb,var(--price) 12%,transparent);color:var(--price);display:flex;flex-direction:column;align-items:center;justify-content:center;padding:10px 4px}
+.coupon .l b{font-size:20px}
+.coupon .r{flex:1;padding:10px 12px;display:flex;align-items:center;gap:8px}
+.coupon.off{opacity:.5}
+.empty{padding:60px 20px;text-align:center;color:var(--muted)}
+.code{font-family:ui-monospace,Menlo,monospace;background:color-mix(in srgb,var(--muted) 12%,transparent);border-radius:8px;padding:10px;white-space:pre-wrap;word-break:break-all;user-select:all}
+.status-head{background:var(--brand);color:var(--brand-ink);border-radius:var(--radius);padding:16px;margin-bottom:10px}
+.status-head h2{margin:0 0 4px;font-size:18px}
+.kv{display:flex;justify-content:space-between;gap:12px;padding:4px 0}
+.kv span:first-child{color:var(--muted);flex:none}
+.kv span:last-child{text-align:right;word-break:break-all}
+.toast{position:fixed;left:50%;top:40%;transform:translate(-50%,-50%);background:#000c;color:#fff;padding:10px 16px;border-radius:10px;z-index:20;max-width:80%;text-align:center}
+.loading{padding:40px;text-align:center;color:var(--muted)}
+h3{font-size:15px;margin:0 0 10px}
+</style>
+</head>
+<body>
+<div id="app" class="wrap"><div class="loading">加载中…</div></div>
+<nav class="tabbar" id="tabbar" hidden></nav>
+<div id="bottom"></div>
+<script>
+const tg=window.Telegram?.WebApp;
+const initData=tg?.initData||'';
+if(tg){tg.ready();tg.expand()}
+const $=id=>document.getElementById(id);
+const esc=x=>String(x??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+// Amounts arrive as fixed 6-decimal strings; show at least two decimals without float rounding.
+function money(s){let [i,d='']=String(s||'0').split('.');d=d.replace(/0+$/,'');if(d.length<2)d=d.padEnd(2,'0');return i+'.'+d}
+const priceHTML=s=>`<span class="price">${money(s)}<small>USDT</small></span>`;
+const icons={home:'M3 11l9-8 9 8M5 10v10h14V10',cart:'M3 4h2l2.4 11h10.2L20 8H6.2M9 20a1 1 0 1 0 0-.01M17 20a1 1 0 1 0 0-.01',order:'M6 3h12v18H6zM9 8h6M9 12h6M9 16h4',me:'M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8M4 21c1.5-4 5-5 8-5s6.5 1 8 5',img:'M4 5h16v14H4zM4 15l4-4 4 4 3-3 5 5'};
+const svg=n=>`<svg viewBox="0 0 24 24"><path d="${icons[n]}"/></svg>`;
+const statusText={paid:['待处理',''],shipped:['已发货','green'],ready:['待自提','green'],completed:['已完成','gray'],canceled:['已取消','gray']};
+const deliveryText={express:'快递配送',pickup:'到店自提',virtual:'虚拟商品'};
+let me=null,cartCount=0,checkout=null;
+function toast(msg){const t=document.createElement('div');t.className='toast';t.textContent=msg;document.body.append(t);setTimeout(()=>t.remove(),2200)}
+function confirmBox(msg){return new Promise(res=>{if(tg?.showConfirm)tg.showConfirm(msg,ok=>res(ok));else res(window.confirm(msg))})}
+function haptic(type){try{tg?.HapticFeedback?.notificationOccurred(type)}catch(e){}}
+async function api(path,opt={}){
+ const res=await fetch('/shop/api/'+path,{...opt,headers:{'Content-Type':'application/json','X-Telegram-Init-Data':initData}});
+ let data;try{data=await res.json()}catch(e){throw Error('服务暂时不可用，请稍后重试')}
+ if(!res.ok)throw Error(data.error||'请求失败');return data}
+const post=(path,body={})=>api(path,{method:'POST',body:JSON.stringify(body)});
+function newRequestID(){return crypto.randomUUID?crypto.randomUUID():Date.now().toString(36)+Math.random().toString(36).slice(2)}
+
+// ---- Routing ----
+const routes=[[/^#?\/?$/,home],[/^#\/product\/(\d+)$/,product],[/^#\/cart$/,cart],[/^#\/checkout$/,checkoutPage],[/^#\/orders(?:\/(\w+))?$/,orders],[/^#\/order\/(\d+)$/,orderDetail],[/^#\/me$/,mine],[/^#\/coupons(?:\/(\w+))?$/,coupons],[/^#\/addresses(?:\/(pick))?$/,addresses],[/^#\/address\/(new|\d+)(?:\/(pick))?$/,addressForm]];
+const tabs=[['#/','首页','home'],['#/cart','购物车','cart'],['#/orders','订单','order'],['#/me','我的','me']];
+let renderVersion=0;
+async function route(){
+ const hash=location.hash||'#/';const version=++renderVersion;
+ $('bottom').innerHTML='';window.scrollTo(0,0);
+ const root=['#/','#/cart','#/orders','#/me'].includes(hash)||/^#\/orders\/\w+$/.test(hash);
+ $('tabbar').hidden=!root;document.body.style.paddingBottom=root?'':'0';
+ renderTabs(hash);
+ if(tg?.BackButton){root?tg.BackButton.hide():tg.BackButton.show()}
+ for(const [re,fn] of routes){const m=hash.match(re);if(m){$('app').innerHTML='<div class="loading">加载中…</div>';try{await fn(version,...m.slice(1))}catch(e){if(version===renderVersion)$('app').innerHTML=`<div class="empty">${esc(e.message)}<br><br><button class="btn ghost sm" onclick="route()">重试</button></div>`}return}}
+ location.hash='#/'}
+function stale(v){return v!==renderVersion}
+function renderTabs(hash){$('tabbar').innerHTML=tabs.map(([h,label,ic])=>{const on=hash===h||(h==='#/orders'&&hash.startsWith('#/orders'));return `<button class="${on?'on':''}" onclick="location.hash='${h}'">${svg(ic)}<span>${label}</span>${h==='#/cart'&&cartCount?`<span class="badge">${cartCount>99?'99+':cartCount}</span>`:''}</button>`}).join('')}
+async function refreshCartCount(){try{const c=await api('cart');cartCount=c.reduce((n,x)=>n+x.quantity,0);renderTabs(location.hash||'#/')}catch(e){}}
+function bottomBar(html){$('bottom').innerHTML=`<div class="bar">${html}</div>`;document.body.style.paddingBottom='calc(64px + env(safe-area-inset-bottom))'}
+const imgOr=(src,cls='')=>src?`<img src="${esc(src)}" alt="" loading="lazy" class="${cls}">`:svg('img');
+
+// ---- Home ----
+let homeState={category:0,q:'',page:1,items:[],done:false};
+async function home(v){
+ const cats=await api('categories');if(stale(v))return;
+ $('app').innerHTML=`<form class="search" id="searchForm"><span class="muted">🔍</span><input id="q" type="search" placeholder="搜索商品或商家" value="${esc(homeState.q)}" enterkeyhint="search"></form>
+ <div class="chips">${[{id:0,name:'全部'},...cats].map(c=>`<button class="chip ${homeState.category===c.id?'on':''}" data-cat="${c.id}">${esc(c.name)}</button>`).join('')}</div>
+ <div class="grid" id="grid"></div><div id="more"></div>`;
+ $('searchForm').onsubmit=e=>{e.preventDefault();$('q').blur();homeState.q=$('q').value.trim();loadProducts(v,true)};
+ document.querySelectorAll('[data-cat]').forEach(b=>b.onclick=()=>{homeState.category=Number(b.dataset.cat);document.querySelectorAll('[data-cat]').forEach(x=>x.classList.toggle('on',x===b));loadProducts(v,true)});
+ await loadProducts(v,true)}
+async function loadProducts(v,reset){
+ if(reset){homeState.page=1;homeState.items=[];homeState.done=false}
+ const params=new URLSearchParams({page:homeState.page,q:homeState.q});if(homeState.category)params.set('category_id',homeState.category);
+ const list=await api('products?'+params);if(stale(v))return;
+ homeState.items=homeState.items.concat(list);homeState.done=list.length<20;
+ $('grid').innerHTML=homeState.items.map(p=>`<button class="tile" onclick="location.hash='#/product/${p.id}'"><div class="img">${imgOr(p.cover)}</div><div class="body"><div class="clamp2">${p.kind==='virtual'?'<span class="tag">虚拟</span> ':''}${esc(p.name)}</div><div class="muted small">${esc(p.merchant_name)}</div><div class="row between" style="margin-top:auto">${priceHTML(p.min_price)}<span class="muted small">${p.in_stock?'已售 '+p.sales:'售罄'}</span></div></div></button>`).join('');
+ $('more').innerHTML=!homeState.items.length?`<div class="empty">${homeState.q?'没有找到相关商品':'暂无商品'}</div>`:homeState.done?'<div class="muted small" style="text-align:center;padding:16px">没有更多了</div>':'<div style="text-align:center;padding:12px"><button class="btn ghost sm" id="moreBtn">加载更多</button></div>';
+ if($('moreBtn'))$('moreBtn').onclick=()=>{homeState.page++;loadProducts(v,false)}}
+
+// ---- Product ----
+async function product(v,id){
+ const p=await api('products/'+id);if(stale(v))return;
+ let sku=p.skus.find(k=>k.stock>0)||p.skus[0],qty=1;
+ const delivery=p.kind==='virtual'?['virtual']:[p.allow_express&&'express',p.allow_pickup&&'pickup'].filter(Boolean);
+ function draw(){
+  $('app').innerHTML=`<div class="gallery">${p.images.length?p.images.map(src=>`<img src="${esc(src)}" alt="">`).join(''):`<div class="ph">${svg('img')}</div>`}</div>
+  <div class="card"><div>${priceHTML(sku.price)}</div><div class="bold" style="font-size:16px;margin-top:6px">${esc(p.name)}</div><div class="row small muted" style="margin-top:6px;flex-wrap:wrap">${delivery.map(d=>`<span class="tag">${deliveryText[d]}</span>`).join('')}<span>已售 ${p.sales}</span></div></div>
+  <div class="card"><h3>规格</h3><div class="skus">${p.skus.map(k=>`<button class="sku ${k.id===sku.id?'on':''}" data-sku="${k.id}" ${k.stock<1?'disabled':''}>${esc(k.name)}</button>`).join('')}</div>
+  <div class="row between" style="margin-top:14px"><span>数量 <span class="muted small">库存 ${sku.stock}</span></span><span class="stepper"><button id="minus">−</button><span>${qty}</span><button id="plus">+</button></span></div></div>
+  <div class="card"><div class="bold">${esc(p.merchant_name)}</div>${p.merchant_address?`<div class="muted small">📍 ${esc(p.merchant_address)}</div>`:''}${p.merchant_hours?`<div class="muted small">🕒 ${esc(p.merchant_hours)}</div>`:''}</div>
+  ${p.description?`<div class="card"><h3>商品详情</h3><div style="white-space:pre-wrap">${esc(p.description)}</div></div>`:''}`;
+  document.querySelectorAll('[data-sku]').forEach(b=>b.onclick=()=>{sku=p.skus.find(k=>k.id===Number(b.dataset.sku));qty=Math.min(qty,Math.max(1,sku.stock));draw()});
+  $('minus').onclick=()=>{if(qty>1){qty--;draw()}};$('plus').onclick=()=>{if(qty<sku.stock&&qty<999){qty++;draw()}};
+  const out=sku.stock<1;
+  bottomBar(`<button class="btn ghost grow" id="addCart" ${out?'disabled':''}>加入购物车</button><button class="btn grow" id="buyNow" ${out?'disabled':''}>${out?'已售罄':'立即购买'}</button>`);
+  $('addCart').onclick=async()=>{try{await post('cart',{sku_id:sku.id,quantity:qty,add:true});haptic('success');toast('已加入购物车');refreshCartCount()}catch(e){toast(e.message)}};
+  $('buyNow').onclick=()=>{checkout={items:[{sku_id:sku.id,quantity:qty}],from_cart:false,request_id:newRequestID()};location.hash='#/checkout'}}
+ draw()}
+
+// ---- Cart ----
+async function cart(v){
+ const lines=await api('cart');if(stale(v))return;
+ cartCount=lines.reduce((n,x)=>n+x.quantity,0);renderTabs('#/cart');
+ if(!lines.length){$('app').innerHTML='<div class="empty">购物车是空的<br><br><button class="btn ghost sm" onclick="location.hash=\'#/\'">去逛逛</button></div>';return}
+ const groups=[];for(const l of lines){let g=groups.find(x=>x.id===l.merchant_id);if(!g){g={id:l.merchant_id,name:l.merchant_name,lines:[]};groups.push(g)}g.lines.push(l)}
+ $('app').innerHTML=groups.map(g=>{const ok=g.lines.filter(l=>l.available);const total=ok.reduce((s,l)=>s+Number(l.price)*l.quantity,0);
+  return `<div class="card"><div class="row between" style="margin-bottom:10px"><span class="bold">🏪 ${esc(g.name)}</span></div><div class="list">${g.lines.map(l=>`<div class="item" style="${l.available?'':'opacity:.5'}"><div class="thumb" onclick="location.hash='#/product/${l.product_id}'">${imgOr(l.cover)}</div><div style="flex:1;min-width:0"><div class="clamp2">${esc(l.product_name)}</div><div class="muted small">${esc(l.sku_name)}${l.available?'':' · '+(l.stock<l.quantity?'库存不足':'已下架')}</div><div class="row between" style="margin-top:4px">${priceHTML(l.price)}<span class="stepper"><button data-dec="${l.sku_id}" data-q="${l.quantity}">−</button><span>${l.quantity}</span><button data-inc="${l.sku_id}" data-q="${l.quantity}">+</button></span></div></div></div>`).join('')}</div>
+  <div class="row between" style="margin-top:12px"><span>合计 <span class="price">≈ ${total.toFixed(2)}<small>USDT</small></span></span><button class="btn sm" data-checkout="${g.id}" ${ok.length?'':'disabled'}>去结算 (${ok.reduce((n,l)=>n+l.quantity,0)})</button></div></div>`}).join('')+'<div class="muted small" style="text-align:center">不同商家的商品需分别结算</div>';
+ const set=async(sku,q)=>{try{await post('cart',{sku_id:sku,quantity:q});route()}catch(e){toast(e.message)}};
+ document.querySelectorAll('[data-dec]').forEach(b=>b.onclick=async()=>{const q=Number(b.dataset.q)-1;if(q===0&&!(await confirmBox('从购物车移除该商品？')))return;set(Number(b.dataset.dec),q)});
+ document.querySelectorAll('[data-inc]').forEach(b=>b.onclick=()=>set(Number(b.dataset.inc),Number(b.dataset.q)+1));
+ document.querySelectorAll('[data-checkout]').forEach(b=>b.onclick=()=>{const g=groups.find(x=>x.id===Number(b.dataset.checkout));checkout={items:g.lines.filter(l=>l.available).map(l=>({sku_id:l.sku_id,quantity:l.quantity})),from_cart:true,request_id:newRequestID()};location.hash='#/checkout'})}
+
+// ---- Checkout ----
+async function checkoutPage(v){
+ if(!checkout){location.hash='#/cart';return}
+ const [first,addrs]=await Promise.all([post('checkout/preview',{items:checkout.items}),api('addresses')]);if(stale(v))return;
+ checkout.delivery_type=checkout.delivery_type&&first.delivery_types.includes(checkout.delivery_type)?checkout.delivery_type:first.delivery_types[0];
+ if(checkout.address_id===undefined)checkout.address_id=(addrs.find(a=>a.is_default)||addrs[0])?.id||0;
+ checkout.user_coupon_id=checkout.user_coupon_id||0;
+ let quote=first;
+ if(checkout.user_coupon_id){try{quote=await post('checkout/preview',{items:checkout.items,user_coupon_id:checkout.user_coupon_id})}catch(e){checkout.user_coupon_id=0}}
+ if(stale(v))return;
+ const addr=addrs.find(a=>a.id===checkout.address_id);
+ const enough=Number(quote.balance)>=Number(quote.pay_amount);
+ $('app').innerHTML=`<div class="card"><h3>配送方式</h3>${quote.delivery_types.map(d=>`<button class="radio ${checkout.delivery_type===d?'on':''}" data-dt="${d}"><i></i>${deliveryText[d]}</button>`).join('')}</div>
+ ${checkout.delivery_type==='express'?`<div class="card" onclick="location.hash='#/addresses/pick'" style="cursor:pointer">${addr?`<div class="row between"><div><div class="bold">${esc(addr.name)} ${esc(addr.phone)}</div><div class="muted small">${esc(addr.address)}</div></div><span class="muted">›</span></div>`:'<div class="row between"><span>📍 添加收货地址</span><span class="muted">›</span></div>'}</div>`:''}
+ ${checkout.delivery_type==='pickup'?`<div class="card"><div class="bold">🏪 ${esc(quote.merchant_name)}</div><div class="muted small">${esc(quote.merchant_address||'请联系商家确认自提地址')}</div></div>`:''}
+ ${checkout.delivery_type==='virtual'?'<div class="card muted small">🎁 付款后在订单详情中查看卡密或发货内容。</div>':''}
+ <div class="card"><h3>优惠券</h3>${quote.coupons.length?`<div class="list"><button class="radio ${!checkout.user_coupon_id?'on':''}" data-cp="0"><i></i>不使用优惠券</button>${quote.coupons.map(c=>`<button class="radio ${checkout.user_coupon_id===c.id?'on':''}" data-cp="${c.id}"><i></i><span style="flex:1">${esc(c.name)} <span class="muted small">满 ${money(c.threshold)} 减 ${money(c.discount)}</span></span></button>`).join('')}</div>`:'<div class="muted small">暂无可用优惠券</div>'}</div>
+ <div class="card"><div class="field" style="margin:0"><label class="muted small">订单备注</label><input id="remark" maxlength="255" placeholder="选填" value="${esc(checkout.remark||'')}"></div></div>
+ <div class="card"><div class="kv"><span>商品金额</span><span>${money(quote.goods_amount)} USDT</span></div><div class="kv"><span>优惠</span><span>-${money(quote.discount)} USDT</span></div><div class="kv"><span>钱包余额</span><span>${money(quote.balance)} USDT</span></div>${enough?'':'<div class="small" style="color:var(--danger);margin-top:6px">余额不足，请回到机器人「USDT充值」后再支付。</div>'}</div>`;
+ document.querySelectorAll('[data-dt]').forEach(b=>b.onclick=()=>{checkout.delivery_type=b.dataset.dt;route()});
+ document.querySelectorAll('[data-cp]').forEach(b=>b.onclick=()=>{checkout.user_coupon_id=Number(b.dataset.cp);route()});
+ $('remark').oninput=e=>checkout.remark=e.target.value;
+ bottomBar(`<div class="grow">实付 ${priceHTML(quote.pay_amount)}</div><button class="btn" id="pay" ${enough?'':'disabled'}>余额支付</button>`);
+ $('pay').onclick=async()=>{
+  if(checkout.delivery_type==='express'&&!checkout.address_id){toast('请添加收货地址');return}
+  if(!(await confirmBox(`确认使用钱包余额支付 ${money(quote.pay_amount)} USDT？`)))return;
+  $('pay').disabled=true;
+  try{const o=await post('orders',{request_id:checkout.request_id,items:checkout.items,delivery_type:checkout.delivery_type,address_id:checkout.address_id,user_coupon_id:checkout.user_coupon_id,remark:checkout.remark||'',from_cart:checkout.from_cart});
+   haptic('success');checkout=null;refreshCartCount();location.replace('#/order/'+o.id)}
+  catch(e){haptic('error');toast(e.message);$('pay').disabled=false}}}
+
+// ---- Orders ----
+const orderTabs=[['all','全部'],['paid','待处理'],['shipped','已发货'],['ready','待自提'],['completed','已完成'],['canceled','已取消']];
+async function orders(v,status='all'){
+ const list=await api('orders'+(status==='all'?'':'?status='+status));if(stale(v))return;
+ $('app').innerHTML=`<div class="tabs">${orderTabs.map(([k,l])=>`<button class="${k===status?'on':''}" onclick="location.hash='#/orders${k==='all'?'':'/'+k}'">${l}</button>`).join('')}</div>`+(list.length?list.map(o=>{const st=statusText[o.status]||[o.status,''];return `<div class="card" onclick="location.hash='#/order/${o.id}'" style="cursor:pointer"><div class="row between"><span class="bold">🏪 ${esc(o.merchant_name)}</span><span class="tag ${st[1]}">${st[0]}</span></div>${o.items.slice(0,3).map(it=>`<div class="item"><div class="thumb">${imgOr(it.image_url)}</div><div style="flex:1;min-width:0"><div class="clamp2">${esc(it.product_name)}</div><div class="muted small">${esc(it.sku_name)} × ${it.quantity}</div></div></div>`).join('')}${o.items.length>3?`<div class="muted small">共 ${o.items.length} 种商品</div>`:''}<div class="row between" style="margin-top:8px"><span class="muted small">${deliveryText[o.delivery_type]} · ${new Date(o.created_at).toLocaleString('zh-CN',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'})}</span><span>实付 ${priceHTML(o.pay_amount)}</span></div></div>`}).join(''):'<div class="empty">暂无订单</div>')}
+async function orderDetail(v,id){
+ const o=await api('orders/'+id);if(stale(v))return;
+ const st=statusText[o.status]||[o.status,''];
+ const hint={paid:o.delivery_type==='virtual'?'商家正在处理，发放后会通知你':'商家正在处理你的订单',shipped:'商品已发出，请留意查收',ready:'商品已备好，请到店自提',completed:'交易已完成',canceled:'订单已取消，款项已退回钱包余额'}[o.status]||'';
+ $('app').innerHTML=`<div class="status-head"><h2>${st[0]}</h2><div class="small">${esc(hint)}</div></div>
+ ${o.delivery_type==='express'?`<div class="card"><div class="bold">${esc(o.contact_name)} ${esc(o.contact_phone)}</div><div class="muted small">${esc(o.address)}</div>${o.tracking_no?`<div style="margin-top:8px" class="kv"><span>${esc(o.carrier)}</span><span class="code" style="padding:2px 8px">${esc(o.tracking_no)}</span></div>`:''}</div>`:''}
+ ${o.delivery_type==='pickup'?`<div class="card"><div class="bold">🏪 到店自提</div><div class="muted small">${esc(o.address||'请联系商家确认自提地址')}</div>${o.delivery_note?`<div style="margin-top:8px;white-space:pre-wrap">${esc(o.delivery_note)}</div>`:''}</div>`:''}
+ ${o.delivery_type==='virtual'&&o.delivery_note?`<div class="card"><h3>🎁 发货内容</h3><div class="code">${esc(o.delivery_note)}</div><button class="btn ghost sm" style="margin-top:10px" id="copyNote">复制</button></div>`:''}
+ <div class="card"><div class="bold" style="margin-bottom:6px">🏪 ${esc(o.merchant_name)}</div><div class="list">${o.items.map(it=>`<div class="item"><div class="thumb" onclick="location.hash='#/product/${it.product_id}'">${imgOr(it.image_url)}</div><div style="flex:1;min-width:0"><div class="clamp2">${esc(it.product_name)}</div><div class="muted small">${esc(it.sku_name)}</div><div class="row between">${priceHTML(it.price)}<span class="muted">× ${it.quantity}</span></div></div></div>`).join('')}</div></div>
+ <div class="card"><div class="kv"><span>商品金额</span><span>${money(o.goods_amount)} USDT</span></div><div class="kv"><span>优惠</span><span>-${money(o.discount)} USDT</span></div><div class="kv"><span>实付</span><span class="price">${money(o.pay_amount)} USDT</span></div></div>
+ <div class="card small"><div class="kv"><span>订单号</span><span>${esc(o.order_no)}</span></div><div class="kv"><span>配送方式</span><span>${deliveryText[o.delivery_type]}</span></div><div class="kv"><span>下单时间</span><span>${new Date(o.created_at).toLocaleString('zh-CN')}</span></div>${o.remark?`<div class="kv"><span>备注</span><span>${esc(o.remark)}</span></div>`:''}${o.cancel_reason?`<div class="kv"><span>取消原因</span><span>${esc(o.cancel_reason)}</span></div>`:''}</div>`;
+ if($('copyNote'))$('copyNote').onclick=()=>navigator.clipboard?.writeText(o.delivery_note).then(()=>toast('已复制'),()=>toast('请长按内容复制'));
+ const actions=[];if(o.status==='paid')actions.push('<button class="btn danger grow" id="cancelOrder">取消订单</button>');if(o.status==='shipped'||o.status==='ready')actions.push(`<button class="btn grow" id="confirmOrder">${o.status==='ready'?'我已取货':'确认收货'}</button>`);
+ if(actions.length)bottomBar(actions.join(''));
+ if($('cancelOrder'))$('cancelOrder').onclick=async()=>{if(!(await confirmBox('确定取消订单？款项将退回钱包余额。')))return;try{await post(`orders/${o.id}/cancel`);toast('订单已取消');route()}catch(e){toast(e.message)}};
+ if($('confirmOrder'))$('confirmOrder').onclick=async()=>{if(!(await confirmBox('确认已收到商品？')))return;try{await post(`orders/${o.id}/confirm`);toast('已确认');route()}catch(e){toast(e.message)}}}
+
+// ---- Me ----
+async function mine(v){
+ me=await api('me');if(stale(v))return;
+ const entry=(h,icon,label)=>`<button class="row between" style="width:100%;padding:12px 0" onclick="location.hash='${h}'"><span>${icon} ${label}</span><span class="muted">›</span></button>`;
+ $('app').innerHTML=`<div class="status-head"><h2>${esc(me.name||'用户')}</h2><div class="small">${me.username?'@'+esc(me.username):''}</div></div>
+ <div class="card"><div class="muted small">钱包余额</div><div style="font-size:24px" class="bold">${money(me.balance)} <span class="small">USDT</span></div><div class="muted small">充值、提现请回到机器人菜单操作</div></div>
+ <div class="card list">${entry('#/orders','📦','我的订单')}${entry('#/coupons','🎟','我的优惠券')}${entry('#/coupons/center','🎁','领券中心')}${entry('#/addresses','📍','收货地址')}</div>`;
+ if(tg?.close)$('app').insertAdjacentHTML('beforeend','<button class="btn ghost block" onclick="Telegram.WebApp.close()">返回机器人</button>')}
+
+// ---- Coupons ----
+function couponCard(c,right,off){return `<div class="coupon ${off?'off':''}"><div class="l"><b>${money(c.discount)}</b><span class="small">满 ${money(c.threshold)} 可用</span></div><div class="r"><div style="flex:1;min-width:0"><div class="bold">${esc(c.name)}</div><div class="muted small">${c.merchant_id?esc(c.merchant_name||'指定商家'):'全部商家可用'}</div>${c.expires_at?`<div class="muted small">有效期至 ${new Date(c.expires_at).toLocaleDateString('zh-CN')}</div>`:c.ends_at?`<div class="muted small">领取截止 ${new Date(c.ends_at).toLocaleDateString('zh-CN')}</div>`:''}</div>${right}</div></div>`}
+async function coupons(v,tab='mine'){
+ const center=tab==='center';const list=await api(center?'coupons/center':'coupons');if(stale(v))return;
+ $('app').innerHTML=`<div class="tabs"><button class="${center?'':'on'}" onclick="location.hash='#/coupons'">我的优惠券</button><button class="${center?'on':''}" onclick="location.hash='#/coupons/center'">领券中心</button></div>`+(list.length?list.map(c=>{
+  if(center){const limit=c.per_user_limit>0&&c.held>=c.per_user_limit;return couponCard(c,`<button class="btn sm" data-claim="${c.id}" ${c.sold_out||limit?'disabled':''}>${c.sold_out?'已领完':limit?'已领取':'领取'}</button>`,c.sold_out)}
+  const label=c.status==='used'?'已使用':c.expired?'已过期':'';return couponCard(c,label?`<span class="tag gray">${label}</span>`:'<span class="tag red">可用</span>',!!label)}).join(''):`<div class="empty">${center?'暂无可领取的优惠券':'还没有优惠券'}</div>`);
+ document.querySelectorAll('[data-claim]').forEach(b=>b.onclick=async()=>{try{await post(`coupons/${b.dataset.claim}/claim`);haptic('success');toast('领取成功');route()}catch(e){toast(e.message)}})}
+
+// ---- Addresses ----
+async function addresses(v,pick){
+ const list=await api('addresses');if(stale(v))return;
+ $('app').innerHTML=(list.length?`<div class="card list">${list.map(a=>`<div class="item" style="align-items:center"><div style="flex:1;min-width:0;cursor:pointer" data-pick="${a.id}"><div class="bold">${esc(a.name)} ${esc(a.phone)} ${a.is_default?'<span class="tag">默认</span>':''}</div><div class="muted small">${esc(a.address)}</div></div><button class="btn ghost sm" onclick="location.hash='#/address/${a.id}${pick?'/pick':''}'">编辑</button></div>`).join('')}</div>`:'<div class="empty">还没有收货地址</div>');
+ document.querySelectorAll('[data-pick]').forEach(el=>el.onclick=()=>{if(pick&&checkout){checkout.address_id=Number(el.dataset.pick);history.back()}else location.hash='#/address/'+el.dataset.pick});
+ bottomBar(`<button class="btn grow" onclick="location.hash='#/address/new${pick?'/pick':''}'">新增收货地址</button>`)}
+async function addressForm(v,id,pick){
+ const list=id==='new'?[]:await api('addresses');if(stale(v))return;
+ const a=list.find(x=>x.id===Number(id))||{name:'',phone:'',address:'',is_default:false};
+ $('app').innerHTML=`<div class="card"><div class="field"><label class="muted small">收货人</label><input id="aName" maxlength="64" value="${esc(a.name)}"></div><div class="field"><label class="muted small">联系电话</label><input id="aPhone" maxlength="32" inputmode="tel" value="${esc(a.phone)}"></div><div class="field"><label class="muted small">详细地址</label><textarea id="aAddr" maxlength="512">${esc(a.address)}</textarea></div><label class="row"><input type="checkbox" id="aDefault" ${a.is_default?'checked':''}> 设为默认地址</label></div>
+ ${a.id?'<button class="btn danger block" id="aDelete">删除地址</button>':''}`;
+ bottomBar('<button class="btn grow" id="aSave">保存</button>');
+ $('aSave').onclick=async()=>{try{const r=await post('addresses',{id:a.id||0,name:$('aName').value,phone:$('aPhone').value,address:$('aAddr').value,is_default:$('aDefault').checked});if(pick&&checkout)checkout.address_id=a.id||r.id;toast('已保存');history.back()}catch(e){toast(e.message)}};
+ if($('aDelete'))$('aDelete').onclick=async()=>{if(!(await confirmBox('删除该地址？')))return;try{await api('addresses/'+a.id,{method:'DELETE'});if(checkout&&checkout.address_id===a.id)checkout.address_id=0;history.back()}catch(e){toast(e.message)}}}
+
+// ---- Boot ----
+window.addEventListener('hashchange',route);
+tg?.BackButton?.onClick(()=>history.length>1?history.back():(location.hash='#/'));
+if(!initData){$('app').innerHTML='<div class="empty">请在 Telegram 中通过机器人打开商城。</div>'}else{route();refreshCartCount()}
+</script>
+</body>
+</html>

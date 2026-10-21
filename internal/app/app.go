@@ -13,6 +13,7 @@ import (
 	"telegram-business-bot/internal/push"
 	"telegram-business-bot/internal/referral"
 	"telegram-business-bot/internal/session"
+	"telegram-business-bot/internal/shop"
 	"telegram-business-bot/internal/store"
 	"telegram-business-bot/internal/support"
 	"telegram-business-bot/internal/telegram"
@@ -52,7 +53,9 @@ func New(cfg config.Config, logger *zap.Logger) (*App, error) {
 	sessions := session.New(st.Redis, cfg.SessionTTL)
 
 	tg := telegram.NewClient(cfg.TelegramBotToken)
-	tgRouter := telegram.NewRouter(tg, st, sessions, walletSvc, menuSvc, supportSvc, refSvc, cfg.AdminIDs, cfg.TronFallbackDepositAddress, false, logger)
+	// The admin bot keeps the command list; user-facing bots may open the H5 shop instead.
+	shopButton := telegram.MenuButton{Text: cfg.ShopH5ButtonText, URL: cfg.ShopH5URL}
+	tgRouter := telegram.NewRouter(tg, st, sessions, walletSvc, menuSvc, supportSvc, refSvc, cfg.AdminIDs, cfg.TronFallbackDepositAddress, false, logger).WithMenuButton(shopButton)
 
 	var adminTG *telegram.Client
 	var adminTGRouter *telegram.Router
@@ -75,9 +78,11 @@ func New(cfg config.Config, logger *zap.Logger) (*App, error) {
 	}
 	bots := business.New(st, tg, cfg.BusinessBotKey, cfg.TelegramBotToken, cfg.AdminTelegramBotToken)
 	bots.Router = func(id uint64, client *telegram.Client) *telegram.Router {
-		return telegram.NewRouter(client, st, sessions.WithNamespace(fmt.Sprintf("business:%d", id)), walletSvc, menuSvc, supportSvc, refSvc, cfg.AdminIDs, "", false, logger).WithBotID(id)
+		return telegram.NewRouter(client, st, sessions.WithNamespace(fmt.Sprintf("business:%d", id)), walletSvc, menuSvc, supportSvc, refSvc, cfg.AdminIDs, "", false, logger).WithBotID(id).WithMenuButton(shopButton)
 	}
 	pushSvc := push.New(st, tg, logger).WithBots(bots)
+	shopSvc := shop.New(st, walletSvc, shop.BotNotifier{Bots: bots}, logger)
+	shop.NewHandler(shopSvc, st, bots, logger).Register(engine)
 	a := &App{businessBots: bots, cfg: cfg, logger: logger, store: st, tg: tg, tgRouter: tgRouter, adminTG: adminTG, adminTGRouter: adminTGRouter, engine: engine, pushService: pushSvc}
 	a.registerRoutes()
 	admin.New(
@@ -90,7 +95,7 @@ func New(cfg config.Config, logger *zap.Logger) (*App, error) {
 		cfg.UploadPublicBaseURL,
 		cfg.UploadMaxImageMB,
 		cfg.UploadMaxVideoMB,
-	).WithBots(bots).Register(engine)
+	).WithBots(bots).WithShop(shopSvc).Register(engine)
 	tronClient := trongrid.New(cfg.TronGridBaseURL, cfg.TronGridAPIKey)
 	a.tronWatcher = trongrid.NewWatcher(st, walletSvc, refSvc, tronClient, cfg.TronUSDTContract, cfg.TronConfirmOnly, cfg.TronWatchInterval, logger)
 	return a, nil

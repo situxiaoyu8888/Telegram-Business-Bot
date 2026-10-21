@@ -26,6 +26,7 @@ type Service struct {
 	st                 *store.Store
 	primary            telegram.Sender
 	primaryID, adminID int64
+	primaryToken       string
 	aead               cipher.AEAD
 	verify             func(context.Context, string) (*telegram.User, error)
 	Router             func(uint64, *telegram.Client) *telegram.Router
@@ -41,7 +42,7 @@ func New(st *store.Store, primary telegram.Sender, key, primaryToken, adminToken
 	block, _ := aes.NewCipher(hash[:])
 	aead, _ := cipher.NewGCM(block)
 	parse := func(token string) int64 { id, _ := strconv.ParseInt(strings.Split(token, ":")[0], 10, 64); return id }
-	return &Service{st: st, primary: primary, primaryID: parse(primaryToken), adminID: parse(adminToken), aead: aead, verify: func(ctx context.Context, token string) (*telegram.User, error) {
+	return &Service{st: st, primary: primary, primaryToken: primaryToken, primaryID: parse(primaryToken), adminID: parse(adminToken), aead: aead, verify: func(ctx context.Context, token string) (*telegram.User, error) {
 		return telegram.NewClient(token).GetMe(ctx)
 	}}
 }
@@ -134,6 +135,27 @@ func (s *Service) Sender(ctx context.Context, id uint64) (telegram.Sender, error
 		return nil, err
 	}
 	return telegram.NewClient(token), nil
+}
+
+// BotToken pairs a bot ID (0 = primary bot) with its token.
+type BotToken struct {
+	ID    uint64
+	Token string
+}
+
+// Tokens lists the primary bot and every enabled business bot, e.g. to verify Mini App sign-ins.
+func (s *Service) Tokens(ctx context.Context) ([]BotToken, error) {
+	out := []BotToken{{ID: 0, Token: s.primaryToken}}
+	var rows []model.BusinessBot
+	if err := s.st.DB.WithContext(ctx).Where("enabled=?", true).Order("id asc").Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	for _, b := range rows {
+		if token, err := s.decrypt(b.TokenEncrypted); err == nil {
+			out = append(out, BotToken{ID: b.ID, Token: token})
+		}
+	}
+	return out, nil
 }
 func (s *Service) Resolve(ctx context.Context, category string, override *uint64) (uint64, error) {
 	id := uint64(0)

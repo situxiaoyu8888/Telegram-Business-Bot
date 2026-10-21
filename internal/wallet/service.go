@@ -228,3 +228,45 @@ func (s *Service) CompleteWithdrawal(id uint64, txid, reviewer string) error {
 		return tx.Save(&o).Error
 	})
 }
+
+// ErrInsufficientBalance is returned by Spend when the available balance is too low.
+var ErrInsufficientBalance = errors.New("insufficient balance")
+
+// Spend deducts a shop payment from the available balance inside the caller's transaction,
+// so the order and the ledger entry commit or roll back together.
+func (s *Service) Spend(tx *gorm.DB, userID uint64, amount decimal.Decimal, refType string, refID uint64, remark string) error {
+	return s.adjust(tx, userID, amount.Neg(), "shop_pay", refType, refID, remark)
+}
+
+// Refund returns a shop payment to the available balance inside the caller's transaction.
+func (s *Service) Refund(tx *gorm.DB, userID uint64, amount decimal.Decimal, refType string, refID uint64, remark string) error {
+	return s.adjust(tx, userID, amount, "shop_refund", refType, refID, remark)
+}
+
+func (s *Service) adjust(tx *gorm.DB, userID uint64, delta decimal.Decimal, txType, refType string, refID uint64, remark string) error {
+	if delta.IsZero() {
+		return nil
+	}
+	if !delta.Equal(delta.Truncate(6)) {
+		return fmt.Errorf("invalid amount (maximum 6 decimal places)")
+	}
+	if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&model.WalletAccount{UserID: userID, Currency: s.currency, Available: "0", Frozen: "0"}).Error; err != nil {
+		return err
+	}
+	var acc model.WalletAccount
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("user_id=? AND currency=?", userID, s.currency).First(&acc).Error; err != nil {
+		return err
+	}
+	av, err := decimal.NewFromString(acc.Available)
+	if err != nil {
+		return err
+	}
+	av = av.Add(delta)
+	if av.IsNegative() {
+		return ErrInsufficientBalance
+	}
+	if err := tx.Model(&acc).Update("available", av.StringFixed(6)).Error; err != nil {
+		return err
+	}
+	return tx.Create(&model.WalletTransaction{UserID: userID, Currency: s.currency, Type: txType, Amount: delta.StringFixed(6), Balance: av.StringFixed(6), RefType: refType, RefID: refID, Remark: remark}).Error
+}
