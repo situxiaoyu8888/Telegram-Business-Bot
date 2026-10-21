@@ -192,3 +192,15 @@ test('only merchant owners see staff management; staff and super admins do not',
  h.run("me={id:1,role:'super',permissions:[]};nav()");
  assert.ok(!h.elements.get('navigation').innerHTML.includes('data-nav="merchant_staff"'));
 });
+test('every console page loads from an API route that exists',()=>{
+ const fs=require('fs'),path=require('path');
+ const routes=new Set();
+ for(const f of fs.readdirSync(__dirname).filter(f=>f.endsWith('.go')&&!f.endsWith('_test.go')))
+{const src=fs.readFileSync(path.join(__dirname,f),'utf8');
+  for(const m of src.matchAll(/api\.GET\("\/([^"]+)"/g))routes.add(m[1]);
+  // Groups such as accounts := api.Group("/accounts") with accounts.GET("", ...)
+  for(const m of src.matchAll(/(\w+) := api\.Group\("\/([^"]+)"/g))if(src.includes(`${m[1]}.GET("",`))routes.add(m[2]);}
+ const h=harness();
+ const missing=h.run('Object.keys(pages)').filter(k=>!routes.has(h.run(`apiPath(${JSON.stringify(k)})`)));
+ assert.equal(missing.join(','),'');
+});

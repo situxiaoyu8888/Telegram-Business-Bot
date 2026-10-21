@@ -34,7 +34,8 @@ const pagePerm={shop_categories:'shop_products'};
 // Merchant owners and their staff share the merchant-scoped view.
 const isMerchant=()=>me.role==='merchant'||me.role==='merchant_staff';
 const allowed=key=>key==='merchant_staff'?me.role==='merchant':!(isMerchant()&&key==='shop_categories')&&(me.role==='super'||(!superOnly.includes(key)&&(me.permissions||[]).includes(pagePerm[key]||key)));
-const apiPath=section=>section.replace(/_/g,'-');
+// API collection behind each page; most pages are named after it, shop_marketing manages banners.
+const apiPath=section=>({shop_marketing:'shop-banners'})[section]||section.replace(/_/g,'-');
 const groups=[['运营工作台',['pushes','bots','routes']],['业务管理',['merchants','users','withdrawals','deposits','addresses','tickets']],['商城管理',['shop_orders','shop_aftersales','shop_messages','shop_products','shop_categories','shop_reviews','shop_coupons','shop_marketing']],['商城经营',['shop_reports','shop_settlements','shop_members','shop_applications']],['系统设置',['menus','configs','accounts','roles','audit_logs','merchant_staff']]];
 const statuses={grouping:['拼团中','blue'],refunded:['已退款','green'],paid_out:['已打款','green'],paid:['待处理','amber'],shipped:['已发货','blue'],ready:['待自提','blue'],queued:['待发送','blue'],scheduled:['定时发送','blue'],processing:['发送中','blue'],paused:['已暂停','amber'],completed:['已完成','green'],canceled:['已取消',''],failed:['失败','red'],sent:['已送达','green'],pending:['待处理','amber'],approved:['已通过','blue'],rejected:['已拒绝','red'],credited:['已入账','green'],open:['待回复','amber'],answered:['已回复','green']};
 let me={},roleChoices=[],shopMerchants=[],shopCategories=[],report=null,shopBalances=[],reportRange={from:'',to:''},current='pushes',rows=[],bots=[],routes=[],menuChoices=[],dashboard={},filter='all',query='',page=1,loadVersion=0,submitHandler=null,returnFocus=null;

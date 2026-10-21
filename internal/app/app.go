@@ -256,9 +256,12 @@ func (a *App) StartAdminTelegram(ctx context.Context) error {
 }
 
 func (a *App) runBot(ctx context.Context, client *telegram.Client, router *telegram.Router, webhookURL, webhookSecret, name string) error {
-	me, err := client.GetMe(ctx)
+	var me *telegram.User
+	err := retry(ctx, func() (err error) { me, err = client.GetMe(ctx); return err }, func(err error, wait time.Duration) {
+		a.logger.Warn("telegram getMe failed, retrying", zap.String("kind", name), zap.Error(err), zap.Duration("retry_in", wait))
+	})
 	if err != nil {
-		return fmt.Errorf("%s telegram getMe: %w", name, err)
+		return err
 	}
 	a.logger.Info("telegram authorized", zap.String("kind", name), zap.String("username", me.Username), zap.Int64("id", me.ID))
 	go router.SyncCommandMenu(ctx)
@@ -266,11 +269,7 @@ func (a *App) runBot(ctx context.Context, client *telegram.Client, router *teleg
 		if !telegram.IsTelegramURL(webhookURL) {
 			return fmt.Errorf("%s webhook URL must be valid https URL", name)
 		}
-		if err := client.SetWebhook(ctx, webhookURL, webhookSecret); err != nil {
-			return fmt.Errorf("set %s webhook: %w", name, err)
-		}
-		<-ctx.Done()
-		return ctx.Err()
+		return keepWebhook(ctx, client, webhookURL, webhookSecret, a.logger.With(zap.String("kind", name)))
 	}
 	if err := client.DeleteWebhook(ctx, false); err != nil {
 		return fmt.Errorf("delete %s webhook before polling: %w", name, err)

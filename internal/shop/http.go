@@ -98,6 +98,8 @@ func (h *Handler) RegisterAPI(r *gin.Engine) {
 	api.GET("/me", h.me)
 	api.GET("/home", h.home)
 	api.GET("/categories", h.categories)
+	api.GET("/directory", h.directory)
+	api.GET("/merchants/:id", h.merchant)
 	api.GET("/products", h.products)
 	api.GET("/products/:id", h.product)
 	api.GET("/products/:id/reviews", h.productReviews)
@@ -276,6 +278,16 @@ func (h *Handler) reviewOrder(c *gin.Context) {
 		return
 	}
 	h.reply(c, gin.H{"ok": true}, h.svc.Review(buyer(c).UserID, idParam(c), b.Reviews))
+}
+
+func (h *Handler) directory(c *gin.Context) {
+	rows, err := h.svc.Directory()
+	h.reply(c, rows, err)
+}
+
+func (h *Handler) merchant(c *gin.Context) {
+	m, err := h.svc.Merchant(idParam(c))
+	h.reply(c, m, err)
 }
 
 func (h *Handler) categories(c *gin.Context) {

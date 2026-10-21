@@ -67,6 +67,8 @@ async function toastText(page) { return page.$eval('#toast', e => e.hidden ? '' 
 
   // ---------- Admin ----------
   const actx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  // Uploaded and banner images live on the placeholder host e2e.example; serve them locally.
+  await actx.route('https://e2e.example/**', r => r.fulfill({ contentType: 'image/svg+xml', body: decodeURIComponent(IMG('#5264e8', '图片').split(',')[1]) }));
   const admin = await actx.newPage(); watch(admin, 'admin');
   step('admin login');
   await admin.goto(OPS_BASE + '/admin/login');
@@ -147,6 +149,16 @@ async function toastText(page) { return page.$eval('#toast', e => e.hidden ? '' 
   step('shop home');
   await shopPage.goto(SHOP_BASE + '/shop/#/');
   await shopPage.waitForTimeout(1200); await shot(shopPage, '10-shop-home');
+
+  step('shop home lists menu categories and their merchants');
+  if (!(await shopPage.locator('.chip', { hasText: '美食' }).count())) problems.push('menu category tab missing on shop home');
+  if (!(await shopPage.locator('.mcard', { hasText: '曼谷中餐馆' }).count())) problems.push('merchant missing on shop home');
+  await shopPage.click('.chip:has-text("美食")'); await shopPage.waitForTimeout(800); await shot(shopPage, '10b-shop-category');
+  await shopPage.click('.mcard:has-text("曼谷中餐馆")'); await shopPage.waitForTimeout(900); await shot(shopPage, '10c-shop-merchant');
+  const merchantText = await shopPage.textContent('#app');
+  if (!merchantText.includes('曼谷素坤逸 1 号') || !merchantText.includes('宫保鸡丁')) problems.push('merchant page incomplete: ' + merchantText.slice(0, 120));
+  await shopPage.goto(SHOP_BASE + '/shop/#/'); await shopPage.waitForTimeout(800);
+  await shopPage.click('.chip:has-text("全部")'); await shopPage.waitForTimeout(800);
   await shopPage.goto(SHOP_BASE + '/shop/#/me'); await shopPage.waitForTimeout(800);
   const uid = sql("select id from telegram_users where telegram_user_id=9001");
   sql(`update wallet_accounts set available=100 where user_id=${uid}`);
@@ -359,6 +371,13 @@ async function toastText(page) { return page.$eval('#toast', e => e.hidden ? '' 
   const staffNav = await staffPage.innerHTML('#navigation');
   if (!staffNav.includes('data-nav="shop_orders"') || staffNav.includes('data-nav="shop_settlements"') || staffNav.includes('data-nav="merchant_staff"')) problems.push('staff sees the wrong pages');
   await sctx.close();
+
+  step('every console page loads');
+  for (const key of await admin.$$eval('[data-nav]', els => els.map(e => e.dataset.nav))) {
+    await nav(admin, key); await admin.waitForTimeout(300);
+    const err = await admin.$eval('#error', e => e.hidden ? '' : e.textContent).catch(() => '');
+    if (err) problems.push(`page ${key}: ${err}`);
+  }
 
   step('to-do digest and database backup');
   await nav(admin, 'shop_reports'); await admin.click('#rpDigest'); await admin.waitForTimeout(800);

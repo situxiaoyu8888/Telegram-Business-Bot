@@ -97,6 +97,18 @@ img{display:block;max-width:100%}
 .shelf{display:flex;gap:10px;overflow-x:auto;scrollbar-width:none;margin-bottom:6px}
 .shelf::-webkit-scrollbar{display:none}
 .shelf .tile{flex:none;width:136px}
+.sec-head{display:flex;align-items:center;justify-content:space-between;margin:14px 0 8px}
+.sec-head .bold{font-size:15px}
+.sub-head{margin:4px 0 8px;color:var(--muted);font-size:12px}
+.mlist{display:flex;flex-direction:column;gap:8px;margin-bottom:6px}
+.mcard{display:flex;gap:12px;align-items:center;background:var(--card);border-radius:var(--radius);padding:12px;text-align:left;width:100%}
+.mcard .av{width:44px;height:44px;border-radius:12px;flex:none;display:grid;place-items:center;font-weight:700;font-size:18px;color:#fff}
+.mcard .info{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
+.mcard .name{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mcard .line{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mcard .go{color:var(--muted);flex:none}
+.mhead .av{width:56px;height:56px;border-radius:14px;flex:none;display:grid;place-items:center;font-weight:700;font-size:22px;color:#fff}
+.mhead h2{margin:0;font-size:18px}
 .strike{color:var(--muted);text-decoration:line-through;font-size:11px;margin-left:4px}
 .stars{color:#f5a623;letter-spacing:1px}
 .stars i{color:var(--line);font-style:normal}
@@ -143,7 +155,7 @@ const post=(path,body={})=>api(path,{method:'POST',body:JSON.stringify(body)});
 function newRequestID(){return crypto.randomUUID?crypto.randomUUID():Date.now().toString(36)+Math.random().toString(36).slice(2)}
 
 // ---- Routing ----
-const routes=[[/^#?\/?$/,home],[/^#\/product\/(\d+)(?:\?group=(\d+))?$/,product],[/^#\/group\/(\d+)$/,groupPage],[/^#\/cart$/,cart],[/^#\/checkout$/,checkoutPage],[/^#\/orders(?:\/(\w+))?$/,orders],[/^#\/order\/(\d+)$/,orderDetail],[/^#\/me$/,mine],[/^#\/coupons(?:\/(\w+))?$/,coupons],[/^#\/addresses(?:\/(pick))?$/,addresses],[/^#\/address\/(new|\d+)(?:\/(pick))?$/,addressForm],[/^#\/aftersale\/(\d+)$/,afterSaleForm],[/^#\/review\/(\d+)$/,reviewForm],[/^#\/(favorites|history)$/,productList],[/^#\/chat\/(\d+)(?:\?(product|order)=(\d+))?$/,chatPage],[/^#\/messages$/,messageList],[/^#\/apply$/,applyPage],[/^#\/aftersales$/,afterSales]];
+const routes=[[/^#?\/?$/,home],[/^#\/merchant\/(\d+)$/,merchantPage],[/^#\/product\/(\d+)(?:\?group=(\d+))?$/,product],[/^#\/group\/(\d+)$/,groupPage],[/^#\/cart$/,cart],[/^#\/checkout$/,checkoutPage],[/^#\/orders(?:\/(\w+))?$/,orders],[/^#\/order\/(\d+)$/,orderDetail],[/^#\/me$/,mine],[/^#\/coupons(?:\/(\w+))?$/,coupons],[/^#\/addresses(?:\/(pick))?$/,addresses],[/^#\/address\/(new|\d+)(?:\/(pick))?$/,addressForm],[/^#\/aftersale\/(\d+)$/,afterSaleForm],[/^#\/review\/(\d+)$/,reviewForm],[/^#\/(favorites|history)$/,productList],[/^#\/chat\/(\d+)(?:\?(product|order)=(\d+))?$/,chatPage],[/^#\/messages$/,messageList],[/^#\/apply$/,applyPage],[/^#\/aftersales$/,afterSales]];
 const tabs=[['#/','首页','home'],['#/cart','购物车','cart'],['#/orders','订单','order'],['#/me','我的','me']];
 let renderVersion=0;
 async function route(){
@@ -162,27 +174,62 @@ function bottomBar(html){$('bottom').innerHTML=`<div class="bar">${html}</div>`;
 const imgOr=(src,cls='')=>src?`<img src="${esc(src)}" alt="" loading="lazy" class="${cls}">`:svg('img');
 
 // ---- Home ----
-let homeState={category:0,q:'',page:1,items:[],done:false};
+// The home page mirrors the bot's menus: a tab per top-level category, then its merchant
+// categories with their merchants. Products follow below (search, banner category links).
+let homeState={menu:0,category:0,q:'',page:1,items:[],done:false};
+const avatarColors=['#2f80ed','#1fa36a','#f2994a','#9b51e0','#eb5757','#219ebc','#c0841a'];
+const avatarHTML=(m,cls='av')=>`<div class="${cls}" style="background:${avatarColors[m.id%avatarColors.length]}">${esc([...(m.name||'?').trim()][0]||'?')}</div>`;
+const merchantCard=m=>`<button class="mcard" onclick="location.hash='#/merchant/${m.id}'">${avatarHTML(m)}<div class="info"><div class="name">${m.pinned?'<span class="tag red">推荐</span> ':''}${esc(m.name)}</div>${m.description?`<div class="muted small line">${esc(m.description)}</div>`:''}<div class="muted small line">${[m.address&&'📍 '+esc(m.address),m.hours&&'🕒 '+esc(m.hours)].filter(Boolean).join('　')||(m.product_count?'':'查看商家信息')}</div></div><div class="go">${m.product_count?`<span class="tag">${m.product_count} 件商品</span>`:''} ›</div></button>`;
 async function home(v){
- const [cats,hm]=await Promise.all([api('categories'),api('home')]);if(stale(v))return;
- const browsing=!homeState.q&&!homeState.category;
+ const [dir,cats,hm]=await Promise.all([api('directory'),api('categories'),api('home')]);if(stale(v))return;
+ if(homeState.menu&&!dir.some(c=>c.id===homeState.menu))homeState.menu=0;
+ const browsing=!homeState.q&&!homeState.category&&!homeState.menu;
  const shelf=(title,list)=>list.length?`<div class="row between" style="margin:4px 0 8px"><span class="bold">${title}</span></div><div class="shelf">${list.map(tileHTML).join('')}</div>`:'';
+ const sections=c=>c.sections.map(sec=>`${c.sections.length>1||sec.title!==c.title?`<div class="sub-head">${esc(sec.title)}</div>`:''}<div class="mlist">${sec.merchants.map(merchantCard).join('')}</div>`).join('');
+ let body='';
+ if(homeState.q){
+  const q=homeState.q.toLowerCase(),found=[];
+  for(const c of dir)for(const sec of c.sections)for(const m of sec.merchants)if(!found.some(x=>x.id===m.id)&&(m.name+' '+m.description+' '+sec.title).toLowerCase().includes(q))found.push(m);
+  if(found.length)body+=`<div class="sec-head"><span class="bold">相关商家</span></div><div class="mlist">${found.map(merchantCard).join('')}</div>`;
+ }else if(homeState.menu){
+  const c=dir.find(x=>x.id===homeState.menu);body+=sections(c);
+ }else if(!homeState.category){
+  for(const c of dir){const all=c.sections.flatMap(sec=>sec.merchants),shown=all.slice(0,4);
+   body+=`<div class="sec-head"><span class="bold">${esc(c.title)}</span>${all.length>shown.length?`<button class="muted small" data-menu="${c.id}">查看全部 ${all.length} 家 ›</button>`:''}</div><div class="mlist">${shown.map(merchantCard).join('')}</div>`}
+  body+=shelf('⏰ 限时特惠',hm.promos)+shelf('⭐ 精选推荐',hm.featured);
+ }
+ const catName=homeState.category?(cats.find(c=>c.id===homeState.category)||{}).name||'分类':'';
  $('app').innerHTML=(browsing&&hm.banners.length?`<div class="banners" id="banners">${hm.banners.map(b=>`<button data-banner="${b.id}">${imgOr(b.image_url)}${b.title?`<span>${esc(b.title)}</span>`:''}</button>`).join('')}</div>`:'')+`<form class="search" id="searchForm"><span class="muted">🔍</span><input id="q" type="search" placeholder="搜索商品或商家" value="${esc(homeState.q)}" enterkeyhint="search"></form>
- <div class="chips">${[{id:0,name:'全部'},...cats].map(c=>`<button class="chip ${homeState.category===c.id?'on':''}" data-cat="${c.id}">${esc(c.name)}</button>`).join('')}</div>
- ${browsing?shelf('⏰ 限时特惠',hm.promos)+shelf('⭐ 精选推荐',hm.featured):''}<div class="bold" style="margin:6px 0 8px">${browsing?'全部商品':''}</div><div class="grid" id="grid"></div><div id="more"></div>`;
- document.querySelectorAll('[data-banner]').forEach(el=>el.onclick=()=>{const b=hm.banners.find(x=>String(x.id)===el.dataset.banner);if(b.link_type==='product')location.hash='#/product/'+b.link_value;else if(b.link_type==='category'){homeState.category=Number(b.link_value);route()}else if(b.link_type==='url'){tg?.openLink?tg.openLink(b.link_value):window.open(b.link_value,'_blank')}});
+ <div class="chips">${[{id:0,title:'全部'},...dir].map(c=>`<button class="chip ${!homeState.category&&homeState.menu===c.id?'on':''}" data-menu="${c.id}">${esc(c.title)}</button>`).join('')}${homeState.category?`<button class="chip on" data-menu="0">${esc(catName)} ✕</button>`:''}</div>
+ ${body}<div id="productHead"></div><div class="grid" id="grid"></div><div id="more"></div>`;
+ document.querySelectorAll('[data-banner]').forEach(el=>el.onclick=()=>{const b=hm.banners.find(x=>String(x.id)===el.dataset.banner);if(b.link_type==='product')location.hash='#/product/'+b.link_value;else if(b.link_type==='category'){homeState.category=Number(b.link_value);homeState.menu=0;route()}else if(b.link_type==='url'){tg?.openLink?tg.openLink(b.link_value):window.open(b.link_value,'_blank')}});
  if(hm.banners.length>1&&$('banners')){let i=0;const box=$('banners');const timer=setInterval(()=>{if(stale(v)||!document.body.contains(box)){clearInterval(timer);return}i=(i+1)%hm.banners.length;box.scrollTo({left:box.clientWidth*i,behavior:'smooth'})},4000)}
  $('searchForm').onsubmit=e=>{e.preventDefault();$('q').blur();homeState.q=$('q').value.trim();route()};
- document.querySelectorAll('[data-cat]').forEach(b=>b.onclick=()=>{homeState.category=Number(b.dataset.cat);route()});
- await loadProducts(v,true)}
-async function loadProducts(v,reset){
+ document.querySelectorAll('[data-menu]').forEach(b=>b.onclick=()=>{homeState.menu=Number(b.dataset.menu);homeState.category=0;homeState.q='';route()});
+ // A category tab lists merchants only; their products are on each merchant's page.
+ if(homeState.menu&&!homeState.q){if(!body)$('more').innerHTML='<div class="empty">该分类暂无商家</div>';return}
+ await loadProducts(v,true,!body)}
+async function loadProducts(v,reset,alone=true){
  if(reset){homeState.page=1;homeState.items=[];homeState.done=false}
  const params=new URLSearchParams({page:homeState.page,q:homeState.q});if(homeState.category)params.set('category_id',homeState.category);
  const list=await api('products?'+params);if(stale(v))return;
  homeState.items=homeState.items.concat(list);homeState.done=list.length<20;
  $('grid').innerHTML=homeState.items.map(tileHTML).join('');
- $('more').innerHTML=!homeState.items.length?`<div class="empty">${homeState.q?'没有找到相关商品':'暂无商品'}</div>`:homeState.done?'<div class="muted small" style="text-align:center;padding:16px">没有更多了</div>':'<div style="text-align:center;padding:12px"><button class="btn ghost sm" id="moreBtn">加载更多</button></div>';
- if($('moreBtn'))$('moreBtn').onclick=()=>{homeState.page++;loadProducts(v,false)}}
+ $('productHead').innerHTML=homeState.items.length?`<div class="sec-head"><span class="bold">${homeState.q?'相关商品':'全部商品'}</span></div>`:'';
+ // With merchants above, an empty product list is not worth a placeholder.
+ $('more').innerHTML=!homeState.items.length?(alone?`<div class="empty">${homeState.q?'没有找到相关商品或商家':'暂无商品'}</div>`:''):homeState.done?'<div class="muted small" style="text-align:center;padding:16px">没有更多了</div>':'<div style="text-align:center;padding:12px"><button class="btn ghost sm" id="moreBtn">加载更多</button></div>';
+ if($('moreBtn'))$('moreBtn').onclick=()=>{homeState.page++;loadProducts(v,false,alone)}}
+
+// ---- Merchant ----
+async function merchantPage(v,id){
+ const [m,list]=await Promise.all([api('merchants/'+id),api('products?merchant_id='+id)]);if(stale(v))return;
+ const kv=[['📍 地址',m.address],['🕒 营业时间',m.hours],['☎️ 电话',m.phone]].filter(x=>x[1]);
+ $('app').innerHTML=`<div class="card"><div class="row mhead">${avatarHTML(m)}<div style="min-width:0"><h2>${esc(m.name)}</h2>${m.product_count?`<div class="muted small">${m.product_count} 件商品</div>`:''}</div></div>${m.description?`<div style="margin-top:10px;white-space:pre-wrap">${esc(m.description)}</div>`:''}${kv.length?`<div style="margin-top:10px">${kv.map(([k,val])=>`<div class="kv"><span>${k}</span><span>${k.includes('电话')?`<a href="tel:${esc(val)}" style="color:var(--brand)">${esc(val)}</a>`:esc(val)}</span></div>`).join('')}</div>`:''}</div>
+ <div class="sec-head"><span class="bold">商品</span></div>${list.length?`<div class="grid">${list.map(tileHTML).join('')}</div>`:'<div class="empty" style="padding:30px 20px">该商家暂未上架商品</div>'}`;
+ const contact=/^https:\/\//.test(m.contact_url||''),telegramLink=/^https:\/\/t\.me\//.test(m.contact_url||'');
+ bottomBar(`<button class="btn ghost grow" id="chatMerchant">在线咨询</button>${contact?'<button class="btn grow" id="contactMerchant">联系商家</button>':''}`);
+ $('chatMerchant').onclick=()=>location.hash='#/chat/'+m.id;
+ if(contact)$('contactMerchant').onclick=()=>telegramLink&&tg?.openTelegramLink?tg.openTelegramLink(m.contact_url):tg?.openLink?tg.openLink(m.contact_url):window.open(m.contact_url,'_blank')}
 
 // ---- Product ----
 let shareInfo=null;
@@ -394,8 +441,7 @@ async function applyPage(v){
 async function mine(v){
  const [meInfo,mem,convs]=await Promise.all([api('me'),api('member').catch(()=>null),api('conversations').catch(()=>[])]);const unread=convs.reduce((n,c)=>n+c.buyer_unread,0);me=meInfo;shareInfo=me;if(stale(v))return;
  const entry=(h,icon,label)=>`<button class="row between" style="width:100%;padding:12px 0" onclick="location.hash='${h}'"><span>${icon} ${label}</span><span class="muted">›</span></button>`;
- $('app').innerHTML=`<div class="status-head"><h2>${esc(me.name||'用户')}</h2><div class="small">${me.username?'@'+esc(me.username):''}</div></div>
- <div class="card"><div class="muted small">钱包余额</div><div style="font-size:24px" class="bold">${money(me.balance)} <span class="small">USDT</span></div><div class="muted small">充值、提现请回到机器人菜单操作</div></div>
+ $('app').innerHTML=`<div class="status-head"><div class="row between" style="align-items:flex-start"><div style="min-width:0"><h2 style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(me.name||'用户')}</h2><div class="small" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${me.username?'@'+esc(me.username):''}</div></div><div style="text-align:right;flex:none"><div class="small" style="opacity:.8">钱包余额</div><div style="font-size:22px;line-height:1.2" class="bold">${money(me.balance)} <span class="small">USDT</span></div></div></div><div class="small" style="opacity:.75;margin-top:8px">充值、提现请回到机器人菜单操作</div></div>
  ${mem?`<div class="card"><div class="row between"><span class="bold">${mem.level?'💎 '+esc(mem.level.name)+'会员 · '+Math.round((1-Number(mem.level.rate))*100)+'% 折扣':'普通会员'}</span><span>积分 <b>${mem.points}</b></span></div><div class="muted small" style="margin-top:4px">累计消费 ${money(mem.spent)} USDT${mem.next?`，再消费 ${money((Number(mem.next.threshold)-Number(mem.spent)).toFixed(6))} USDT 升级${esc(mem.next.name)}`:''}${Number(mem.points_value)>0?` · ${Math.round(1/Number(mem.points_value))} 积分抵 1 USDT`:''}</div></div>`:''}
  <div class="card small muted">↗️ 在商品页点击分享发给好友，好友通过你的链接注册并下单，订单完成且售后期结束后你可获得推广佣金（以平台设置为准）。</div>
  <div class="card list">${entry('#/orders','📦','我的订单')}${entry('#/messages','💬','我的消息'+(unread?` <span class="tag red">${unread}</span>`:''))}${entry('#/aftersales','🧾','我的售后')}${entry('#/favorites','❤️','我的收藏')}${entry('#/history','🕘','浏览记录')}${entry('#/coupons','🎟','我的优惠券')}${entry('#/coupons/center','🎁','领券中心')}${entry('#/addresses','📍','收货地址')}${entry('#/apply','🏪','商家入驻')}</div>`;

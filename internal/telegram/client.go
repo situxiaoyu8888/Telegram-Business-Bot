@@ -355,6 +355,25 @@ func (c *Client) SetWebhook(
 	)
 }
 
+// WebhookInfo is the part of getWebhookInfo the program checks.
+type WebhookInfo struct {
+	URL                string `json:"url"`
+	PendingUpdateCount int    `json:"pending_update_count"`
+	LastErrorDate      int64  `json:"last_error_date"`
+	LastErrorMessage   string `json:"last_error_message"`
+}
+
+func (c *Client) GetWebhookInfo(ctx context.Context) (*WebhookInfo, error) {
+	var resp APIResponse[WebhookInfo]
+	if err := c.call(ctx, "getWebhookInfo", map[string]any{}, &resp); err != nil {
+		return nil, err
+	}
+	if !resp.OK {
+		return nil, fmt.Errorf("getWebhookInfo: %s", resp.Description)
+	}
+	return &resp.Result, nil
+}
+
 func (c *Client) GetMe(
 	ctx context.Context,
 ) (*User, error) {
