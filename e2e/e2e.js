@@ -512,8 +512,12 @@ async function toastText(page) { return page.$eval('#toast', e => e.hidden ? '' 
   }
   const pw = await sendPacket('password', ['2', '2', '芝麻开门', 'default-greeting']);
   if (pw) {
+    const pwMsgId = seq;
     await say(xh, '芝麻开门', group); await wait(1500);
-    if (!(await sentNow()).some(m => m.chat_id === -100555 && /小红 抢到/.test(m.text || ''))) problems.push('password claim in group failed');
+    // Like a button claim, the result only shows in the card's claim list; no reply message.
+    if ((await sentNow()).some(m => m.chat_id === -100555 && /小红 抢到/.test(m.text || ''))) problems.push('password claim in group sent a reply');
+    if (!(await sentNow()).some(m => m.method === 'editMessageText' && m.chat_id === -100555 && m.message_id === Number(pw[5]) && /小红/.test(m.text || ''))) problems.push('password claim in group not shown on the card');
+    if (!(await sentNow()).some(m => m.method === 'deleteMessage' && m.chat_id === -100555 && m.message_id === pwMsgId)) problems.push('password message not deleted');
     // The claim button of a password packet opens the private chat, which asks for the password.
     if (!(await sentNow()).some(m => m.chat_id === -100555 && JSON.stringify(m.reply_markup || {}).includes('hb:' + pw[0]))) problems.push('password packet has no claim button');
     await tap(passer, 'hb:' + pw[0], { message_id: Number(pw[5]), chat: group }); await wait(1000);

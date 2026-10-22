@@ -190,15 +190,18 @@ func (r *Router) tryPasswordClaim(ctx context.Context, chatID int64, m *Message,
 	}
 	msg := r.answerClaim(claim, p, err)
 	if err == nil {
-		msg = fmt.Sprintf("🧧 %s 抢到 <code>%s</code> %s", htmlEscape(displayName(u)), trimZeros(claim.Amount), htmlEscape(r.packetCurrencyName(p.Currency)))
-		if chatID == 0 {
-			msg += "，已存入钱包"
-		}
+		msg = fmt.Sprintf("🧧 %s 抢到 <code>%s</code> %s，已存入钱包", htmlEscape(displayName(u)), trimZeros(claim.Amount), htmlEscape(r.packetCurrencyName(p.Currency)))
 		r.refreshPacket(ctx, p.Code, "")
 	} else {
 		msg = htmlEscape(msg)
 	}
-	_ = r.client.ReplyMessage(ctx, m.Chat.ID, m.MessageID, msg, nil)
+	if chatID == 0 {
+		_ = r.client.ReplyMessage(ctx, m.Chat.ID, m.MessageID, msg, nil)
+		return true
+	}
+	// In a group the password message is removed (this needs the bot to be a group admin) and,
+	// like a button claim, the result only shows in the packet card's claim list.
+	_ = r.client.DeleteMessage(ctx, m.Chat.ID, m.MessageID)
 	return true
 }
 

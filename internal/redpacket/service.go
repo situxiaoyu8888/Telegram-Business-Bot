@@ -86,11 +86,8 @@ func (s *Service) RememberInline(packetID uint64, inlineMessageID string) error 
 	if inlineMessageID == "" {
 		return nil
 	}
-	err := s.st.DB.Create(&model.RedPacketMessage{PacketID: packetID, InlineMessageID: inlineMessageID}).Error
-	if store.IsDuplicate(err) {
-		return nil
-	}
-	return err
+	// Every press on a copy lands here; a copy already known is skipped without an error.
+	return s.st.DB.Clauses(clause.OnConflict{DoNothing: true}).Create(&model.RedPacketMessage{PacketID: packetID, InlineMessageID: inlineMessageID}).Error
 }
 
 // InlineMessages returns the remembered inline-mode copies of a packet's card.
