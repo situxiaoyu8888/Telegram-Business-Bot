@@ -111,6 +111,12 @@ img{display:block;max-width:100%}
 .mhead h2{margin:0;font-size:18px}
 .me-av{width:52px;height:52px;border-radius:50%;flex:none;overflow:hidden;display:grid;place-items:center;font-size:22px;font-weight:700;background:#ffffff33;color:#fff}
 .me-av img{width:100%;height:100%;object-fit:cover}
+.cic{display:inline-grid;place-items:center;width:1.6em;height:1.6em;border-radius:50%;flex:none;vertical-align:middle;line-height:1}
+.cic.flag{font-size:1.4em;width:1.15em;height:1.15em}
+.cic.sym{background:#26a17b;color:#fff;font-weight:700;font-size:.9em}
+.me-bal .n .cic{margin-right:3px}
+.asset .cic{font-size:20px;margin-right:10px;width:32px;height:32px}
+.asset .cic.flag{font-size:30px}
 .me-bal{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:14px}
 .me-bal>div{background:#ffffff1f;border-radius:10px;padding:8px;min-width:0}
 .me-bal .n{font-size:11px;opacity:.8;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -464,18 +470,21 @@ async function applyPage(v){
 // Rates are "units per 1 USDT"; the server recomputes the result and refuses the exchange when
 // the rates or fee shown here have changed in the meantime.
 let exState={from:'',to:'',rid:''};
+// Fiat currencies show their flag (icon); USDT and other tokens show the ₮ symbol.
+const curIcon=c=>c?.icon?`<span class="cic flag">${esc(c.icon)}</span>`:`<span class="cic sym">${c?.kind==='fiat'?esc((c.code||'?')[0]):'₮'}</span>`;
+const curLabel=c=>(c.icon||(c.kind==='fiat'?'':'₮'))+' '+c.name;
 const fmtAmt=(v,d)=>{const n=Number(v);return Number.isFinite(n)?n.toLocaleString('en-US',{minimumFractionDigits:Math.min(d,2),maximumFractionDigits:d}):String(v)};
 const truncTo=(n,d)=>{const f=10**d;return Math.floor(n*f+1e-9)/f};
 async function exchangePage(v){
  const data=await api('exchange');if(stale(v))return;
  const all=data.balances,list=all.filter(c=>c.exchangeable),fee=Number(data.fee_rate)||0,byCode=Object.fromEntries(all.map(c=>[c.code,c]));
- const assets=`<div class="sec-head"><span class="bold">我的资产</span></div><div class="card" style="padding:4px 16px">${all.map(c=>`<div class="asset"><div><div class="bold">${esc(c.name)}</div><div class="muted small">${esc(c.code)}</div></div><div style="text-align:right"><div class="bold">${fmtAmt(c.available,c.decimals)}</div>${Number(c.frozen)>0?`<div class="muted small">冻结 ${fmtAmt(c.frozen,c.decimals)}</div>`:''}</div></div>`).join('')}</div>`;
- const records=data.records.length?`<div class="sec-head"><span class="bold">兑换记录</span></div><div class="card" style="padding:4px 16px">${data.records.map(r=>{const f=byCode[r.from_currency],t=byCode[r.to_currency];return `<div class="asset"><div><div>${esc(f?.name||r.from_currency)} → ${esc(t?.name||r.to_currency)}</div><div class="muted small">${new Date(r.created_at).toLocaleString('zh-CN')}</div></div><div style="text-align:right"><div class="muted small">-${fmtAmt(r.amount,f?.decimals??6)}</div><div class="bold" style="color:var(--brand)">+${fmtAmt(r.received,t?.decimals??6)}</div></div></div>`}).join('')}</div>`:'';
+ const assets=`<div class="sec-head"><span class="bold">我的资产</span></div><div class="card" style="padding:4px 16px">${all.map(c=>`<div class="asset"><div class="row" style="gap:0;align-items:center">${curIcon(c)}<div><div class="bold">${esc(c.name)}</div><div class="muted small">${esc(c.code)}</div></div></div><div style="text-align:right"><div class="bold">${fmtAmt(c.available,c.decimals)}</div>${Number(c.frozen)>0?`<div class="muted small">冻结 ${fmtAmt(c.frozen,c.decimals)}</div>`:''}</div></div>`).join('')}</div>`;
+ const records=data.records.length?`<div class="sec-head"><span class="bold">兑换记录</span></div><div class="card" style="padding:4px 16px">${data.records.map(r=>{const f=byCode[r.from_currency],t=byCode[r.to_currency];return `<div class="asset"><div><div>${f?esc(curLabel(f)):esc(r.from_currency)} → ${t?esc(curLabel(t)):esc(r.to_currency)}</div><div class="muted small">${new Date(r.created_at).toLocaleString('zh-CN')}</div></div><div style="text-align:right"><div class="muted small">-${fmtAmt(r.amount,f?.decimals??6)}</div><div class="bold" style="color:var(--brand)">+${fmtAmt(r.received,t?.decimals??6)}</div></div></div>`}).join('')}</div>`:'';
  if(list.length<2){$('app').innerHTML=`<div class="empty" style="padding:40px 20px">暂未开放换汇，请稍后再来</div>`+assets+records;return}
  if(!list.some(c=>c.code===exState.from))exState.from=list[0].code;
  if(!list.some(c=>c.code===exState.to)||exState.to===exState.from)exState.to=list.find(c=>c.code!==exState.from).code;
  if(!exState.rid)exState.rid=newRequestID();
- const opts=sel=>list.map(c=>`<option value="${esc(c.code)}" ${c.code===sel?'selected':''}>${esc(c.name)}</option>`).join('');
+ const opts=sel=>list.map(c=>`<option value="${esc(c.code)}" ${c.code===sel?'selected':''}>${esc(curLabel(c))}</option>`).join('');
  $('app').innerHTML=`<div class="card ex-box"><div class="ex-side"><div class="row between"><span class="muted small">兑出</span><select id="exFrom" aria-label="兑出币种">${opts(exState.from)}</select></div><div class="ex-amt"><input id="exAmount" inputmode="decimal" placeholder="0" autocomplete="off"><button class="btn ghost sm" id="exAll">全部</button></div><div class="muted small" id="exAvail"></div></div>
  <button class="ex-swap" id="exSwap" aria-label="交换币种">⇅</button>
  <div class="ex-side"><div class="row between"><span class="muted small">兑入（预计到账）</span><select id="exTo" aria-label="兑入币种">${opts(exState.to)}</select></div><div class="ex-get" id="exGet">0</div></div>
@@ -507,7 +516,7 @@ async function mine(v){
  // Telegram passes the profile photo to Mini Apps when the user allows it; otherwise show an initial.
  const photo=tg?.initDataUnsafe?.user?.photo_url||'',initial=esc([...(me.name||'用户').trim()][0]||'用');
  const avatar=`<div class="me-av">${photo?`<img src="${esc(photo)}" alt="" onerror="this.parentNode.textContent='${initial}'">`:initial}</div>`;
- $('app').innerHTML=`<div class="status-head"><div class="row between" style="align-items:center"><div class="row" style="min-width:0;gap:12px">${avatar}<div style="min-width:0"><h2 style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(me.name||'用户')}</h2><div class="small" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${me.username?'@'+esc(me.username):''}</div></div></div><button class="small" style="flex:none;color:inherit;opacity:.9" onclick="location.hash='#/exchange'">换汇 ›</button></div><div class="me-bal">${(me.balances||[]).map(b=>`<div><div class="n">${esc(b.name)}</div><div class="v" title="${esc(b.available)}">${fmtAmt(b.available,b.decimals)}</div>${Number(b.frozen)>0?`<div class="f">冻结 ${fmtAmt(b.frozen,b.decimals)}</div>`:''}</div>`).join('')}</div><div class="small" style="opacity:.75;margin-top:8px">商城使用 USDT-TRC20 付款；充值、提现请回到机器人菜单操作</div></div>
+ $('app').innerHTML=`<div class="status-head"><div class="row between" style="align-items:center"><div class="row" style="min-width:0;gap:12px">${avatar}<div style="min-width:0"><h2 style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(me.name||'用户')}</h2><div class="small" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${me.username?'@'+esc(me.username):''}</div></div></div><button class="small" style="flex:none;color:inherit;opacity:.9" onclick="location.hash='#/exchange'">换汇 ›</button></div><div class="me-bal">${(me.balances||[]).map(b=>`<div><div class="n">${curIcon(b)}${esc(b.name)}</div><div class="v" title="${esc(b.available)}">${fmtAmt(b.available,b.decimals)}</div>${Number(b.frozen)>0?`<div class="f">冻结 ${fmtAmt(b.frozen,b.decimals)}</div>`:''}</div>`).join('')}</div><div class="small" style="opacity:.75;margin-top:8px">商城使用 USDT-TRC20 付款；充值、提现请回到机器人菜单操作</div></div>
  ${mem?`<div class="card"><div class="row between"><span class="bold">${mem.level?'💎 '+esc(mem.level.name)+'会员 · '+Math.round((1-Number(mem.level.rate))*100)+'% 折扣':'普通会员'}</span><span>积分 <b>${mem.points}</b></span></div><div class="muted small" style="margin-top:4px">累计消费 ${money(mem.spent)} USDT${mem.next?`，再消费 ${money((Number(mem.next.threshold)-Number(mem.spent)).toFixed(6))} USDT 升级${esc(mem.next.name)}`:''}${Number(mem.points_value)>0?` · ${Math.round(1/Number(mem.points_value))} 积分抵 1 USDT`:''}</div></div>`:''}
  <div class="card small muted">↗️ 在商品页点击分享发给好友，好友通过你的链接注册并下单，订单完成且售后期结束后你可获得推广佣金（以平台设置为准）。</div>
  <div class="card menu-grid${me.is_merchant?' even':''}">${entry('#/orders','📦','我的订单')}${entry('#/messages','💬','我的消息'+(unread?` <span class="tag red">${unread}</span>`:''))}${entry('#/aftersales','🧾','我的售后')}${entry('#/favorites','❤️','我的收藏')}${entry('#/history','🕘','浏览记录')}${entry('#/coupons','🎟','我的优惠券')}${entry('#/coupons/center','🎁','领券中心')}${entry('#/addresses','📍','收货地址')}${me.is_merchant?'':entry('#/apply','🏪','商家入驻','wide')}</div>`;

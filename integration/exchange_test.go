@@ -17,8 +17,11 @@ import (
 func exchangeFixture(t *testing.T, fee string) (*gorm.DB, *wallet.Service, uint64) {
 	db := testDatabase(t)
 	for _, c := range store.DefaultCurrencies {
-		if c.Code == "CNY" {
-			c.Exchangeable, c.Withdrawable = true, true
+		switch c.Code {
+		case "CNY":
+			c.Withdrawable = true
+		case "THB":
+			c.Exchangeable = false
 		}
 		must(t, db.Create(&c).Error)
 	}

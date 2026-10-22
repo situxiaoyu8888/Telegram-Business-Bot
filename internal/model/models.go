@@ -333,6 +333,7 @@ type WalletCurrency struct {
 	ID           uint64    `gorm:"primaryKey" json:"id"`
 	Code         string    `gorm:"size:16;uniqueIndex;not null" json:"code"`
 	Name         string    `gorm:"size:32;not null" json:"name"`
+	Icon         string    `gorm:"size:16;not null;default:''" json:"icon"`   // flag emoji for fiat; empty shows the kind's symbol
 	Kind         string    `gorm:"size:16;not null;default:fiat" json:"kind"` // trc20, erc20 or fiat
 	Rate         string    `gorm:"type:decimal(24,8);not null;default:1" json:"rate"`
 	Decimals     int       `gorm:"not null" json:"decimals"` // zero values must be written, so no defaults

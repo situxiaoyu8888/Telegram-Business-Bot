@@ -72,24 +72,46 @@ func New(mysqlDSN, redisAddr, redisPassword string, redisDB int) (*Store, error)
 			return nil, err
 		}
 	}
-	// Currencies are seeded once each; rates and switches are then managed in the console. Fiat
-	// currencies start without exchange so placeholder rates cannot be traded before review.
+	// Currencies are seeded once each; rates and switches are then managed in the console.
 	for _, c := range DefaultCurrencies {
 		if err := db.Clauses(clause.OnConflict{DoNothing: true}).Create(&c).Error; err != nil {
 			return nil, err
 		}
 	}
+	if err := s.seedCurrencyFlags(); err != nil {
+		return nil, err
+	}
 	return s, nil
+}
+
+// seedCurrencyFlags runs once for currencies seeded by the first multi-currency release (no
+// icons, fiat exchange off): it adds the default flags and opens exchange for every currency.
+func (s *Store) seedCurrencyFlags() error {
+	return s.DB.Transaction(func(tx *gorm.DB) error {
+		claim := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&model.SeedMigration{Name: "wallet_currencies_v2"})
+		if claim.Error != nil || claim.RowsAffected == 0 {
+			return claim.Error
+		}
+		for _, c := range DefaultCurrencies {
+			if c.Icon == "" {
+				continue
+			}
+			if err := tx.Model(&model.WalletCurrency{}).Where("code = ? AND icon = ''", c.Code).Update("icon", c.Icon).Error; err != nil {
+				return err
+			}
+		}
+		return tx.Model(&model.WalletCurrency{}).Where("exchangeable = ?", false).Update("exchangeable", true).Error
+	})
 }
 
 // DefaultCurrencies are the wallet currencies created on first start.
 var DefaultCurrencies = []model.WalletCurrency{
 	{Code: "USDT", Name: "USDT-TRC20", Kind: "trc20", Rate: "1", Decimals: 6, MinWithdraw: "0", WithdrawFee: "0", Exchangeable: true, Withdrawable: true, Enabled: true, Sort: 10},
 	{Code: "USDT_ERC20", Name: "USDT-ERC20", Kind: "erc20", Rate: "1", Decimals: 6, MinWithdraw: "10", WithdrawFee: "0", Exchangeable: true, Withdrawable: true, Enabled: true, Sort: 20},
-	{Code: "CNY", Name: "人民币", Kind: "fiat", Rate: "7.2", Decimals: 2, MinWithdraw: "100", WithdrawFee: "0", Enabled: true, Sort: 30},
-	{Code: "THB", Name: "泰铢", Kind: "fiat", Rate: "33", Decimals: 2, MinWithdraw: "500", WithdrawFee: "0", Enabled: true, Sort: 40},
-	{Code: "MMK", Name: "缅币", Kind: "fiat", Rate: "4200", Decimals: 0, MinWithdraw: "50000", WithdrawFee: "0", Enabled: true, Sort: 50},
-	{Code: "USD", Name: "美元", Kind: "fiat", Rate: "1", Decimals: 2, MinWithdraw: "10", WithdrawFee: "0", Enabled: true, Sort: 60},
+	{Code: "CNY", Name: "人民币", Icon: "🇨🇳", Kind: "fiat", Rate: "7.2", Decimals: 2, MinWithdraw: "100", WithdrawFee: "0", Exchangeable: true, Enabled: true, Sort: 30},
+	{Code: "THB", Name: "泰铢", Icon: "🇹🇭", Kind: "fiat", Rate: "33", Decimals: 2, MinWithdraw: "500", WithdrawFee: "0", Exchangeable: true, Enabled: true, Sort: 40},
+	{Code: "MMK", Name: "缅币", Icon: "🇲🇲", Kind: "fiat", Rate: "4200", Decimals: 0, MinWithdraw: "50000", WithdrawFee: "0", Exchangeable: true, Enabled: true, Sort: 50},
+	{Code: "USD", Name: "美元", Icon: "🇺🇸", Kind: "fiat", Rate: "1", Decimals: 2, MinWithdraw: "10", WithdrawFee: "0", Exchangeable: true, Enabled: true, Sort: 60},
 }
 
 func (s *Store) Close() error {

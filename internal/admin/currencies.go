@@ -56,7 +56,12 @@ func (h *Handler) saveCurrency(c *gin.Context) {
 		}
 		*v.val = d.StringFixed(6)
 	}
-	fields := map[string]any{"name": b.Name, "rate": rate.StringFixed(8), "decimals": b.Decimals, "min_withdraw": b.MinWithdraw, "withdraw_fee": b.WithdrawFee,
+	b.Icon = strings.TrimSpace(b.Icon)
+	if utf8.RuneCountInString(b.Icon) > 8 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "图标请填写一个国旗 emoji 或符号"})
+		return
+	}
+	fields := map[string]any{"name": b.Name, "icon": b.Icon, "rate": rate.StringFixed(8), "decimals": b.Decimals, "min_withdraw": b.MinWithdraw, "withdraw_fee": b.WithdrawFee,
 		"exchangeable": b.Exchangeable, "withdrawable": b.Withdrawable, "enabled": b.Enabled, "sort": b.Sort}
 	if b.ID == 0 {
 		b.Code = strings.ToUpper(strings.TrimSpace(b.Code))

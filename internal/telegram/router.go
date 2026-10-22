@@ -375,7 +375,11 @@ func (r *Router) dispatchMenu(ctx context.Context, cb *CallbackQuery, u *model.T
 			if x.Code != "USDT" && isZero(x.Available) && isZero(x.Frozen) {
 				continue
 			}
-			fmt.Fprintf(&b, "\n<b>%s</b>\n可用：<code>%s</code>", htmlEscape(x.Name), x.Available)
+			icon := x.Icon
+			if icon == "" && x.Kind != wallet.KindFiat {
+				icon = "₮"
+			}
+			fmt.Fprintf(&b, "\n<b>%s %s</b>\n可用：<code>%s</code>", htmlEscape(icon), htmlEscape(x.Name), x.Available)
 			if !isZero(x.Frozen) {
 				fmt.Fprintf(&b, "　冻结：<code>%s</code>", x.Frozen)
 			}
