@@ -176,6 +176,9 @@ async function toastText(page) { return page.$eval('#toast', e => e.hidden ? '' 
   await admin.fill('#adjAmount', '720'); await admin.fill('#adjRemark', '现金充值'); await shot(admin, '11c-admin-balance');
   await submitModal(admin);
   if (sql(`select available from wallet_accounts where user_id=${uid} and currency='CNY'`) !== '720.000000') problems.push('CNY credit failed');
+  await nav(admin, 'deposits'); await shot(admin, '11c2-admin-deposits');
+  const depositText = await admin.textContent('#content');
+  if (!depositText.includes('后台加款') || !depositText.includes('现金充值') || !depositText.includes('人民币')) problems.push('console credit missing from the deposit page');
   await shopPage.goto(SHOP_BASE + '/shop/#/exchange'); await shopPage.waitForTimeout(900);
   await shopPage.selectOption('#exFrom', 'CNY'); await shopPage.selectOption('#exTo', 'USDT');
   await shopPage.fill('#exAmount', '72'); await shopPage.waitForTimeout(200); await shot(shopPage, '11d-shop-exchange');
@@ -478,6 +481,17 @@ async function toastText(page) { return page.$eval('#toast', e => e.hidden ? '' 
   if (pw) {
     await say(xh, '芝麻开门', group); await wait(1500);
     if (!(await sentNow()).some(m => m.chat_id === -100555 && /小红 抢到/.test(m.text || ''))) problems.push('password claim in group failed');
+    // The claim button of a password packet opens the private chat, which asks for the password.
+    if (!(await sentNow()).some(m => m.chat_id === -100555 && JSON.stringify(m.reply_markup || {}).includes('hb:' + pw[0]))) problems.push('password packet has no claim button');
+    await tap(passer, 'hb:' + pw[0], { message_id: Number(pw[5]), chat: group }); await wait(1000);
+    const opened = (await sentNow()).filter(m => m.method === 'answerCallbackQuery' && (m.url || '').includes('start=hbp_' + pw[0]));
+    if (!opened.length) problems.push('password packet button did not open the private chat');
+    await say(passer, '/start hbp_' + pw[0]); await wait(800);
+    await say(passer, '不对'); await wait(800);
+    await say(passer, '芝麻开门'); await wait(1200);
+    const toPasser = (await sentNow()).filter(m => m.chat_id === 9005).map(m => m.text || '');
+    if (!toPasser.some(t => /请发送口令/.test(t)) || !toPasser.some(t => /口令不对/.test(t)) || !toPasser.some(t => /抢到/.test(t))) problems.push('password claim in private chat failed: ' + toPasser.join(' | '));
+    if (sql(`select status from red_packets where code='${pw[0]}'`) !== 'finished') problems.push('password packet not finished after two claims');
   }
   const xmBal = sql(`select available from wallet_accounts where user_id=${uid} and currency='USDT'`);
   if (xmBal !== '95.000000') problems.push('sender not charged 5 USDT for two packets: ' + xmBal);

@@ -169,6 +169,11 @@ func (c *Client) EditInlineMessage(ctx context.Context, inlineMessageID, text st
 	return c.call(ctx, "editMessageText", payload, nil)
 }
 
+// AnswerCallbackURL answers a button press by opening a t.me/<bot>?start=... link.
+func (c *Client) AnswerCallbackURL(ctx context.Context, callbackID, url string) error {
+	return c.call(ctx, "answerCallbackQuery", map[string]any{"callback_query_id": callbackID, "url": url}, nil)
+}
+
 // AnswerCallbackAlert answers a button press with a toast, or a dialog when alert is true.
 func (c *Client) AnswerCallbackAlert(ctx context.Context, callbackID, text string, alert bool) error {
 	return c.call(ctx, "answerCallbackQuery", map[string]any{"callback_query_id": callbackID, "text": text, "show_alert": alert}, nil)

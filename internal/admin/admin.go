@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -160,7 +161,7 @@ func (h *Handler) RegisterAPI(r *gin.Engine) {
 	api.GET("/deposits", can("deposits"), h.deposits)
 
 	// Currency names label balances, withdrawals and exchanges.
-	api.GET("/currencies", can("currencies", "users", "withdrawals", "exchanges", "redpackets"), h.currencies)
+	api.GET("/currencies", can("currencies", "users", "withdrawals", "exchanges", "redpackets", "deposits"), h.currencies)
 	api.POST("/currencies", can("currencies"), h.saveCurrency)
 	api.GET("/exchanges", can("exchanges"), h.exchanges)
 	api.GET("/redpackets", can("redpackets"), h.redPackets)
@@ -303,9 +304,60 @@ func (h *Handler) withdrawals(c *gin.Context) {
 	c.JSON(http.StatusOK, rows)
 }
 
+// depositRow is one line of the deposit page: an on-chain deposit, or a balance adjustment made
+// in the console (credits and debits, any currency).
+type depositRow struct {
+	ID             uint64    `json:"id"`   // adjustments are offset by adjustmentRowBase so IDs never collide
+	Kind           string    `json:"kind"` // chain, admin_credit or admin_debit
+	UserID         uint64    `json:"user_id"`
+	TelegramUserID int64     `json:"telegram_user_id"`
+	Currency       string    `json:"currency"`
+	Network        string    `json:"network"`
+	Amount         string    `json:"amount"`
+	Status         string    `json:"status"`
+	TxID           string    `json:"txid"`
+	Remark         string    `json:"remark"`
+	CreatedAt      time.Time `json:"created_at"`
+}
+
+const adjustmentRowBase = 1_000_000_000_000
+
 func (h *Handler) deposits(c *gin.Context) {
-	var rows []model.DepositOrder
-	h.st.DB.Order("id desc").Limit(200).Find(&rows)
+	var orders []model.DepositOrder
+	if err := h.st.DB.Order("id desc").Limit(300).Find(&orders).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "充值记录加载失败"})
+		return
+	}
+	var adjustments []model.WalletTransaction
+	if err := h.st.DB.Where("type IN ?", []string{"admin_credit", "admin_debit"}).Order("id desc").Limit(300).Find(&adjustments).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "充值记录加载失败"})
+		return
+	}
+	rows := make([]depositRow, 0, len(orders)+len(adjustments))
+	userIDs := []uint64{}
+	for _, o := range orders {
+		rows = append(rows, depositRow{ID: o.ID, Kind: "chain", UserID: o.UserID, Currency: o.Currency, Network: o.Network, Amount: o.Amount, Status: o.Status, TxID: o.TxID, CreatedAt: o.CreatedAt})
+		userIDs = append(userIDs, o.UserID)
+	}
+	for _, t := range adjustments {
+		rows = append(rows, depositRow{ID: adjustmentRowBase + t.ID, Kind: t.Type, UserID: t.UserID, Currency: t.Currency, Amount: t.Amount, Status: "completed", Remark: t.Remark, CreatedAt: t.CreatedAt})
+		userIDs = append(userIDs, t.UserID)
+	}
+	var users []model.TelegramUser
+	if len(userIDs) > 0 {
+		h.st.DB.Select("id", "telegram_user_id").Where("id IN ?", userIDs).Find(&users)
+	}
+	tg := map[uint64]int64{}
+	for _, u := range users {
+		tg[u.ID] = u.TelegramUserID
+	}
+	for i := range rows {
+		rows[i].TelegramUserID = tg[rows[i].UserID]
+	}
+	sort.SliceStable(rows, func(i, j int) bool { return rows[i].CreatedAt.After(rows[j].CreatedAt) })
+	if len(rows) > 300 {
+		rows = rows[:300]
+	}
 	c.JSON(http.StatusOK, rows)
 }
 

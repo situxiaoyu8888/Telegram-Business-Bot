@@ -166,8 +166,13 @@ func (r *Router) handleMessage(ctx context.Context, m *Message, first bool) {
 	text := strings.TrimSpace(m.Text)
 	command := commandName(text)
 	if command == "/start" {
-		_ = r.sessions.Clear(ctx, m.From.ID)
 		parts := strings.Fields(text)
+		// "hbp_<code>" comes from the claim button of a password packet.
+		if len(parts) > 1 && r.packets != nil && strings.HasPrefix(parts[1], "hbp_") {
+			r.askPacketPassword(ctx, m.Chat.ID, m.From.ID, strings.TrimPrefix(parts[1], "hbp_"))
+			return
+		}
+		_ = r.sessions.Clear(ctx, m.From.ID)
 		// "hb" opens the red packet wizard; "hb_<groupID>" comes from /hb in that group.
 		if len(parts) > 1 && r.packets != nil && (parts[1] == "hb" || strings.HasPrefix(parts[1], "hb_")) {
 			group, _ := strconv.ParseInt(strings.TrimPrefix(parts[1], "hb_"), 10, 64)
@@ -564,6 +569,10 @@ func (r *Router) handleSessionInput(ctx context.Context, m *Message, u *model.Te
 	case "redpacket":
 		if r.packets != nil {
 			r.handlePacketWizardInput(ctx, m, u, s)
+		}
+	case "redpacket_pw":
+		if r.packets != nil {
+			r.claimWithPassword(ctx, m, u, s)
 		}
 	case "withdraw":
 		switch s.Step {

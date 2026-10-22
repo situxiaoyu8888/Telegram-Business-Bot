@@ -138,6 +138,12 @@ func TestRedPacketExclusivePasswordAndCurrencies(t *testing.T) {
 	if _, _, matched, err := f.svc.ClaimByPassword(0, "发财", claimerOf(bob)); !matched || err == nil {
 		t.Fatal("second password claim by the same user accepted")
 	}
+	if _, _, err := f.svc.ClaimCode(pw.Code, "不对", claimerOf(alice)); err == nil {
+		t.Fatal("wrong password accepted by code")
+	}
+	if c, _, err := f.svc.ClaimCode(pw.Code, " 发财 ", claimerOf(alice)); err != nil || c == nil {
+		t.Fatalf("password claim by code failed: %v", err)
+	}
 	// Equal packets need enough money for every share; not enough balance is refused.
 	if _, err := f.svc.Create(redpacket.CreateInput{SenderUserID: f.sender.ID, Type: redpacket.TypeEqual, Currency: "USDT", Amount: "50", Count: 3, RequestID: "rp-big"}); err == nil {
 		t.Fatal("packet larger than the balance accepted")

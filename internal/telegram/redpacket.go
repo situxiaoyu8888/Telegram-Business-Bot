@@ -69,11 +69,7 @@ func packetClaimer(u *model.TelegramUser) redpacket.Claimer {
 func (r *Router) packetKeyboard(ctx context.Context, p *model.RedPacket) *InlineKeyboardMarkup {
 	var rows [][]InlineKeyboardButton
 	if r.packets.Open(p) {
-		label := "🧧 抢红包"
-		if p.Type == redpacket.TypePassword {
-			label = "🔑 发送口令领取"
-		}
-		rows = append(rows, []InlineKeyboardButton{btn(label, "hb:"+p.Code)})
+		rows = append(rows, []InlineKeyboardButton{btn("🧧 抢红包", "hb:"+p.Code)})
 	}
 	if name, err := r.client.Username(ctx); err == nil && name != "" {
 		rows = append(rows, []InlineKeyboardButton{{Text: "我也发红包", URL: "https://t.me/" + name + "?start=hb"}})
@@ -126,6 +122,15 @@ func (r *Router) handlePacketButton(ctx context.Context, cb *CallbackQuery, u *m
 		_ = r.client.AnswerCallbackAlert(ctx, cb.ID, "账号不可用", true)
 		return
 	}
+	// A password packet is claimed by entering the password: the button opens the private chat,
+	// remembering which message to update afterwards.
+	if p, _, err := r.packets.ByCode(code); err == nil && p.Type == redpacket.TypePassword && r.packets.Open(p) {
+		if name, err := r.client.Username(ctx); err == nil && name != "" {
+			_ = r.sessions.Set(ctx, cb.From.ID, session.Session{Scene: "redpacket_pw", Step: "password", Data: map[string]any{"code": code, "inline": cb.InlineMessageID}})
+			_ = r.client.AnswerCallbackURL(ctx, cb.ID, "https://t.me/"+name+"?start=hbp_"+code)
+			return
+		}
+	}
 	claim, p, err := r.packets.Claim(code, packetClaimer(u))
 	_ = r.client.AnswerCallbackAlert(ctx, cb.ID, r.answerClaim(claim, p, err), true)
 	if err == nil {
@@ -155,6 +160,44 @@ func (r *Router) tryPasswordClaim(ctx context.Context, chatID int64, m *Message,
 	}
 	_ = r.client.ReplyMessage(ctx, m.Chat.ID, m.MessageID, msg, nil)
 	return true
+}
+
+// askPacketPassword asks for the password of a password packet in the private chat.
+func (r *Router) askPacketPassword(ctx context.Context, chatID, userID int64, code string) {
+	p, _, err := r.packets.ByCode(code)
+	if err != nil {
+		_ = r.client.SendMessage(ctx, chatID, "红包不存在。", nil)
+		return
+	}
+	if !r.packets.Open(p) {
+		_ = r.client.SendMessage(ctx, chatID, "这个红包已领完或已过期。", nil)
+		return
+	}
+	// Keep the message the button was pressed on, so its card can be updated after the claim.
+	inline := ""
+	if s, _ := r.sessions.Get(ctx, userID); s != nil && s.Scene == "redpacket_pw" && sessionString(s, "code") == code {
+		inline = sessionString(s, "inline")
+	}
+	_ = r.sessions.Set(ctx, userID, session.Session{Scene: "redpacket_pw", Step: "password", Data: map[string]any{"code": code, "inline": inline}})
+	_ = r.client.SendMessage(ctx, chatID, fmt.Sprintf("🔑 <b>%s 的口令红包</b>\n\n请发送口令领取。发送 /cancel 可取消。", htmlEscape(p.SenderName)), nil)
+}
+
+// claimWithPassword claims the packet chosen with the button using the typed password.
+func (r *Router) claimWithPassword(ctx context.Context, m *Message, u *model.TelegramUser, s *session.Session) {
+	code := sessionString(s, "code")
+	claim, p, err := r.packets.ClaimCode(code, m.Text, packetClaimer(u))
+	if err != nil && redpacket.IsUserError(err) && strings.Contains(err.Error(), "口令不对") {
+		_ = r.client.SendMessage(ctx, m.Chat.ID, "口令不对，请重新发送。发送 /cancel 可取消。", nil)
+		return
+	}
+	_ = r.sessions.Clear(ctx, m.From.ID)
+	_ = r.client.SendMessage(ctx, m.Chat.ID, htmlEscape(r.answerClaim(claim, p, err)), r.homeKeyboard(r.isAdmin(m.From.ID)))
+	if err == nil {
+		r.refreshPacket(ctx, code, sessionString(s, "inline"))
+		if inline := sessionString(s, "inline"); inline != "" {
+			r.refreshPacket(ctx, code, "") // the group message too, if any
+		}
+	}
 }
 
 // handleGroupMessage handles messages in groups: /hb and red packet passwords. With privacy

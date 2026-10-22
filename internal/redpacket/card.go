@@ -46,7 +46,7 @@ func (s *Service) Card(p *model.RedPacket, claims []model.RedPacketClaim) string
 		}
 		fmt.Fprintf(&b, "🎯 仅 %s 可领取\n", escaper.Replace(target))
 	case TypePassword:
-		fmt.Fprintf(&b, "🔑 口令：<code>%s</code>（在群里发送口令领取，或私聊机器人发送）\n", escaper.Replace(p.Password))
+		fmt.Fprintf(&b, "🔑 口令：<code>%s</code>（点「抢红包」后输入口令，或在群里直接发送口令）\n", escaper.Replace(p.Password))
 	}
 	fmt.Fprintf(&b, "📦 已领取 %d/%d", p.ClaimedCount, p.Count)
 	switch {

@@ -402,6 +402,18 @@ func (s *Service) ClaimByPassword(chatID int64, text string, c Claimer) (claim *
 	return nil, nil, true, err
 }
 
+// ClaimCode claims a password packet chosen by its code, checking the password.
+func (s *Service) ClaimCode(code, password string, c Claimer) (*model.RedPacketClaim, *model.RedPacket, error) {
+	var p model.RedPacket
+	if err := s.st.DB.Select("type", "password").Where("code = ?", code).First(&p).Error; err != nil {
+		return nil, nil, userErr("红包不存在")
+	}
+	if p.Type == TypePassword && strings.TrimSpace(password) != p.Password {
+		return nil, nil, userErr("口令不对")
+	}
+	return s.claim(code, c, true)
+}
+
 // Active returns the sender's claimable packets, newest first.
 func (s *Service) Active(senderUserID uint64, botID uint64, limit int) ([]model.RedPacket, error) {
 	out := []model.RedPacket{}
