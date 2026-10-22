@@ -27,9 +27,9 @@ func (s *Service) Open(p *model.RedPacket) bool {
 
 // Card is the HTML message showing a packet and its latest claims.
 func (s *Service) Card(p *model.RedPacket, claims []model.RedPacketClaim) string {
-	cur := p.Currency
+	cur, unit := p.Currency, p.Currency
 	if c, err := s.wallet.Currency(p.Currency); err == nil {
-		cur = c.Name
+		cur, unit = c.Name, c.Name
 		if c.Icon != "" {
 			cur = c.Icon + " " + c.Name
 		}
@@ -79,7 +79,7 @@ func (s *Service) Card(p *model.RedPacket, claims []model.RedPacketClaim) string
 			if i == best {
 				mark = " 👑 手气最佳"
 			}
-			fmt.Fprintf(&b, "\n%s　<code>%s</code>%s", escaper.Replace(c.Name), amount(c.Amount), mark)
+			fmt.Fprintf(&b, "\n%s　<code>%s</code> %s%s", escaper.Replace(c.Name), amount(c.Amount), escaper.Replace(unit), mark)
 		}
 	}
 	return b.String()

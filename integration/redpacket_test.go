@@ -102,7 +102,8 @@ func TestRedPacketConcurrentClaimsSplitExactly(t *testing.T) {
 	}
 	q, claims, err := f.svc.ByCode(p.Code)
 	must(t, err)
-	if q.Status != redpacket.StatusFinished || len(claims) != 5 || !strings.Contains(f.svc.Card(q, claims), "手气最佳") {
+	card := f.svc.Card(q, claims)
+	if q.Status != redpacket.StatusFinished || len(claims) != 5 || !strings.Contains(card, "手气最佳") || strings.Count(card, "</code> USDT-TRC20") != 5 {
 		t.Fatalf("status %s, %d claims", q.Status, len(claims))
 	}
 }
