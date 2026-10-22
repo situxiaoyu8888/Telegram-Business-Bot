@@ -6,11 +6,13 @@ import (
 	"encoding/hex"
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"telegram-business-bot/internal/lease"
 	"telegram-business-bot/internal/menu"
 	"telegram-business-bot/internal/model"
+	"telegram-business-bot/internal/redpacket"
 	"telegram-business-bot/internal/referral"
 	"telegram-business-bot/internal/session"
 	"telegram-business-bot/internal/store"
@@ -35,6 +37,7 @@ type Router struct {
 	fallbackDeposit string
 	adminOnly       bool
 	menuButton      MenuButton
+	packets         *redpacket.Service // nil: red packets off (the admin bot)
 	logger          *zap.Logger
 }
 
@@ -47,6 +50,8 @@ func (r *Router) Handle(ctx context.Context, u Update) error {
 		userID = u.Message.From.ID
 	} else if u.CallbackQuery != nil {
 		userID = u.CallbackQuery.From.ID
+	} else if u.InlineQuery != nil {
+		userID = u.InlineQuery.From.ID
 	}
 	if userID <= 0 {
 		return nil
@@ -71,6 +76,8 @@ func (r *Router) handle(ctx context.Context, u Update, first bool) {
 		r.handleMessage(ctx, u.Message, first)
 	} else if u.CallbackQuery != nil {
 		r.handleCallback(ctx, u.CallbackQuery)
+	} else if u.InlineQuery != nil && r.packets != nil {
+		r.handleInlineQuery(ctx, u.InlineQuery)
 	}
 }
 func (r *Router) isAdmin(id int64) bool { _, ok := r.adminIDs[id]; return ok }
@@ -117,6 +124,10 @@ func buttonsToKB(bs []menu.Button, back bool) *InlineKeyboardMarkup {
 
 func (r *Router) handleMessage(ctx context.Context, m *Message, first bool) {
 	u := r.saveUser(m.From)
+	if u != nil && u.Status == 1 && (m.Chat.Type == "group" || m.Chat.Type == "supergroup") && r.packets != nil {
+		r.handleGroupMessage(ctx, m, u)
+		return
+	}
 	if u == nil || u.Status != 1 || m.Chat.ID != m.From.ID {
 		return
 	}
@@ -132,6 +143,12 @@ func (r *Router) handleMessage(ctx context.Context, m *Message, first bool) {
 	if command == "/start" {
 		_ = r.sessions.Clear(ctx, m.From.ID)
 		parts := strings.Fields(text)
+		// "hb" opens the red packet wizard; "hb_<groupID>" comes from /hb in that group.
+		if len(parts) > 1 && r.packets != nil && (parts[1] == "hb" || strings.HasPrefix(parts[1], "hb_")) {
+			group, _ := strconv.ParseInt(strings.TrimPrefix(parts[1], "hb_"), 10, 64)
+			r.startPacketWizard(ctx, m.Chat.ID, m.From.ID, group)
+			return
+		}
 		var shared []string
 		if len(parts) > 1 {
 			code := parts[1]
@@ -160,6 +177,12 @@ func (r *Router) handleMessage(ctx context.Context, m *Message, first bool) {
 	case "/orders":
 		if !r.adminOnly {
 			r.sendShopOrders(ctx, m.Chat.ID, u.ID)
+			return
+		}
+	case "/hb", "/hongbao":
+		if r.packets != nil {
+			_ = r.sessions.Clear(ctx, m.From.ID)
+			r.startPacketWizard(ctx, m.Chat.ID, m.From.ID, 0)
 			return
 		}
 	case "/cancel":
@@ -203,6 +226,9 @@ func (r *Router) handleMessage(ctx context.Context, m *Message, first bool) {
 		_ = r.client.SendMessage(ctx, m.Chat.ID, "当前操作状态暂不可用，请稍后重试。", nil)
 		return
 	}
+	if r.tryPasswordClaim(ctx, 0, m, u) {
+		return
+	}
 	if r.searchMerchants(ctx, &CallbackQuery{From: *m.From, Message: &Message{Chat: m.Chat}}, text, false) {
 		return
 	}
@@ -215,8 +241,17 @@ func (r *Router) handleCallback(ctx context.Context, cb *CallbackQuery) {
 		_ = r.client.AnswerCallback(ctx, cb.ID, "无管理员权限")
 		return
 	}
+	// Red packet buttons work in groups and inline-mode messages, so they come first.
+	if strings.HasPrefix(cb.Data, "hb:") && r.packets != nil {
+		r.handlePacketButton(ctx, cb, u)
+		return
+	}
 	_ = r.client.AnswerCallback(ctx, cb.ID, "")
 	if cb.Message == nil || u == nil || u.Status != 1 || cb.Message.Chat.ID != cb.From.ID {
+		return
+	}
+	if strings.HasPrefix(cb.Data, "hbw:") && r.packets != nil {
+		r.handlePacketWizardCallback(ctx, cb, u)
 		return
 	}
 	chatID, msgID, userID := cb.Message.Chat.ID, cb.Message.MessageID, cb.From.ID
@@ -427,6 +462,12 @@ func (r *Router) dispatchMenu(ctx context.Context, cb *CallbackQuery, u *model.T
 			r.logger.Warn("referral link: bot username unavailable", zap.Error(err))
 		}
 		_ = r.menuResponse(ctx, chatID, msgID, fmt.Sprintf("<b>🎁 推广代理</b>\n\n推广码：<code>%s</code>\n下级人数：<code>%d</code>\n累计佣金：<code>%s USDT</code>\n\n%s", u.ReferralCode, count, total.StringFixed(6), link), ptrKB(BackHomeKeyboard()))
+	case "redpacket":
+		if r.packets == nil {
+			_ = r.menuResponse(ctx, chatID, msgID, "红包功能暂不可用。", ptrKB(BackHomeKeyboard()))
+			return
+		}
+		r.startPacketWizard(ctx, chatID, u.TelegramUserID, 0)
 	case "support":
 		if err := r.sessions.Set(ctx, u.TelegramUserID, session.Session{Scene: "support", Step: "input_content"}); err != nil {
 			_ = r.menuResponse(ctx, chatID, msgID, "客服暂不可用，请稍后重试。", nil)
@@ -482,6 +523,10 @@ func (r *Router) dispatchMenu(ctx context.Context, cb *CallbackQuery, u *model.T
 
 func (r *Router) handleSessionInput(ctx context.Context, m *Message, u *model.TelegramUser, s *session.Session) {
 	switch s.Scene {
+	case "redpacket":
+		if r.packets != nil {
+			r.handlePacketWizardInput(ctx, m, u, s)
+		}
 	case "withdraw":
 		switch s.Step {
 		case "input_amount":

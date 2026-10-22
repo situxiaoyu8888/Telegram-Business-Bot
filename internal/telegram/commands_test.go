@@ -47,7 +47,7 @@ func TestRegisterPrivateCommandsAndMenuButton(t *testing.T) {
 			t.Fatal(tr.calls[0])
 		}
 		commands := tr.calls[0].payload["commands"].([]any)
-		if !admin && (len(commands) != 2 || commands[0].(map[string]any)["command"] != "start" || commands[1].(map[string]any)["command"] != "contactus" || commands[1].(map[string]any)["description"] != "联系客服") {
+		if !admin && (len(commands) != 3 || commands[0].(map[string]any)["command"] != "start" || commands[1].(map[string]any)["command"] != "hb" || commands[2].(map[string]any)["command"] != "contactus" || commands[2].(map[string]any)["description"] != "联系客服") {
 			t.Fatal(commands)
 		}
 		if admin && commands[1].(map[string]any)["command"] != "admin" {

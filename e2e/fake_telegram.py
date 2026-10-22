@@ -54,6 +54,9 @@ class H(BaseHTTPRequestHandler):
                 sent.append({"bot": bot_id, "method": method, **data})
                 mid = next_message[0]
             return self.reply({"ok": True, "result": {"message_id": mid, "chat": {"id": data.get("chat_id")}, "date": int(time.time())}})
+        if method in ("answerCallbackQuery", "answerInlineQuery"):
+            with lock:
+                sent.append({"bot": bot_id, "method": method, **data})
         return self.reply({"ok": True, "result": True})
 
 ThreadingHTTPServer(("127.0.0.1", int(sys.argv[1])), H).serve_forever()

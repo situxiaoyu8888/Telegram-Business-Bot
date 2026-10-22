@@ -359,3 +359,44 @@ type WalletExchange struct {
 	FeeRate      string    `gorm:"type:decimal(10,6);not null" json:"fee_rate"`
 	CreatedAt    time.Time `gorm:"index" json:"created_at"`
 }
+
+// RedPacket is money a user puts up for others to claim, shared in a group or through inline
+// mode. Shares are fixed at creation (JSON amounts, taken in claim order); whatever is left when
+// it expires goes back to the sender.
+type RedPacket struct {
+	ID               uint64     `gorm:"primaryKey" json:"id"`
+	Code             string     `gorm:"size:24;uniqueIndex;not null" json:"code"`
+	RequestID        string     `gorm:"size:64;uniqueIndex;not null" json:"-"`
+	BotID            uint64     `gorm:"not null;index" json:"bot_id"`
+	SenderUserID     uint64     `gorm:"not null;index" json:"sender_user_id"`
+	SenderTelegramID int64      `gorm:"not null" json:"sender_telegram_id"`
+	SenderName       string     `gorm:"size:128;not null" json:"sender_name"`
+	Type             string     `gorm:"size:16;not null" json:"type"` // lucky, equal, exclusive or password
+	Currency         string     `gorm:"size:16;not null" json:"currency"`
+	Total            string     `gorm:"type:decimal(24,6);not null" json:"total"`
+	Count            int        `gorm:"not null" json:"count"`
+	ClaimedCount     int        `gorm:"not null" json:"claimed_count"`
+	ClaimedAmount    string     `gorm:"type:decimal(24,6);not null" json:"claimed_amount"`
+	Shares           string     `gorm:"type:text;not null" json:"-"`
+	TargetUsername   string     `gorm:"size:64;not null;default:''" json:"target_username"`
+	TargetTelegramID int64      `gorm:"not null;default:0" json:"target_telegram_id"`
+	Password         string     `gorm:"size:64;not null;default:'';index" json:"password"`
+	Greeting         string     `gorm:"size:128;not null;default:''" json:"greeting"`
+	ChatID           int64      `gorm:"not null;default:0;index" json:"chat_id"` // group the bot posted it in (0 = shared via inline mode)
+	MessageID        int        `gorm:"not null;default:0" json:"message_id"`
+	Status           string     `gorm:"size:16;not null;index" json:"status"` // active, finished or expired
+	RefundAmount     string     `gorm:"type:decimal(24,6);not null;default:0" json:"refund_amount"`
+	ExpiresAt        time.Time  `gorm:"not null;index" json:"expires_at"`
+	FinishedAt       *time.Time `json:"finished_at"`
+	CreatedAt        time.Time  `gorm:"index" json:"created_at"`
+}
+
+type RedPacketClaim struct {
+	ID             uint64    `gorm:"primaryKey" json:"id"`
+	PacketID       uint64    `gorm:"not null;uniqueIndex:uk_packet_user" json:"packet_id"`
+	UserID         uint64    `gorm:"not null;uniqueIndex:uk_packet_user;index" json:"user_id"`
+	TelegramUserID int64     `gorm:"not null" json:"telegram_user_id"`
+	Name           string    `gorm:"size:128;not null" json:"name"`
+	Amount         string    `gorm:"type:decimal(24,6);not null" json:"amount"`
+	CreatedAt      time.Time `json:"created_at"`
+}

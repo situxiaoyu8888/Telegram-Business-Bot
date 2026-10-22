@@ -435,6 +435,54 @@ async function toastText(page) { return page.$eval('#toast', e => e.hidden ? '' 
   if (!staff.length) problems.push('staff received no notifications');
   fs.writeFileSync(SHOTS + '/../sent.json', JSON.stringify(sent, null, 1));
 
+  step('bot: red packets (group /hb, private wizard, button and password claims, inline share)');
+  sql(`update wallet_accounts set available=100 where user_id=${uid} and currency='USDT'`);
+  let seq = 1000;
+  const inject = u => fetch(TG + '/inject', { method: 'POST', body: JSON.stringify({ _bot: 111, ...u }) });
+  const wait = ms => new Promise(r => setTimeout(r, ms));
+  const xm = { id: 9001, first_name: '小明', username: 'xiaoming' }, xh = { id: 9002, first_name: '小红' }, passer = { id: 9005, first_name: '路人' };
+  const group = { id: -100555, type: 'supergroup' }, pchat = { id: 9001, type: 'private' };
+  const say = (from, text, chat) => inject({ message: { message_id: seq++, date: 1, text, from, chat: chat || { id: from.id, type: 'private' } } });
+  const tap = (from, data, message) => inject({ callback_query: { id: 'cb' + seq++, from, data, message } });
+  const sentNow = async () => (await (await fetch(TG + '/sent')).json());
+  const sendPacket = async (type, steps) => {
+    await say(xm, '/start hb_-100555'); await wait(900);
+    await tap(xm, 'hbw:t:' + type, { message_id: 1, chat: pchat }); await wait(700);
+    await tap(xm, 'hbw:c:USDT', { message_id: 1, chat: pchat }); await wait(700);
+    for (const st of steps) { if (st === 'default-greeting') await tap(xm, 'hbw:g', { message_id: 1, chat: pchat }); else await say(xm, st); await wait(700); }
+    const confirm = (await sentNow()).filter(m => m.chat_id === 9001 && JSON.stringify(m.reply_markup || {}).includes('hbw:send:')).pop();
+    const data = confirm && JSON.stringify(confirm.reply_markup).match(/hbw:send:[0-9a-f]+/)[0];
+    if (!data) { problems.push('red packet confirmation not shown for ' + type); return null; }
+    await tap(xm, data, { message_id: 1, chat: pchat }); await wait(1500);
+    return sql("select concat(code,' ',type,' ',total,' ',count,' ',chat_id,' ',message_id) from red_packets order by id desc limit 1").split(' ');
+  };
+  await say(xm, '/hb@e2e_bot_111', group); await wait(1500);
+  if (!(await sentNow()).some(m => m.chat_id === -100555 && JSON.stringify(m.reply_markup || {}).includes('start=hb_-100555'))) problems.push('group /hb did not offer the private-chat link');
+  const lucky = await sendPacket('lucky', ['3', '3', '新年快乐']);
+  if (lucky) {
+    console.log('  lucky packet', lucky.join(' '));
+    if (lucky[1] !== 'lucky' || lucky[2] !== '3.000000' || lucky[4] !== '-100555' || lucky[5] === '0') problems.push('lucky packet wrong: ' + lucky.join(' '));
+    if (!(await sentNow()).some(m => m.chat_id === -100555 && /小明 发了一个拼手气红包/.test(m.text || ''))) problems.push('packet not posted to the group');
+    const gm = { message_id: Number(lucky[5]), chat: group };
+    await tap(xh, 'hb:' + lucky[0], gm); await tap(passer, 'hb:' + lucky[0], gm); await wait(1200); await tap(xh, 'hb:' + lucky[0], gm); await wait(1500);
+    const claims = sql(`select count(*) from red_packet_claims c join red_packets p on p.id=c.packet_id where p.code='${lucky[0]}'`);
+    const alerts = (await sentNow()).filter(m => m.method === 'answerCallbackQuery' && m.show_alert).map(m => m.text);
+    console.log('  claims', claims, '| alerts', alerts.join(' / '));
+    if (claims !== '2' || !alerts.some(t => /抢到/.test(t)) || !alerts.some(t => /已经领过/.test(t))) problems.push('button claims wrong: ' + claims + ' ' + alerts.join('/'));
+    if (!(await sentNow()).some(m => m.method === 'editMessageText' && m.chat_id === -100555 && /已领取 2\/3/.test(m.text || ''))) problems.push('group packet card not updated after claims');
+    await inject({ inline_query: { id: 'iq' + seq++, from: xm, query: 'hb ' + lucky[0], offset: '' } }); await wait(1200);
+    const iq = (await sentNow()).filter(m => m.method === 'answerInlineQuery').pop();
+    if (!iq || iq.results.length !== 1 || !/抢红包/.test(JSON.stringify(iq.results[0].reply_markup))) problems.push('inline query did not offer the packet');
+  }
+  const pw = await sendPacket('password', ['2', '2', '芝麻开门', 'default-greeting']);
+  if (pw) {
+    await say(xh, '芝麻开门', group); await wait(1500);
+    if (!(await sentNow()).some(m => m.chat_id === -100555 && /小红 抢到/.test(m.text || ''))) problems.push('password claim in group failed');
+  }
+  const xmBal = sql(`select available from wallet_accounts where user_id=${uid} and currency='USDT'`);
+  if (xmBal !== '95.000000') problems.push('sender not charged 5 USDT for two packets: ' + xmBal);
+  await nav(admin, 'redpackets'); await shot(admin, '55-admin-redpackets');
+
   await browser.close();
   console.log('\nPROBLEMS (' + problems.length + '):\n' + problems.map(p => ' - ' + p).join('\n'));
   console.log('Screenshots: ' + SHOTS);

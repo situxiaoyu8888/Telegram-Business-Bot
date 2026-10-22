@@ -34,7 +34,7 @@ func New(mysqlDSN, redisAddr, redisPassword string, redisDB int) (*Store, error)
 		&model.ShopOrder{}, &model.ShopOrderItem{}, &model.ShopCoupon{}, &model.ShopUserCoupon{}, &model.ShopAfterSale{},
 		&model.ShopBanner{}, &model.ShopReview{}, &model.ShopMerchantEntry{}, &model.ShopSettlement{}, &model.ShopFavorite{}, &model.ShopView{}, &model.ShopMember{}, &model.ShopPointsLog{}, &model.ShopGroup{},
 		&model.ShopMerchantApplication{}, &model.ShopConversation{}, &model.ShopMessage{}, &model.AdminAuditLog{},
-		&model.WalletCurrency{}, &model.WalletExchange{},
+		&model.WalletCurrency{}, &model.WalletExchange{}, &model.RedPacket{}, &model.RedPacketClaim{},
 	); err != nil {
 		return nil, fmt.Errorf("auto migrate: %w", err)
 	}
@@ -65,6 +65,8 @@ func New(mysqlDSN, redisAddr, redisPassword string, redisDB int) (*Store, error)
 		{Key: "shop_points_value", Value: "0.01", Remark: "1 积分可抵扣的 USDT（0 为不能抵扣）"},
 		{Key: "shop_points_max_ratio", Value: "0.5", Remark: "积分最多抵扣订单金额的比例（0.5 = 50%）"},
 		{Key: "shop_member_levels", Value: "白银:100:0.98,黄金:500:0.95,钻石:2000:0.9", Remark: "会员等级，格式：名称:累计消费 USDT:折扣,…（0.95 = 95 折）；留空则不分等级"},
+		{Key: "redpacket_expire_hours", Value: "24", Remark: "红包有效时长（小时，1–168）；到期未领完的金额自动退回发红包的人"},
+		{Key: "redpacket_max_count", Value: "100", Remark: "单个红包最多可拆分的份数（1–1000）"},
 		{Key: "exchange_fee_rate", Value: "0", Remark: "换汇手续费比例（0.005 = 0.5%，从兑换所得中扣除）"},
 		{Key: "shop_referral_rate", Value: "0", Remark: "商城推广返佣比例（0.05 = 5%，0 为关闭）；订单完成且售后期结束后发给直属上级"},
 	} {
@@ -79,6 +81,9 @@ func New(mysqlDSN, redisAddr, redisPassword string, redisDB int) (*Store, error)
 		}
 	}
 	if err := s.seedCurrencyFlags(); err != nil {
+		return nil, err
+	}
+	if err := s.seedRedPacketMenu(); err != nil {
 		return nil, err
 	}
 	return s, nil
@@ -101,6 +106,21 @@ func (s *Store) seedCurrencyFlags() error {
 			}
 		}
 		return tx.Model(&model.WalletCurrency{}).Where("exchangeable = ?", false).Update("exchangeable", true).Error
+	})
+}
+
+// seedRedPacketMenu adds the "发红包" entry once; administrators may move or disable it later.
+func (s *Store) seedRedPacketMenu() error {
+	return s.DB.Transaction(func(tx *gorm.DB) error {
+		claim := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&model.SeedMigration{Name: "menu_redpacket_v1"})
+		if claim.Error != nil || claim.RowsAffected == 0 {
+			return claim.Error
+		}
+		var n int64
+		if err := tx.Model(&model.MenuItem{}).Where("code = ?", "redpacket").Count(&n).Error; err != nil || n > 0 {
+			return err
+		}
+		return tx.Create(&model.MenuItem{Code: "redpacket", Title: "🧧 发红包", ActionType: "builtin", ActionValue: "redpacket", Role: "user", Sort: 75, RowNo: 4, Enabled: true}).Error
 	})
 }
 

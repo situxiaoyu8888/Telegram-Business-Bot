@@ -14,6 +14,7 @@ import (
 	"telegram-business-bot/internal/menu"
 	"telegram-business-bot/internal/model"
 	"telegram-business-bot/internal/push"
+	"telegram-business-bot/internal/redpacket"
 	"telegram-business-bot/internal/referral"
 	"telegram-business-bot/internal/session"
 	"telegram-business-bot/internal/shop"
@@ -41,6 +42,7 @@ type App struct {
 	tronWatcher   *trongrid.Watcher
 	pushService   *push.Service
 	shop          *shop.Service
+	packets       *redpacket.Service
 	admin         *admin.Handler
 }
 
@@ -61,7 +63,8 @@ func New(cfg config.Config, logger *zap.Logger) (*App, error) {
 	tg := telegram.NewClient(cfg.TelegramBotToken)
 	// The admin bot keeps the command list; user-facing bots may open the H5 shop instead.
 	shopButton := telegram.MenuButton{Text: cfg.ShopH5ButtonText, URL: cfg.ShopH5URL}
-	tgRouter := telegram.NewRouter(tg, st, sessions, walletSvc, menuSvc, supportSvc, refSvc, cfg.AdminIDs, cfg.TronFallbackDepositAddress, false, logger).WithMenuButton(shopButton)
+	packets := redpacket.New(st, walletSvc, logger)
+	tgRouter := telegram.NewRouter(tg, st, sessions, walletSvc, menuSvc, supportSvc, refSvc, cfg.AdminIDs, cfg.TronFallbackDepositAddress, false, logger).WithMenuButton(shopButton).WithRedPackets(packets)
 
 	var adminTG *telegram.Client
 	var adminTGRouter *telegram.Router
@@ -92,8 +95,15 @@ func New(cfg config.Config, logger *zap.Logger) (*App, error) {
 	}
 	bots := business.New(st, tg, cfg.BusinessBotKey, cfg.TelegramBotToken, cfg.AdminTelegramBotToken)
 	bots.Router = func(id uint64, client *telegram.Client) *telegram.Router {
-		return telegram.NewRouter(client, st, sessions.WithNamespace(fmt.Sprintf("business:%d", id)), walletSvc, menuSvc, supportSvc, refSvc, cfg.AdminIDs, "", false, logger).WithBotID(id).WithMenuButton(shopButton)
+		return telegram.NewRouter(client, st, sessions.WithNamespace(fmt.Sprintf("business:%d", id)), walletSvc, menuSvc, supportSvc, refSvc, cfg.AdminIDs, "", false, logger).WithBotID(id).WithMenuButton(shopButton).WithRedPackets(packets)
 	}
+	packets.WithNotifier(func(ctx context.Context, botID uint64, telegramUserID int64, html string) error {
+		sender, err := bots.Sender(ctx, botID)
+		if err != nil {
+			return err
+		}
+		return sender.SendMessageWithParseMode(ctx, telegramUserID, html, "HTML", nil)
+	})
 	pushSvc := push.New(st, tg, logger).WithBots(bots)
 	// Staff notices go through the admin bot when there is one, since admins already talk to it.
 	var staffSender telegram.Sender = tg
@@ -114,7 +124,7 @@ func New(cfg config.Config, logger *zap.Logger) (*App, error) {
 		_ = st.DB.WithContext(ctx).Select("username").First(&b, botID).Error
 		return b.Username
 	})
-	a := &App{shop: shopSvc, businessBots: bots, cfg: cfg, logger: logger, store: st, tg: tg, tgRouter: tgRouter, adminTG: adminTG, adminTGRouter: adminTGRouter, engine: engine, pushService: pushSvc}
+	a := &App{shop: shopSvc, packets: packets, businessBots: bots, cfg: cfg, logger: logger, store: st, tg: tg, tgRouter: tgRouter, adminTG: adminTG, adminTGRouter: adminTGRouter, engine: engine, pushService: pushSvc}
 	a.registerRoutes()
 	a.admin = admin.New(
 		st,
@@ -226,6 +236,7 @@ func (a *App) StartWorkers(ctx context.Context) {
 	go a.pushService.Run(ctx)
 	go a.businessBots.Run(ctx)
 	go a.shop.Run(ctx)
+	go a.packets.Run(ctx)
 	go a.admin.PurgeAuditLogs(ctx, 180*24*time.Hour)
 	if a.cfg.BackupDir != "" {
 		if sqlDB, err := a.store.DB.DB(); err == nil {

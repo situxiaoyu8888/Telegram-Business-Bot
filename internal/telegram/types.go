@@ -6,6 +6,14 @@ type Update struct {
 	UpdateID      int            `json:"update_id"`
 	Message       *Message       `json:"message,omitempty"`
 	CallbackQuery *CallbackQuery `json:"callback_query,omitempty"`
+	InlineQuery   *InlineQuery   `json:"inline_query,omitempty"`
+}
+
+// InlineQuery is "@bot text" typed in any chat (needs inline mode enabled in @BotFather).
+type InlineQuery struct {
+	ID    string `json:"id"`
+	From  User   `json:"from"`
+	Query string `json:"query"`
 }
 
 type Message struct {
@@ -30,10 +38,11 @@ type Chat struct {
 }
 
 type CallbackQuery struct {
-	ID      string   `json:"id"`
-	From    User     `json:"from"`
-	Message *Message `json:"message,omitempty"`
-	Data    string   `json:"data,omitempty"`
+	ID              string   `json:"id"`
+	From            User     `json:"from"`
+	Message         *Message `json:"message,omitempty"`
+	InlineMessageID string   `json:"inline_message_id,omitempty"` // set instead of Message for inline-mode messages
+	Data            string   `json:"data,omitempty"`
 }
 
 type APIResponse[T any] struct {
@@ -52,6 +61,8 @@ type InlineKeyboardButton struct {
 	CallbackData string      `json:"callback_data,omitempty"`
 	URL          string      `json:"url,omitempty"`
 	WebApp       *WebAppInfo `json:"web_app,omitempty"` // opens a Mini App; private chats only
+	// SwitchInlineQuery lets the user pick a chat and starts "@bot <query>" there.
+	SwitchInlineQuery string `json:"switch_inline_query,omitempty"`
 }
 
 type WebAppInfo struct {

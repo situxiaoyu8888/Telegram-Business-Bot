@@ -123,6 +123,76 @@ func (c *Client) call(
 	return nil
 }
 
+// allowedUpdates are the update types the bots handle (inline queries share red packets).
+var allowedUpdates = []string{"message", "callback_query", "inline_query"}
+
+// SendMessageID sends an HTML message and returns its message ID.
+func (c *Client) SendMessageID(ctx context.Context, chatID int64, text string, kb *InlineKeyboardMarkup) (int, error) {
+	payload := map[string]any{"chat_id": chatID, "text": text, "parse_mode": "HTML"}
+	if kb != nil {
+		payload["reply_markup"] = kb
+	}
+	var resp APIResponse[Message]
+	if err := c.call(ctx, "sendMessage", payload, &resp); err != nil {
+		return 0, err
+	}
+	if !resp.OK {
+		return 0, fmt.Errorf("sendMessage: %s", resp.Description)
+	}
+	return resp.Result.MessageID, nil
+}
+
+// ReplyMessage sends an HTML message in reply to another one in the same chat.
+func (c *Client) ReplyMessage(ctx context.Context, chatID int64, replyTo int, text string, kb *InlineKeyboardMarkup) error {
+	payload := map[string]any{"chat_id": chatID, "text": text, "parse_mode": "HTML", "reply_parameters": map[string]any{"message_id": replyTo, "allow_sending_without_reply": true}}
+	if kb != nil {
+		payload["reply_markup"] = kb
+	}
+	return c.call(ctx, "sendMessage", payload, nil)
+}
+
+// EditInlineMessage edits a message sent through inline mode.
+func (c *Client) EditInlineMessage(ctx context.Context, inlineMessageID, text string, kb *InlineKeyboardMarkup) error {
+	payload := map[string]any{"inline_message_id": inlineMessageID, "text": text, "parse_mode": "HTML"}
+	if kb != nil {
+		payload["reply_markup"] = kb
+	}
+	return c.call(ctx, "editMessageText", payload, nil)
+}
+
+// AnswerCallbackAlert answers a button press with a toast, or a dialog when alert is true.
+func (c *Client) AnswerCallbackAlert(ctx context.Context, callbackID, text string, alert bool) error {
+	return c.call(ctx, "answerCallbackQuery", map[string]any{"callback_query_id": callbackID, "text": text, "show_alert": alert}, nil)
+}
+
+// InlineArticle is one result of an inline query: a ready-made message the user can send.
+type InlineArticle struct {
+	ID          string
+	Title       string
+	Description string
+	Text        string
+	Keyboard    *InlineKeyboardMarkup
+}
+
+// AnswerInlineQuery answers with personal, uncached results. startText and startParam add a
+// button above the results that opens the private chat with /start startParam.
+func (c *Client) AnswerInlineQuery(ctx context.Context, queryID string, results []InlineArticle, startText, startParam string) error {
+	list := make([]map[string]any, 0, len(results))
+	for _, r := range results {
+		item := map[string]any{"type": "article", "id": r.ID, "title": r.Title, "description": r.Description,
+			"input_message_content": map[string]any{"message_text": r.Text, "parse_mode": "HTML"}}
+		if r.Keyboard != nil {
+			item["reply_markup"] = r.Keyboard
+		}
+		list = append(list, item)
+	}
+	payload := map[string]any{"inline_query_id": queryID, "results": list, "cache_time": 0, "is_personal": true}
+	if startText != "" {
+		payload["button"] = map[string]any{"text": startText, "start_parameter": startParam}
+	}
+	return c.call(ctx, "answerInlineQuery", payload, nil)
+}
+
 func (c *Client) GetUpdates(
 	ctx context.Context,
 	offset int,
@@ -135,7 +205,7 @@ func (c *Client) GetUpdates(
 		map[string]any{
 			"offset":          offset,
 			"timeout":         60,
-			"allowed_updates": []string{"message", "callback_query"},
+			"allowed_updates": allowedUpdates,
 		},
 		&resp,
 	)
@@ -340,7 +410,7 @@ func (c *Client) SetWebhook(
 ) error {
 	payload := map[string]any{
 		"url":             webhookURL,
-		"allowed_updates": []string{"message", "callback_query"},
+		"allowed_updates": allowedUpdates,
 	}
 
 	if secret != "" {

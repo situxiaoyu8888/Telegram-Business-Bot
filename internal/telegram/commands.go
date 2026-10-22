@@ -17,9 +17,9 @@ func defaultCommands(adminOnly, shop bool) []BotCommand {
 		return []BotCommand{{"start", "开始使用"}, {"admin", "管理入口"}, {"menu", "返回主菜单"}, {"cancel", "取消当前操作"}}
 	}
 	if shop {
-		return []BotCommand{{"start", "开始使用"}, {"orders", "我的订单"}, {"contactus", "联系客服"}}
+		return []BotCommand{{"start", "开始使用"}, {"orders", "我的订单"}, {"hb", "发红包"}, {"contactus", "联系客服"}}
 	}
-	return []BotCommand{{"start", "开始使用"}, {"contactus", "联系客服"}}
+	return []BotCommand{{"start", "开始使用"}, {"hb", "发红包"}, {"contactus", "联系客服"}}
 }
 
 // MenuButton is the button left of the input field. With a URL it opens that H5 page as a

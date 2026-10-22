@@ -158,3 +158,25 @@ func (h *Handler) adjustBalance(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
+
+func (h *Handler) redPackets(c *gin.Context) {
+	rows := []model.RedPacket{}
+	if err := h.st.DB.Order("id desc").Limit(500).Find(&rows).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "红包记录加载失败"})
+		return
+	}
+	c.JSON(http.StatusOK, rows)
+}
+
+func (h *Handler) redPacketClaims(c *gin.Context) {
+	id, ok := idParam(c)
+	if !ok {
+		return
+	}
+	rows := []model.RedPacketClaim{}
+	if err := h.st.DB.Where("packet_id = ?", id).Order("id asc").Find(&rows).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "领取记录加载失败"})
+		return
+	}
+	c.JSON(http.StatusOK, rows)
+}

@@ -253,6 +253,12 @@ func (s *Service) adjust(tx *gorm.DB, userID uint64, delta decimal.Decimal, txTy
 	return adjustIn(tx, userID, s.currency, delta, txType, refType, refID, remark)
 }
 
+// AdjustCurrency changes a user's available balance in one currency inside the caller's
+// transaction (negative delta debits; ErrInsufficientBalance when it would go below zero).
+func (s *Service) AdjustCurrency(tx *gorm.DB, userID uint64, currency string, delta decimal.Decimal, txType, refType string, refID uint64, remark string) error {
+	return adjustIn(tx, userID, currency, delta, txType, refType, refID, remark)
+}
+
 // adjustIn changes a user's available balance in one currency and records the ledger entry.
 func adjustIn(tx *gorm.DB, userID uint64, currency string, delta decimal.Decimal, txType, refType string, refID uint64, remark string) error {
 	if delta.IsZero() {
