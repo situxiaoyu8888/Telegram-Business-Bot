@@ -260,7 +260,12 @@ func (h *Handler) me(c *gin.Context) {
 		h.fail(c, err)
 		return
 	}
-	res := gin.H{"name": name, "username": u.Username, "telegram_user_id": u.TelegramUserID, "balance": available.StringFixed(6), "referral_code": u.ReferralCode, "is_merchant": isMerchant}
+	balances, err := h.svc.wallet.Balances(b.UserID)
+	if err != nil {
+		h.fail(c, err)
+		return
+	}
+	res := gin.H{"name": name, "username": u.Username, "telegram_user_id": u.TelegramUserID, "balance": available.StringFixed(6), "balances": balances, "referral_code": u.ReferralCode, "is_merchant": isMerchant}
 	if h.botUsername != nil {
 		res["bot_username"] = h.botUsername(c.Request.Context(), buyer(c).BotID)
 	}

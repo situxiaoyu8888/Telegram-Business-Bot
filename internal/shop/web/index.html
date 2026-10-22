@@ -111,6 +111,11 @@ img{display:block;max-width:100%}
 .mhead h2{margin:0;font-size:18px}
 .me-av{width:52px;height:52px;border-radius:50%;flex:none;overflow:hidden;display:grid;place-items:center;font-size:22px;font-weight:700;background:#ffffff33;color:#fff}
 .me-av img{width:100%;height:100%;object-fit:cover}
+.me-bal{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:14px}
+.me-bal>div{background:#ffffff1f;border-radius:10px;padding:8px;min-width:0}
+.me-bal .n{font-size:11px;opacity:.8;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.me-bal .v{font-weight:700;font-size:15px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.me-bal .f{font-size:10px;opacity:.75;white-space:nowrap}
 .menu-grid{display:grid;grid-template-columns:1fr 1fr;padding:0;overflow:hidden}
 .menu-grid button{display:flex;align-items:center;gap:6px;padding:14px 12px;border-bottom:1px solid var(--line);text-align:left;min-width:0}
 .menu-grid button:nth-child(odd){border-right:1px solid var(--line)}
@@ -502,7 +507,7 @@ async function mine(v){
  // Telegram passes the profile photo to Mini Apps when the user allows it; otherwise show an initial.
  const photo=tg?.initDataUnsafe?.user?.photo_url||'',initial=esc([...(me.name||'用户').trim()][0]||'用');
  const avatar=`<div class="me-av">${photo?`<img src="${esc(photo)}" alt="" onerror="this.parentNode.textContent='${initial}'">`:initial}</div>`;
- $('app').innerHTML=`<div class="status-head"><div class="row between" style="align-items:center"><div class="row" style="min-width:0;gap:12px">${avatar}<div style="min-width:0"><h2 style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(me.name||'用户')}</h2><div class="small" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${me.username?'@'+esc(me.username):''}</div></div></div><div style="text-align:right;flex:none"><div class="small" style="opacity:.8">钱包余额</div><div style="font-size:22px;line-height:1.2" class="bold">${money(me.balance)} <span class="small">USDT</span></div></div></div><div class="small" style="opacity:.75;margin-top:8px">充值、提现请回到机器人菜单操作</div></div>
+ $('app').innerHTML=`<div class="status-head"><div class="row between" style="align-items:center"><div class="row" style="min-width:0;gap:12px">${avatar}<div style="min-width:0"><h2 style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(me.name||'用户')}</h2><div class="small" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${me.username?'@'+esc(me.username):''}</div></div></div><button class="small" style="flex:none;color:inherit;opacity:.9" onclick="location.hash='#/exchange'">换汇 ›</button></div><div class="me-bal">${(me.balances||[]).map(b=>`<div><div class="n">${esc(b.name)}</div><div class="v" title="${esc(b.available)}">${fmtAmt(b.available,b.decimals)}</div>${Number(b.frozen)>0?`<div class="f">冻结 ${fmtAmt(b.frozen,b.decimals)}</div>`:''}</div>`).join('')}</div><div class="small" style="opacity:.75;margin-top:8px">商城使用 USDT-TRC20 付款；充值、提现请回到机器人菜单操作</div></div>
  ${mem?`<div class="card"><div class="row between"><span class="bold">${mem.level?'💎 '+esc(mem.level.name)+'会员 · '+Math.round((1-Number(mem.level.rate))*100)+'% 折扣':'普通会员'}</span><span>积分 <b>${mem.points}</b></span></div><div class="muted small" style="margin-top:4px">累计消费 ${money(mem.spent)} USDT${mem.next?`，再消费 ${money((Number(mem.next.threshold)-Number(mem.spent)).toFixed(6))} USDT 升级${esc(mem.next.name)}`:''}${Number(mem.points_value)>0?` · ${Math.round(1/Number(mem.points_value))} 积分抵 1 USDT`:''}</div></div>`:''}
  <div class="card small muted">↗️ 在商品页点击分享发给好友，好友通过你的链接注册并下单，订单完成且售后期结束后你可获得推广佣金（以平台设置为准）。</div>
  <div class="card menu-grid${me.is_merchant?' even':''}">${entry('#/orders','📦','我的订单')}${entry('#/messages','💬','我的消息'+(unread?` <span class="tag red">${unread}</span>`:''))}${entry('#/aftersales','🧾','我的售后')}${entry('#/favorites','❤️','我的收藏')}${entry('#/history','🕘','浏览记录')}${entry('#/coupons','🎟','我的优惠券')}${entry('#/coupons/center','🎁','领券中心')}${entry('#/addresses','📍','收货地址')}${me.is_merchant?'':entry('#/apply','🏪','商家入驻','wide')}</div>`;
