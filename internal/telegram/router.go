@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"telegram-business-bot/internal/lease"
 	"telegram-business-bot/internal/menu"
@@ -151,7 +152,9 @@ func (r *Router) handleMessage(ctx context.Context, m *Message, first bool) {
 	if r.news != nil {
 		switch commandName(strings.TrimSpace(m.Text)) {
 		case "/start", "/menu", ReplyHomeText:
-			r.sendHome(ctx, m.Chat.ID, m.From.ID)
+			if commandName(strings.TrimSpace(m.Text)) != "/start" || !r.repeatedStart(ctx, m.From.ID) {
+				r.sendHome(ctx, m.Chat.ID, m.From.ID)
+			}
 		case "/cancel":
 			_ = r.sessions.Clear(ctx, m.From.ID)
 			r.sendHome(ctx, m.Chat.ID, m.From.ID)
@@ -187,6 +190,9 @@ func (r *Router) handleMessage(ctx context.Context, m *Message, first bool) {
 				shared, code = m[1:3], m[3]
 			}
 			_ = r.referral.BindByCode(u.ID, code)
+		}
+		if shared == nil && r.repeatedStart(ctx, m.From.ID) {
+			return
 		}
 		r.sendHome(ctx, m.Chat.ID, m.From.ID)
 		if shared != nil && r.menuButton.URL != "" && !r.adminOnly {
@@ -717,6 +723,17 @@ func (r *Router) walletText(u *model.TelegramUser) (string, error) {
 		}
 	}
 	return b.String(), nil
+}
+
+// repeatedStart reports whether the user already got the home menu from /start in the last few
+// seconds. Telegram clients may send /start twice when a chat is opened (a double tap on START,
+// or the START button and a deep link together); the second one gets no second menu.
+func (r *Router) repeatedStart(ctx context.Context, userID int64) bool {
+	if r.store.Redis == nil {
+		return false
+	}
+	fresh, err := r.store.Redis.SetNX(ctx, fmt.Sprintf("tg:start:%t:%d:%d", r.adminOnly, r.botID, userID), 1, 5*time.Second).Result()
+	return err == nil && !fresh
 }
 
 func (r *Router) editHome(ctx context.Context, chatID int64, msgID int, userID int64) {

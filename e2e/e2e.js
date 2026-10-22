@@ -517,6 +517,13 @@ async function toastText(page) { return page.$eval('#toast', e => e.hidden ? '' 
   console.log(`  red packet bot replies: ${rpBot.length}, home menus: ${homes.length}`);
   if (homes.length < 2 || !JSON.stringify(homes[0].reply_markup).includes('hbw:new') || JSON.stringify(homes[0].reply_markup).includes('menu:')) problems.push('red packet bot home wrong: ' + JSON.stringify(rpBot.map(m => m.text)));
   if (rpBot.some(m => /商家/.test(m.text || ''))) problems.push('red packet bot answered with merchant search');
+  // A client that sends /start twice in a row gets one menu.
+  for (let i = 0; i < 2; i++) await fetch(TG + '/inject', { method: 'POST', body: JSON.stringify({ _bot: 222, message: { message_id: seq++, date: 1, text: '/start', from: passer, chat: { id: 9005, type: 'private' } } }) });
+  await wait(2000);
+  const passerHomes = (await sentNow()).filter(m => m.bot === 222 && m.chat_id === 9005 && /红包机器人/.test(m.text || '')).length;
+  if (passerHomes !== 1) problems.push('double /start answered ' + passerHomes + ' times');
+  const groupCmds = (await sentNow()).filter(m => m.method === 'setMyCommands' && m.bot === 222 && m.scope && m.scope.type === 'all_group_chats');
+  if (!groupCmds.some(m => JSON.stringify(m.commands).includes('"hb"'))) problems.push('/hb not registered for groups');
 
   step('news bot: categories, subscriptions, groups/channels, publishing, RSS and search');
   const nb = u => fetch(TG + '/inject', { method: 'POST', body: JSON.stringify({ _bot: 333, ...u }) });
