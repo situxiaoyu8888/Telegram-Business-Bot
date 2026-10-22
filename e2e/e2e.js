@@ -482,6 +482,12 @@ async function toastText(page) { return page.$eval('#toast', e => e.hidden ? '' 
   const xmBal = sql(`select available from wallet_accounts where user_id=${uid} and currency='USDT'`);
   if (xmBal !== '95.000000') problems.push('sender not charged 5 USDT for two packets: ' + xmBal);
   await nav(admin, 'redpackets'); await shot(admin, '55-admin-redpackets');
+  if (lucky) {
+    await admin.click(`[data-action="claims"][data-id="${sql(`select id from red_packets where code='${lucky[0]}'`)}"]`); await admin.waitForTimeout(600);
+    await shot(admin, '55b-admin-redpacket-claims');
+    if (!(await admin.textContent('#modal')).includes('USDT-TRC20')) problems.push('red packet claims dialog lacks the currency');
+    await admin.click('#closeModal').catch(() => admin.keyboard.press('Escape')); await admin.waitForTimeout(300);
+  }
 
   step('red-packet-only business bot');
   await nav(admin, 'bots'); await admin.click('#create'); await admin.waitForTimeout(400);
