@@ -58,6 +58,9 @@ func (r *Router) SyncCommandMenu(ctx context.Context) {
 		if r.packetOnly {
 			commands = []BotCommand{{"start", "开始使用"}, {"hb", "发红包"}, {"cancel", "取消当前操作"}}
 		}
+		if r.news != nil {
+			commands = []BotCommand{{"start", "开始使用"}, {"news", "最新新闻"}, {"subscribe", "订阅管理"}}
+		}
 		err := r.client.registerCommandMenu(attempt, commands, r.menuButton)
 		cancel()
 		if err == nil {

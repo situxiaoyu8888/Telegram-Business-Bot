@@ -31,7 +31,7 @@ const permissionsKey = "admin_permissions"
 const portalKey = "admin_portal"
 
 // uploadPages are the pages whose forms upload files.
-var uploadPages = []string{"pushes", "menus", "shop_products"}
+var uploadPages = []string{"pushes", "menus", "shop_products", "news"}
 
 //go:embed login.html
 var loginHTML string

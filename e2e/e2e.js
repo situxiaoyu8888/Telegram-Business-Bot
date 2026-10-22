@@ -498,6 +498,57 @@ async function toastText(page) { return page.$eval('#toast', e => e.hidden ? '' 
   if (homes.length < 2 || !JSON.stringify(homes[0].reply_markup).includes('hbw:new') || JSON.stringify(homes[0].reply_markup).includes('menu:')) problems.push('red packet bot home wrong: ' + JSON.stringify(rpBot.map(m => m.text)));
   if (rpBot.some(m => /商家/.test(m.text || ''))) problems.push('red packet bot answered with merchant search');
 
+  step('news bot: categories, subscriptions, groups/channels, publishing, RSS and search');
+  const nb = u => fetch(TG + '/inject', { method: 'POST', body: JSON.stringify({ _bot: 333, ...u }) });
+  await nav(admin, 'news_categories'); await admin.click('#create'); await admin.waitForTimeout(400);
+  await admin.fill('#ncName', '本地新闻'); await submitModal(admin); await admin.waitForTimeout(500);
+  const newsCat = sql("select id from news_categories where name='本地新闻'");
+  await nav(admin, 'bots'); await admin.click('#create'); await admin.waitForTimeout(400);
+  await admin.fill('#name', '新闻机器人'); await admin.fill('#token', '333:news'); await pick(admin, 'botPurpose', 'news');
+  await submitModal(admin); await admin.waitForTimeout(800);
+  await wait(5000);
+  const pmsg = { message_id: 1, chat: { id: 9001, type: 'private' } };
+  await nb({ message: { message_id: seq++, date: 1, text: '/start', from: xm, chat: { id: 9001, type: 'private' } } }); await wait(800);
+  await nb({ callback_query: { id: 'cb' + seq++, from: xm, data: 'nw:s', message: pmsg } }); await wait(700);
+  await nb({ callback_query: { id: 'cb' + seq++, from: xm, data: 'nw:t:0', message: pmsg } }); await wait(900);
+  if (sql("select count(*) from news_subscriptions where telegram_user_id=9001 and category_id=0") !== '1') problems.push('news subscription not saved');
+  await nb({ my_chat_member: { chat: { id: -100777, type: 'supergroup', title: '新闻推送群' }, from: xm, date: 1, new_chat_member: { status: 'member', user: { id: 333, is_bot: true, first_name: 'news' } } } });
+  await nb({ my_chat_member: { chat: { id: -100888, type: 'channel', title: '快讯频道', username: 'flashchan' }, from: xm, date: 1, new_chat_member: { status: 'administrator', user: { id: 333, is_bot: true, first_name: 'news' } } } });
+  await wait(1500);
+  await nav(admin, 'news_chats');
+  const groupRow = sql("select id from news_chats where chat_id=-100777"), chanRow = sql("select id from news_chats where chat_id=-100888");
+  if (!groupRow || !chanRow) problems.push('news chats not recorded');
+  else {
+    await admin.click(`[data-action="edit"][data-id="${groupRow}"]`); await admin.waitForTimeout(400);
+    await admin.check('#nchPush'); await submitModal(admin); await admin.waitForTimeout(500);
+    await admin.click(`[data-action="edit"][data-id="${chanRow}"]`); await admin.waitForTimeout(400);
+    await admin.check('#nchSource'); await admin.check('#nchAuto'); await submitModal(admin); await admin.waitForTimeout(500);
+    await shot(admin, '57-news-chats');
+    if (sql("select concat(push_enabled,source_enabled,auto_publish) from news_chats where chat_id=-100888") !== '011' || sql("select push_enabled from news_chats where chat_id=-100777") !== '1') problems.push('news chat settings not saved');
+  }
+  await nav(admin, 'news'); await admin.click('#create'); await admin.waitForTimeout(400);
+  await admin.fill('#naTitle', '曼谷今日要闻'); await admin.fill('#naContent', '轻轨延长线今天开通。'); await admin.fill('#naLink', 'https://example.com/news/1');
+  await shot(admin, '58-news-form'); await submitModal(admin); await admin.waitForTimeout(600);
+  await nb({ channel_post: { message_id: 5, date: 1, chat: { id: -100888, type: 'channel', title: '快讯频道', username: 'flashchan' }, text: '频道快讯：泰铢走强\n今日汇率上涨' } });
+  await wait(2000);
+  if (sql("select status from news_articles where title='频道快讯：泰铢走强'") !== 'published') problems.push('channel post not published as news');
+  await wait(26000); // the worker queues the channel article on its next round; delivery polls every 5 s
+  const newsSent = (await sentNow()).filter(m => m.bot === 333);
+  const toUser = newsSent.filter(m => m.chat_id === 9001), toGroup = newsSent.filter(m => m.chat_id === -100777);
+  console.log(`  news messages: ${toUser.length} to the subscriber, ${toGroup.length} to the group, ${newsSent.filter(m => m.method === 'copyMessage').length} copied`);
+  if (!toUser.some(m => /曼谷今日要闻/.test(m.text || '')) || !toGroup.some(m => /曼谷今日要闻/.test(m.text || ''))) problems.push('published article not delivered to subscriber and group');
+  if (!newsSent.some(m => m.method === 'copyMessage' && m.chat_id === 9001 && m.from_chat_id === -100888)) problems.push('channel post not copied to the subscriber');
+  if (newsSent.some(m => m.chat_id === -100888)) problems.push('source channel received news');
+  await shot(admin, '59-news-list');
+  await nav(admin, 'news_feeds'); await admin.click('#create'); await admin.waitForTimeout(400);
+  await admin.fill('#nfName', 'E2E 订阅源'); await admin.fill('#nfURL', TG + '/rss.xml'); await submitModal(admin); await admin.waitForTimeout(600);
+  const feedId = sql("select id from news_feeds order by id desc limit 1");
+  await admin.click(`[data-action="fetch"][data-id="${feedId}"]`); await admin.waitForTimeout(1200); await shot(admin, '60-news-feeds');
+  if (sql("select count(*) from news_articles where source='rss' and status='published' and push=0") !== '2') problems.push('RSS first fetch not archived');
+  await nb({ message: { message_id: seq++, date: 1, text: '轻轨', from: xm, chat: { id: 9001, type: 'private' } } }); await wait(1500);
+  const searchReply = (await sentNow()).filter(m => m.bot === 333 && m.chat_id === 9001 && /搜索「轻轨」/.test(m.text || '')).pop();
+  if (!searchReply || !JSON.stringify(searchReply.reply_markup).includes('nw:a:')) problems.push('news search returned nothing');
+
   await browser.close();
   console.log('\nPROBLEMS (' + problems.length + '):\n' + problems.map(p => ' - ' + p).join('\n'));
   console.log('Screenshots: ' + SHOTS);

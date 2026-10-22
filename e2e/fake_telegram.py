@@ -22,6 +22,13 @@ class H(BaseHTTPRequestHandler):
         try: return json.loads(raw or b"{}")
         except Exception: return {}
     def do_GET(self):
+        if self.path == "/rss.xml":
+            body = ("<?xml version='1.0' encoding='UTF-8'?><rss version='2.0'><channel><title>E2E</title>"
+                    "<item><title>RSS 旧闻一</title><link>https://example.com/1</link><guid>1</guid><description>one</description></item>"
+                    "<item><title>RSS 旧闻二</title><link>https://example.com/2</link><guid>2</guid><description>two</description></item>"
+                    "</channel></rss>").encode()
+            self.send_response(200); self.send_header("Content-Type", "application/rss+xml"); self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body)
+            return
         if self.path == "/sent":
             with lock: return self.reply(sent)
         self.reply({"ok": False}, 404)
@@ -48,7 +55,7 @@ class H(BaseHTTPRequestHandler):
                     return self.reply({"ok": True, "result": [{k: v for k, v in u.items() if k != "_bot"} for u in ready]})
                 time.sleep(0.05)
             return self.reply({"ok": True, "result": []})
-        if method in ("sendMessage", "sendPhoto", "sendVideo", "editMessageText", "editMessageCaption"):
+        if method in ("sendMessage", "sendPhoto", "sendVideo", "editMessageText", "editMessageCaption", "copyMessage"):
             with lock:
                 next_message[0] += 1
                 sent.append({"bot": bot_id, "method": method, **data})

@@ -12,6 +12,7 @@ import (
 	"telegram-business-bot/internal/lease"
 	"telegram-business-bot/internal/menu"
 	"telegram-business-bot/internal/model"
+	"telegram-business-bot/internal/news"
 	"telegram-business-bot/internal/redpacket"
 	"telegram-business-bot/internal/referral"
 	"telegram-business-bot/internal/session"
@@ -40,6 +41,7 @@ type Router struct {
 	packets         *redpacket.Service // nil: red packets off (the admin bot)
 	packetOnly      bool               // a red-packet bot: red packets and the wallet only
 	exchangeURL     string             // the shop's exchange page, offered by red-packet bots
+	news            *news.Service      // set on news bots only
 	logger          *zap.Logger
 }
 
@@ -47,6 +49,9 @@ func NewRouter(c *Client, st *store.Store, sessions *session.Manager, w *wallet.
 	return &Router{client: c, store: st, sessions: sessions, wallet: w, menus: menus, support: sup, referral: ref, adminIDs: adminIDs, fallbackDeposit: fallback, adminOnly: adminOnly, logger: logger}
 }
 func (r *Router) Handle(ctx context.Context, u Update) error {
+	if r.handleNewsUpdate(ctx, u) {
+		return nil
+	}
 	var userID int64
 	if u.Message != nil && u.Message.From != nil {
 		userID = u.Message.From.ID
@@ -95,6 +100,9 @@ func (r *Router) saveUser(u *User) *model.TelegramUser {
 	return m
 }
 func (r *Router) homeKeyboard(isAdmin bool) *InlineKeyboardMarkup {
+	if r.news != nil {
+		return newsHomeKeyboard()
+	}
 	if r.packetOnly {
 		return r.packetHomeKeyboard()
 	}
@@ -138,6 +146,18 @@ func (r *Router) handleMessage(ctx context.Context, m *Message, first bool) {
 	}
 	if r.adminOnly && !r.isAdmin(m.From.ID) {
 		_ = r.client.SendMessage(ctx, m.Chat.ID, "无管理员权限。", nil)
+		return
+	}
+	if r.news != nil {
+		switch commandName(strings.TrimSpace(m.Text)) {
+		case "/start", "/menu", ReplyHomeText:
+			r.sendHome(ctx, m.Chat.ID, m.From.ID)
+		case "/cancel":
+			_ = r.sessions.Clear(ctx, m.From.ID)
+			r.sendHome(ctx, m.Chat.ID, m.From.ID)
+		default:
+			r.handleNewsText(ctx, m)
+		}
 		return
 	}
 	if first && !r.packetOnly {
@@ -267,6 +287,15 @@ func (r *Router) handleCallback(ctx context.Context, cb *CallbackQuery) {
 	if strings.HasPrefix(cb.Data, "hbw:") && r.packets != nil {
 		r.handlePacketWizardCallback(ctx, cb, u)
 		return
+	}
+	if r.news != nil {
+		if strings.HasPrefix(cb.Data, "nw:") {
+			r.handleNewsCallback(ctx, cb)
+			return
+		}
+		if cb.Data != "home" {
+			return
+		}
 	}
 	if r.packetOnly {
 		if cb.Data == "rpo:wallet" {
@@ -625,6 +654,10 @@ func (r *Router) sendWelcome(ctx context.Context, chatID int64) {
 	_ = r.client.SendMessage(ctx, chatID, htmlEscape(text), nil)
 }
 func (r *Router) sendHome(ctx context.Context, chatID, userID int64) {
+	if r.news != nil {
+		_ = r.client.SendMessage(ctx, chatID, newsHomeText, newsHomeKeyboard())
+		return
+	}
 	if r.packetOnly {
 		_ = r.client.SendMessage(ctx, chatID, packetHomeText, r.homeKeyboard(false))
 		return
@@ -680,6 +713,10 @@ func (r *Router) walletText(u *model.TelegramUser) (string, error) {
 func (r *Router) editHome(ctx context.Context, chatID int64, msgID int, userID int64) {
 	if r.packetOnly {
 		_ = r.client.EditMessage(ctx, chatID, msgID, packetHomeText, r.homeKeyboard(false))
+		return
+	}
+	if r.news != nil {
+		_ = r.client.EditMessage(ctx, chatID, msgID, newsHomeText, newsHomeKeyboard())
 		return
 	}
 	name := r.menus.Config("site_name", "Telegram Business Bot")

@@ -3,10 +3,21 @@ package telegram
 import "strings"
 
 type Update struct {
-	UpdateID      int            `json:"update_id"`
-	Message       *Message       `json:"message,omitempty"`
-	CallbackQuery *CallbackQuery `json:"callback_query,omitempty"`
-	InlineQuery   *InlineQuery   `json:"inline_query,omitempty"`
+	UpdateID      int                `json:"update_id"`
+	Message       *Message           `json:"message,omitempty"`
+	CallbackQuery *CallbackQuery     `json:"callback_query,omitempty"`
+	InlineQuery   *InlineQuery       `json:"inline_query,omitempty"`
+	ChannelPost   *Message           `json:"channel_post,omitempty"`
+	MyChatMember  *ChatMemberUpdated `json:"my_chat_member,omitempty"`
+}
+
+// ChatMemberUpdated reports the bot being added to, promoted in or removed from a chat.
+type ChatMemberUpdated struct {
+	Chat          Chat `json:"chat"`
+	From          User `json:"from"`
+	NewChatMember struct {
+		Status string `json:"status"` // creator, administrator, member, restricted, left, kicked
+	} `json:"new_chat_member"`
 }
 
 // InlineQuery is "@bot text" typed in any chat (needs inline mode enabled in @BotFather).
@@ -21,6 +32,7 @@ type Message struct {
 	From      *User  `json:"from,omitempty"`
 	Chat      Chat   `json:"chat"`
 	Text      string `json:"text,omitempty"`
+	Caption   string `json:"caption,omitempty"`
 }
 
 type User struct {
@@ -33,8 +45,10 @@ type User struct {
 }
 
 type Chat struct {
-	ID   int64  `json:"id"`
-	Type string `json:"type"`
+	ID       int64  `json:"id"`
+	Type     string `json:"type"`
+	Title    string `json:"title,omitempty"`
+	Username string `json:"username,omitempty"`
 }
 
 type CallbackQuery struct {

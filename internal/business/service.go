@@ -70,17 +70,18 @@ func (s *Service) List() ([]model.BusinessBot, error) {
 	return rows, err
 }
 
-// Bot purposes: every feature, or only red packets and the wallet.
+// Bot purposes: every feature, only red packets and the wallet, or only news.
 const (
 	PurposeFull      = "full"
 	PurposeRedPacket = "redpacket"
+	PurposeNews      = "news"
 )
 
 func (s *Service) Save(ctx context.Context, id uint64, name, token string, enabled bool, purpose string) (*model.BusinessBot, error) {
 	if purpose == "" {
 		purpose = PurposeFull
 	}
-	if purpose != PurposeFull && purpose != PurposeRedPacket {
+	if purpose != PurposeFull && purpose != PurposeRedPacket && purpose != PurposeNews {
 		return nil, errors.New("未知的机器人用途")
 	}
 	name = strings.TrimSpace(name)

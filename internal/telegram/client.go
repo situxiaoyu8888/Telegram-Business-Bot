@@ -124,7 +124,16 @@ func (c *Client) call(
 }
 
 // allowedUpdates are the update types the bots handle (inline queries share red packets).
-var allowedUpdates = []string{"message", "callback_query", "inline_query"}
+var allowedUpdates = []string{"message", "callback_query", "inline_query", "channel_post", "my_chat_member"}
+
+// CopyMessage copies a message (e.g. a channel post) into another chat.
+func (c *Client) CopyMessage(ctx context.Context, chatID, fromChatID int64, messageID int, kb *InlineKeyboardMarkup) error {
+	payload := map[string]any{"chat_id": chatID, "from_chat_id": fromChatID, "message_id": messageID}
+	if kb != nil {
+		payload["reply_markup"] = kb
+	}
+	return c.call(ctx, "copyMessage", payload, nil)
+}
 
 // SendMessageID sends an HTML message and returns its message ID.
 func (c *Client) SendMessageID(ctx context.Context, chatID int64, text string, kb *InlineKeyboardMarkup) (int, error) {

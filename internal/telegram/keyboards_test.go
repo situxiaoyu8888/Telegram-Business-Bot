@@ -26,3 +26,14 @@ func TestOnlyWithdrawableCurrenciesOffered(t *testing.T) {
 		t.Fatalf("offered %s", got)
 	}
 }
+
+func TestNewsMessageEscapesAndTrims(t *testing.T) {
+	a := &model.NewsArticle{Title: "<b>标题</b>", Content: strings.Repeat("字", 900), ImageURL: "https://e.com/a.jpg", LinkURL: "https://e.com/a"}
+	text, photo, kb := NewsMessage(a, "本地")
+	if photo == "" || kb == nil || kb.InlineKeyboard[0][0].URL != "https://e.com/a" {
+		t.Fatal(photo, kb)
+	}
+	if strings.Contains(text, "<b><b>") || !strings.Contains(text, "&lt;b&gt;") || len([]rune(text)) > 1024 {
+		t.Fatalf("caption %d runes: %.80s", len([]rune(text)), text)
+	}
+}

@@ -271,7 +271,7 @@ type BusinessBot struct {
 	Username       string     `gorm:"size:128" json:"username"`
 	TokenEncrypted string     `gorm:"type:text;not null" json:"-"`
 	Enabled        bool       `gorm:"index" json:"enabled"`
-	Purpose        string     `gorm:"size:16;not null;default:full" json:"purpose"` // full, or redpacket (red packets and wallet only)
+	Purpose        string     `gorm:"size:16;not null;default:full" json:"purpose"` // full, redpacket (red packets and wallet only) or news
 	Offset         int        `gorm:"not null;default:0" json:"-"`
 	LastError      string     `gorm:"size:255" json:"last_error"`
 	LastSeenAt     *time.Time `json:"last_seen_at"`
@@ -400,4 +400,92 @@ type RedPacketClaim struct {
 	Name           string    `gorm:"size:128;not null" json:"name"`
 	Amount         string    `gorm:"type:decimal(24,6);not null" json:"amount"`
 	CreatedAt      time.Time `json:"created_at"`
+}
+
+// NewsCategory groups news articles; users subscribe per category.
+type NewsCategory struct {
+	ID        uint64    `gorm:"primaryKey" json:"id"`
+	Name      string    `gorm:"size:32;not null" json:"name"`
+	Sort      int       `gorm:"not null" json:"sort"`
+	Enabled   bool      `gorm:"not null" json:"enabled"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// NewsArticle is one news item, written in the console, fetched from an RSS feed or copied from
+// a channel. Published articles are delivered once (DispatchedAt) to subscribers and chats.
+type NewsArticle struct {
+	ID           uint64     `gorm:"primaryKey" json:"id"`
+	CategoryID   uint64     `gorm:"not null;index" json:"category_id"`
+	Title        string     `gorm:"size:255;not null" json:"title"`
+	Content      string     `gorm:"type:text;not null" json:"content"`
+	ImageURL     string     `gorm:"size:512;not null;default:''" json:"image_url"`
+	LinkURL      string     `gorm:"size:1024;not null;default:''" json:"link_url"`
+	Source       string     `gorm:"size:16;not null;index" json:"source"` // manual, rss or channel
+	SourceID     uint64     `gorm:"not null;default:0" json:"source_id"`  // news_feeds.id or news_chats.id
+	ExternalKey  *string    `gorm:"size:191;uniqueIndex" json:"-"`        // feed item GUID or channel post, for de-duplication
+	ChannelChat  int64      `gorm:"not null;default:0" json:"channel_chat"`
+	ChannelMsgID int        `gorm:"not null;default:0" json:"channel_msg_id"`
+	ChannelBotID uint64     `gorm:"not null;default:0" json:"channel_bot_id"`
+	Status       string     `gorm:"size:16;not null;index" json:"status"` // draft, pending, scheduled, published
+	PublishAt    *time.Time `gorm:"index" json:"publish_at"`
+	PublishedAt  *time.Time `gorm:"index" json:"published_at"`
+	DispatchedAt *time.Time `gorm:"index" json:"dispatched_at"`
+	Push         bool       `gorm:"not null" json:"push"` // deliver to subscribers and chats when published
+	CreatedBy    string     `gorm:"size:64;not null;default:''" json:"created_by"`
+	CreatedAt    time.Time  `gorm:"index" json:"created_at"`
+	UpdatedAt    time.Time  `json:"updated_at"`
+}
+
+// NewsFeed is an RSS or Atom feed fetched periodically.
+type NewsFeed struct {
+	ID            uint64     `gorm:"primaryKey" json:"id"`
+	Name          string     `gorm:"size:64;not null" json:"name"`
+	URL           string     `gorm:"size:1024;not null" json:"url"`
+	CategoryID    uint64     `gorm:"not null" json:"category_id"`
+	AutoPublish   bool       `gorm:"not null" json:"auto_publish"`
+	Interval      int        `gorm:"not null" json:"interval"` // minutes
+	Enabled       bool       `gorm:"not null" json:"enabled"`
+	LastFetchedAt *time.Time `json:"last_fetched_at"`
+	LastError     string     `gorm:"size:255;not null;default:''" json:"last_error"`
+	CreatedAt     time.Time  `json:"created_at"`
+}
+
+// NewsChat is a group or channel a news bot was added to. It can receive pushed news and, for
+// channels, be a source whose posts become articles.
+type NewsChat struct {
+	ID               uint64    `gorm:"primaryKey" json:"id"`
+	BotID            uint64    `gorm:"not null;uniqueIndex:uk_news_chat" json:"bot_id"`
+	ChatID           int64     `gorm:"not null;uniqueIndex:uk_news_chat" json:"chat_id"`
+	Type             string    `gorm:"size:16;not null" json:"type"` // group, supergroup or channel
+	Title            string    `gorm:"size:255;not null;default:''" json:"title"`
+	Username         string    `gorm:"size:64;not null;default:''" json:"username"`
+	Status           string    `gorm:"size:16;not null" json:"status"` // the bot's membership: member, administrator, left
+	PushEnabled      bool      `gorm:"not null" json:"push_enabled"`
+	PushCategories   string    `gorm:"size:255;not null;default:''" json:"push_categories"` // comma-separated IDs; empty = all
+	SourceEnabled    bool      `gorm:"not null" json:"source_enabled"`
+	SourceCategoryID uint64    `gorm:"not null;default:0" json:"source_category_id"`
+	AutoPublish      bool      `gorm:"not null" json:"auto_publish"`
+	CreatedAt        time.Time `json:"created_at"`
+	UpdatedAt        time.Time `json:"updated_at"`
+}
+
+// NewsSubscription is a user's subscription to a category (0 = every category) on a news bot.
+type NewsSubscription struct {
+	ID             uint64    `gorm:"primaryKey" json:"id"`
+	BotID          uint64    `gorm:"not null;uniqueIndex:uk_news_sub" json:"bot_id"`
+	TelegramUserID int64     `gorm:"not null;uniqueIndex:uk_news_sub;index" json:"telegram_user_id"`
+	CategoryID     uint64    `gorm:"not null;uniqueIndex:uk_news_sub" json:"category_id"`
+	CreatedAt      time.Time `json:"created_at"`
+}
+
+// NewsDelivery is one article to one chat through one bot.
+type NewsDelivery struct {
+	ID        uint64     `gorm:"primaryKey" json:"id"`
+	ArticleID uint64     `gorm:"not null;uniqueIndex:uk_news_delivery" json:"article_id"`
+	BotID     uint64     `gorm:"not null;uniqueIndex:uk_news_delivery;index:idx_news_delivery_pending,priority:2" json:"bot_id"`
+	ChatID    int64      `gorm:"not null;uniqueIndex:uk_news_delivery" json:"chat_id"`
+	Status    string     `gorm:"size:16;not null;index:idx_news_delivery_pending,priority:1" json:"status"` // pending, sent, failed
+	Error     string     `gorm:"size:255;not null;default:''" json:"error"`
+	SentAt    *time.Time `json:"sent_at"`
+	CreatedAt time.Time  `json:"created_at"`
 }

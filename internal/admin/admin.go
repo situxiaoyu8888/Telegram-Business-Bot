@@ -16,6 +16,7 @@ import (
 
 	"telegram-business-bot/internal/business"
 	"telegram-business-bot/internal/model"
+	"telegram-business-bot/internal/news"
 	"telegram-business-bot/internal/push"
 	"telegram-business-bot/internal/shop"
 	"telegram-business-bot/internal/store"
@@ -46,6 +47,7 @@ type Handler struct {
 	bots      *business.Service
 	st        *store.Store
 	wallet    *wallet.Service
+	news      *news.Service
 	support   *support.Service
 	tg        *telegram.Client
 	push      *push.Service
@@ -219,6 +221,9 @@ func (h *Handler) RegisterAPI(r *gin.Engine) {
 
 	if h.shop != nil {
 		h.registerShop(api, can)
+	}
+	if h.news != nil {
+		h.registerNews(api, can)
 	}
 
 	api.POST("/account/password", h.changePassword)

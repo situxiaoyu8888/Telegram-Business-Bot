@@ -13,6 +13,7 @@ import (
 	"telegram-business-bot/internal/cors"
 	"telegram-business-bot/internal/menu"
 	"telegram-business-bot/internal/model"
+	"telegram-business-bot/internal/news"
 	"telegram-business-bot/internal/push"
 	"telegram-business-bot/internal/redpacket"
 	"telegram-business-bot/internal/referral"
@@ -43,6 +44,7 @@ type App struct {
 	pushService   *push.Service
 	shop          *shop.Service
 	packets       *redpacket.Service
+	news          *news.Service
 	admin         *admin.Handler
 }
 
@@ -94,8 +96,13 @@ func New(cfg config.Config, logger *zap.Logger) (*App, error) {
 		return nil, fmt.Errorf("bootstrap admin account: %w", err)
 	}
 	bots := business.New(st, tg, cfg.BusinessBotKey, cfg.TelegramBotToken, cfg.AdminTelegramBotToken)
+	newsSvc := news.New(st, logger)
 	bots.Router = func(bot model.BusinessBot, client *telegram.Client) *telegram.Router {
-		r := telegram.NewRouter(client, st, sessions.WithNamespace(fmt.Sprintf("business:%d", bot.ID)), walletSvc, menuSvc, supportSvc, refSvc, cfg.AdminIDs, "", false, logger).WithBotID(bot.ID).WithRedPackets(packets)
+		r := telegram.NewRouter(client, st, sessions.WithNamespace(fmt.Sprintf("business:%d", bot.ID)), walletSvc, menuSvc, supportSvc, refSvc, cfg.AdminIDs, "", false, logger).WithBotID(bot.ID)
+		if bot.Purpose == business.PurposeNews {
+			return r.WithNewsOnly(newsSvc)
+		}
+		r.WithRedPackets(packets)
 		if bot.Purpose == business.PurposeRedPacket {
 			return r.WithRedPacketOnly(cfg.ShopH5URL)
 		}
@@ -128,7 +135,7 @@ func New(cfg config.Config, logger *zap.Logger) (*App, error) {
 		_ = st.DB.WithContext(ctx).Select("username").First(&b, botID).Error
 		return b.Username
 	})
-	a := &App{shop: shopSvc, packets: packets, businessBots: bots, cfg: cfg, logger: logger, store: st, tg: tg, tgRouter: tgRouter, adminTG: adminTG, adminTGRouter: adminTGRouter, engine: engine, pushService: pushSvc}
+	a := &App{shop: shopSvc, packets: packets, news: newsSvc, businessBots: bots, cfg: cfg, logger: logger, store: st, tg: tg, tgRouter: tgRouter, adminTG: adminTG, adminTGRouter: adminTGRouter, engine: engine, pushService: pushSvc}
 	a.registerRoutes()
 	a.admin = admin.New(
 		st,
@@ -140,7 +147,7 @@ func New(cfg config.Config, logger *zap.Logger) (*App, error) {
 		cfg.UploadPublicBaseURL,
 		cfg.UploadMaxImageMB,
 		cfg.UploadMaxVideoMB,
-	).WithBots(bots).WithShop(shopSvc).WithLogger(logger).WithPublicURL(cfg.AdminPublicURL)
+	).WithBots(bots).WithShop(shopSvc).WithNews(newsSvc).WithLogger(logger).WithPublicURL(cfg.AdminPublicURL)
 	a.listeners = []Listener{{Addr: cfg.HTTPAddr, Handler: engine, Serves: "webhooks, uploads"}}
 	if !cfg.Split() {
 		shopHandler.Register(engine)
@@ -241,6 +248,8 @@ func (a *App) StartWorkers(ctx context.Context) {
 	go a.businessBots.Run(ctx)
 	go a.shop.Run(ctx)
 	go a.packets.Run(ctx)
+	go a.news.Run(ctx)
+	go telegram.RunNewsDelivery(ctx, a.news, a.store.Redis, a.businessBots.Sender, a.logger)
 	go a.admin.PurgeAuditLogs(ctx, 180*24*time.Hour)
 	if a.cfg.BackupDir != "" {
 		if sqlDB, err := a.store.DB.DB(); err == nil {
