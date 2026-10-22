@@ -38,7 +38,7 @@ const packetHomeText = "<b>🧧 红包机器人</b>\n\n" +
 	"• 抢到的钱直接存入钱包，未领完的红包到期自动退回"
 
 func (r *Router) packetHomeKeyboard() *InlineKeyboardMarkup {
-	rows := [][]InlineKeyboardButton{{btn("🧧 发红包", "hbw:new"), btn("💰 我的钱包", "rpo:wallet")}}
+	rows := [][]InlineKeyboardButton{{btn("🧧 发红包", "hbw:new"), btn("💰 我的钱包", "rpo:wallet")}, {btn("🔐 支付密码", "pay:manage")}}
 	if r.exchangeURL != "" {
 		rows = append(rows, []InlineKeyboardButton{ShopButton("💱 换汇", r.exchangeURL, "/exchange")})
 	}
@@ -269,6 +269,10 @@ func (r *Router) handleGroupMessage(ctx context.Context, m *Message, u *model.Te
 		_ = r.sessions.Clear(ctx, m.From.ID)
 		_ = r.client.DeleteMessage(ctx, m.Chat.ID, m.MessageID)
 		return
+	case inWizard && isPayStep(s.Step):
+		// The payment password belongs in the private chat; never keep it in the group.
+		_ = r.client.DeleteMessage(ctx, m.Chat.ID, m.MessageID)
+		return
 	case inWizard && m.ReplyToMessage != nil && strconv.Itoa(m.ReplyToMessage.MessageID) == sessionString(s, "msg") && !strings.HasPrefix(m.Text, "/"):
 		r.handlePacketWizardInput(ctx, m, u, s)
 		// Keep the group tidy; this only works when the bot is a group admin.
@@ -393,9 +397,14 @@ func (r *Router) wizardSay(ctx context.Context, s *session.Session, chatID int64
 	_ = r.client.EditMessage(ctx, group, msg, wizardTitle(sessionString(s, "owner"))+text, kb)
 }
 
-func (r *Router) deleteWizard(ctx context.Context, s *session.Session) {
+func wizardMessage(s *session.Session) (int64, int) {
 	group, _ := strconv.ParseInt(sessionString(s, "chat"), 10, 64)
 	msg, _ := strconv.Atoi(sessionString(s, "msg"))
+	return group, msg
+}
+
+func (r *Router) deleteWizard(ctx context.Context, s *session.Session) {
+	group, msg := wizardMessage(s)
 	if group != 0 && msg != 0 {
 		_ = r.client.DeleteMessage(ctx, group, msg)
 	}
@@ -413,10 +422,20 @@ func (r *Router) handleGroupWizardCallback(ctx context.Context, cb *CallbackQuer
 		_ = r.client.AnswerCallbackAlert(ctx, cb.ID, "只有发红包的人可以操作；想发红包请发送 /start", true)
 		return
 	}
-	_ = r.client.AnswerCallback(ctx, cb.ID, "")
 	if u == nil || u.Status != 1 {
+		_ = r.client.AnswerCallback(ctx, cb.ID, "")
 		return
 	}
+	// Paying needs the payment password, which is entered in the private chat.
+	if r.pay != nil && strings.HasPrefix(cb.Data, "hbw:send:") && s.Step == "confirm" && strings.TrimPrefix(cb.Data, "hbw:send:") == sessionString(s, "request_id") {
+		if name, err := r.client.Username(ctx); err == nil && name != "" {
+			r.requirePayPassword(ctx, cb.From.ID, u, s, "redpacket")
+			_ = r.client.AnswerCallbackURL(ctx, cb.ID, "https://t.me/"+name+"?start=hbpay")
+			r.wizardSay(ctx, s, cb.Message.Chat.ID, "🔐 请在<b>机器人私聊</b>中输入支付密码完成支付。", cancelKeyboard(), false)
+			return
+		}
+	}
+	_ = r.client.AnswerCallback(ctx, cb.ID, "")
 	r.handlePacketWizardCallback(ctx, cb, u)
 }
 
@@ -494,6 +513,10 @@ func (r *Router) handlePacketWizardCallback(ctx context.Context, cb *CallbackQue
 		s.Data["greeting"] = ""
 		r.confirmPacket(ctx, chatID, userID, s)
 	case strings.HasPrefix(cb.Data, "hbw:send:") && s.Step == "confirm" && strings.TrimPrefix(cb.Data, "hbw:send:") == sessionString(s, "request_id"):
+		if r.pay != nil {
+			_ = r.client.EditMessage(ctx, chatID, msgID, r.requirePayPassword(ctx, userID, u, s, "redpacket"), nil)
+			return
+		}
 		r.sendPacket(ctx, chatID, msgID, u, s)
 	}
 }
@@ -633,7 +656,7 @@ func (r *Router) sendPacket(ctx context.Context, chatID int64, msgID int, u *mod
 			return
 		}
 		again := &InlineKeyboardMarkup{InlineKeyboard: [][]InlineKeyboardButton{{btn("🧧 重新发红包", "hbw:new")}, {btn("⬅ 返回首页", "home")}}}
-		_ = r.client.EditMessage(ctx, chatID, msgID, msg, again)
+		r.editOrSend(ctx, chatID, msgID, msg, again)
 		return
 	}
 	if inGroupWizard(s) {
@@ -655,7 +678,7 @@ func (r *Router) sendPacket(ctx context.Context, chatID int64, msgID int, u *mod
 			note = "⚠️ 红包已创建，但没能发到群里（请确认机器人在群内且可以发言）。可点击「发送到群聊/好友」手动发出。"
 		}
 	}
-	_ = r.client.EditMessage(ctx, chatID, msgID, note, nil)
+	r.editOrSend(ctx, chatID, msgID, note, nil)
 	kb := &InlineKeyboardMarkup{InlineKeyboard: [][]InlineKeyboardButton{{{Text: "📤 发送到群聊/好友", SwitchInlineQuery: "hb " + p.Code}}, {btn("🧧 再发一个", "hbw:new")}}}
 	_ = r.client.SendMessage(ctx, chatID, r.packets.Card(p, nil), kb)
 }

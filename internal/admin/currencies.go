@@ -10,6 +10,7 @@ import (
 	"github.com/shopspring/decimal"
 
 	"telegram-business-bot/internal/model"
+	"telegram-business-bot/internal/paypass"
 	"telegram-business-bot/internal/store"
 	"telegram-business-bot/internal/wallet"
 )
@@ -179,4 +180,20 @@ func (h *Handler) redPacketClaims(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, rows)
+}
+
+// WithPayPassword enables resetting users' payment passwords.
+func (h *Handler) WithPayPassword(s *paypass.Service) *Handler { h.pay = s; return h }
+
+// resetPayPassword removes a user's payment password; they set a new one on their next payment.
+func (h *Handler) resetPayPassword(c *gin.Context) {
+	id, ok := idParam(c)
+	if !ok {
+		return
+	}
+	if h.pay == nil || h.pay.Reset(id) != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "重置失败"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true})
 }

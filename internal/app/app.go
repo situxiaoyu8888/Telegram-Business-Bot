@@ -14,6 +14,7 @@ import (
 	"telegram-business-bot/internal/menu"
 	"telegram-business-bot/internal/model"
 	"telegram-business-bot/internal/news"
+	"telegram-business-bot/internal/paypass"
 	"telegram-business-bot/internal/push"
 	"telegram-business-bot/internal/redpacket"
 	"telegram-business-bot/internal/referral"
@@ -66,7 +67,8 @@ func New(cfg config.Config, logger *zap.Logger) (*App, error) {
 	// The admin bot keeps the command list; user-facing bots may open the H5 shop instead.
 	shopButton := telegram.MenuButton{Text: cfg.ShopH5ButtonText, URL: cfg.ShopH5URL}
 	packets := redpacket.New(st, walletSvc, logger)
-	tgRouter := telegram.NewRouter(tg, st, sessions, walletSvc, menuSvc, supportSvc, refSvc, cfg.AdminIDs, cfg.TronFallbackDepositAddress, false, logger).WithMenuButton(shopButton).WithRedPackets(packets)
+	payPass := paypass.New(st)
+	tgRouter := telegram.NewRouter(tg, st, sessions, walletSvc, menuSvc, supportSvc, refSvc, cfg.AdminIDs, cfg.TronFallbackDepositAddress, false, logger).WithMenuButton(shopButton).WithRedPackets(packets).WithPayPassword(payPass)
 
 	var adminTG *telegram.Client
 	var adminTGRouter *telegram.Router
@@ -102,7 +104,7 @@ func New(cfg config.Config, logger *zap.Logger) (*App, error) {
 		if bot.Purpose == business.PurposeNews {
 			return r.WithNewsOnly(newsSvc)
 		}
-		r.WithRedPackets(packets)
+		r.WithRedPackets(packets).WithPayPassword(payPass)
 		if bot.Purpose == business.PurposeRedPacket {
 			return r.WithRedPacketOnly(cfg.ShopH5URL)
 		}
@@ -132,7 +134,7 @@ func New(cfg config.Config, logger *zap.Logger) (*App, error) {
 		staffIDs = append(staffIDs, id)
 	}
 	shopSvc := shop.New(st, walletSvc, shop.BotNotifier{Bots: bots, Staff: staffSender, ShopURL: cfg.ShopH5URL}, logger).WithStaff(staffIDs)
-	shopHandler := shop.NewHandler(shopSvc, st, bots, logger).WithBotUsernames(func(ctx context.Context, botID uint64) string {
+	shopHandler := shop.NewHandler(shopSvc, st, bots, logger).WithPayPassword(payPass).WithBotUsernames(func(ctx context.Context, botID uint64) string {
 		if botID == 0 {
 			name, _ := tg.Username(ctx)
 			return name
@@ -153,7 +155,7 @@ func New(cfg config.Config, logger *zap.Logger) (*App, error) {
 		cfg.UploadPublicBaseURL,
 		cfg.UploadMaxImageMB,
 		cfg.UploadMaxVideoMB,
-	).WithBots(bots).WithShop(shopSvc).WithNews(newsSvc).WithLogger(logger).WithPublicURL(cfg.AdminPublicURL)
+	).WithBots(bots).WithShop(shopSvc).WithNews(newsSvc).WithPayPassword(payPass).WithLogger(logger).WithPublicURL(cfg.AdminPublicURL)
 	a.listeners = []Listener{{Addr: cfg.HTTPAddr, Handler: engine, Serves: "webhooks, uploads"}}
 	if !cfg.Split() {
 		shopHandler.Register(engine)

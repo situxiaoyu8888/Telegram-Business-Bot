@@ -16,6 +16,7 @@ import (
 
 	"telegram-business-bot/internal/business"
 	"telegram-business-bot/internal/model"
+	"telegram-business-bot/internal/paypass"
 	"telegram-business-bot/internal/ratelimit"
 	"telegram-business-bot/internal/store"
 	"telegram-business-bot/internal/telegram"
@@ -40,6 +41,7 @@ type Handler struct {
 	st     *store.Store
 	tokens TokenSource
 	logger *zap.Logger
+	pay    *paypass.Service
 
 	mu       sync.Mutex
 	cached   []business.BotToken
@@ -134,6 +136,8 @@ func (h *Handler) RegisterAPI(r *gin.Engine) {
 	api.DELETE("/favorites/:id", h.removeFavorite)
 	api.GET("/history", h.history)
 	api.DELETE("/history", h.clearHistory)
+	api.GET("/pay-password", h.payPasswordStatus)
+	api.POST("/pay-password", h.throttle("rl:shop-paypass:", maxOrdersPerMinute), h.setPayPassword)
 	api.GET("/exchange", h.exchangeInfo)
 	api.POST("/exchange", h.throttle("rl:shop-order:", maxOrdersPerMinute), h.exchange)
 	api.GET("/aftersales", h.myAfterSales)
@@ -480,6 +484,10 @@ func (h *Handler) createOrder(c *gin.Context) {
 		h.fail(c, userErr("参数错误"))
 		return
 	}
+	if err := h.checkPayPassword(c); err != nil {
+		h.fail(c, err)
+		return
+	}
 	orders, err := h.svc.CreateOrders(buyer(c), req)
 	if err != nil {
 		h.fail(c, err)
@@ -614,6 +622,45 @@ func (h *Handler) exchange(c *gin.Context) {
 		h.fail(c, userErr("参数错误"))
 		return
 	}
+	if err := h.checkPayPassword(c); err != nil {
+		h.fail(c, err)
+		return
+	}
 	rec, err := h.svc.wallet.Exchange(buyer(c).UserID, in)
 	h.reply(c, rec, err)
+}
+
+// WithPayPassword requires the payment password (header X-Pay-Password) for paying orders and
+// exchanging.
+func (h *Handler) WithPayPassword(s *paypass.Service) *Handler { h.pay = s; return h }
+
+func (h *Handler) checkPayPassword(c *gin.Context) error {
+	if h.pay == nil {
+		return nil
+	}
+	return h.pay.Verify(buyer(c).UserID, c.GetHeader("X-Pay-Password"))
+}
+
+func (h *Handler) payPasswordStatus(c *gin.Context) {
+	set := false
+	if h.pay != nil {
+		var err error
+		if set, err = h.pay.IsSet(buyer(c).UserID); err != nil {
+			h.fail(c, err)
+			return
+		}
+	}
+	c.JSON(http.StatusOK, gin.H{"required": h.pay != nil, "set": set})
+}
+
+// setPayPassword sets the first payment password; changing it is done in the bot.
+func (h *Handler) setPayPassword(c *gin.Context) {
+	var in struct {
+		Password string `json:"password"`
+	}
+	if c.ShouldBindJSON(&in) != nil || h.pay == nil {
+		h.fail(c, userErr("参数错误"))
+		return
+	}
+	h.reply(c, gin.H{"ok": true}, h.pay.Set(buyer(c).UserID, in.Password))
 }

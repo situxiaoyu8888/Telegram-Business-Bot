@@ -14,6 +14,7 @@ import (
 	"telegram-business-bot/internal/menu"
 	"telegram-business-bot/internal/model"
 	"telegram-business-bot/internal/news"
+	"telegram-business-bot/internal/paypass"
 	"telegram-business-bot/internal/redpacket"
 	"telegram-business-bot/internal/referral"
 	"telegram-business-bot/internal/session"
@@ -43,6 +44,7 @@ type Router struct {
 	packetOnly      bool               // a red-packet bot: red packets and the wallet only
 	exchangeURL     string             // the shop's exchange page, offered by red-packet bots
 	news            *news.Service      // set on news bots only
+	pay             *paypass.Service   // payment passwords; nil turns them off
 	logger          *zap.Logger
 }
 
@@ -170,6 +172,15 @@ func (r *Router) handleMessage(ctx context.Context, m *Message, first bool) {
 	command := commandName(text)
 	if command == "/start" {
 		parts := strings.Fields(text)
+		// "hbpay" comes from a group wizard's confirm button: enter the payment password here.
+		if len(parts) > 1 && parts[1] == "hbpay" && r.pay != nil {
+			if s, _ := r.sessions.Get(ctx, m.From.ID); s != nil && isPayStep(s.Step) {
+				_ = r.client.SendMessage(ctx, m.Chat.ID, payPrompt(s), nil)
+			} else {
+				_ = r.client.SendMessage(ctx, m.Chat.ID, "没有待支付的红包，或已超时，请在群里重新发送 /start。", nil)
+			}
+			return
+		}
 		// "hbp_<code>" comes from the claim button of a password packet.
 		if len(parts) > 1 && r.packets != nil && strings.HasPrefix(parts[1], "hbp_") {
 			r.askPacketPassword(ctx, m.Chat.ID, m.From.ID, strings.TrimPrefix(parts[1], "hbp_"))
@@ -213,6 +224,11 @@ func (r *Router) handleMessage(ctx context.Context, m *Message, first bool) {
 	case "/orders":
 		if !r.adminOnly && !r.packetOnly {
 			r.sendShopOrders(ctx, m.Chat.ID, u.ID)
+			return
+		}
+	case "/paypass":
+		if r.pay != nil && !r.adminOnly {
+			r.startPayManage(ctx, m.Chat.ID, u)
 			return
 		}
 	case "/hb", "/hongbao":
@@ -303,6 +319,10 @@ func (r *Router) handleCallback(ctx context.Context, cb *CallbackQuery) {
 		r.handlePacketWizardCallback(ctx, cb, u)
 		return
 	}
+	if cb.Data == "pay:manage" && r.pay != nil {
+		r.startPayManage(ctx, cb.Message.Chat.ID, u)
+		return
+	}
 	if r.news != nil {
 		if strings.HasPrefix(cb.Data, "nw:") {
 			r.handleNewsCallback(ctx, cb)
@@ -315,7 +335,7 @@ func (r *Router) handleCallback(ctx context.Context, cb *CallbackQuery) {
 	if r.packetOnly {
 		if cb.Data == "rpo:wallet" {
 			if text, err := r.walletText(u); err == nil {
-				_ = r.client.EditMessage(ctx, cb.Message.Chat.ID, cb.Message.MessageID, text, ptrKB(BackHomeKeyboard()))
+				_ = r.client.EditMessage(ctx, cb.Message.Chat.ID, cb.Message.MessageID, text, r.walletKeyboard())
 			}
 			return
 		}
@@ -383,20 +403,29 @@ func (r *Router) handleCallback(ctx context.Context, cb *CallbackQuery) {
 		if s == nil || s.Scene != "withdraw" || s.Step != "confirm" || fmt.Sprint(s.Data["request_id"]) != strings.TrimPrefix(cb.Data, "withdraw:confirm:") {
 			return
 		}
-		amount := fmt.Sprint(s.Data["amount"])
-		address := fmt.Sprint(s.Data["address"])
-		order, err := r.wallet.CreateCurrencyWithdrawal(u.ID, withdrawCurrency(s), address, amount, fmt.Sprint(s.Data["request_id"]))
-		if err != nil {
-			_ = r.client.EditMessage(ctx, chatID, msgID, "提现提交失败："+htmlEscape(err.Error()), ptrKB(BackHomeKeyboard()))
+		if r.pay != nil {
+			_ = r.client.EditMessage(ctx, chatID, msgID, r.requirePayPassword(ctx, userID, u, s, "withdraw"), nil)
 			return
 		}
-		_ = r.sessions.Clear(ctx, userID)
-		_ = r.client.EditMessage(ctx, chatID, msgID, fmt.Sprintf("<b>✅ 提现申请已提交</b>\n\n订单：<code>#%d</code>\n状态：待审核\n金额：<code>%s %s</code>\n\n%s", order.ID, trimZeros(order.Amount), htmlEscape(withdrawName(s)), map[bool]string{true: "审核通过后由财务人工打款。", false: "审核通过后由独立钱包/签名服务执行链上转账。"}[order.Network == "BANK"]), ptrKB(BackHomeKeyboard()))
+		r.submitWithdrawal(ctx, chatID, msgID, u, s)
 	case cb.Data == "withdraw:cancel":
 		_ = r.sessions.Clear(ctx, userID)
 		r.sendHome(ctx, chatID, userID)
 
 	}
+}
+
+// submitWithdrawal creates the withdrawal confirmed in the session.
+func (r *Router) submitWithdrawal(ctx context.Context, chatID int64, msgID int, u *model.TelegramUser, s *session.Session) {
+	amount := fmt.Sprint(s.Data["amount"])
+	address := fmt.Sprint(s.Data["address"])
+	order, err := r.wallet.CreateCurrencyWithdrawal(u.ID, withdrawCurrency(s), address, amount, fmt.Sprint(s.Data["request_id"]))
+	_ = r.sessions.Clear(ctx, u.TelegramUserID)
+	if err != nil {
+		r.editOrSend(ctx, chatID, msgID, "提现提交失败："+htmlEscape(err.Error()), ptrKB(BackHomeKeyboard()))
+		return
+	}
+	r.editOrSend(ctx, chatID, msgID, fmt.Sprintf("<b>✅ 提现申请已提交</b>\n\n订单：<code>#%d</code>\n状态：待审核\n金额：<code>%s %s</code>\n\n%s", order.ID, trimZeros(order.Amount), htmlEscape(withdrawName(s)), map[bool]string{true: "审核通过后由财务人工打款。", false: "审核通过后由独立钱包/签名服务执行链上转账。"}[order.Network == "BANK"]), ptrKB(BackHomeKeyboard()))
 }
 
 func (r *Router) dispatchMenu(ctx context.Context, cb *CallbackQuery, u *model.TelegramUser, item model.MenuItem) {
@@ -472,7 +501,7 @@ func (r *Router) dispatchMenu(ctx context.Context, cb *CallbackQuery, u *model.T
 		if err != nil {
 			return
 		}
-		_ = r.menuResponse(ctx, chatID, msgID, text, ptrKB(BackHomeKeyboard()))
+		_ = r.menuResponse(ctx, chatID, msgID, text, r.walletKeyboard())
 	case "deposit":
 		var a model.DepositAddress
 		err := r.store.DB.Where("user_id=? AND network='TRC20' AND status=1", u.ID).First(&a).Error
@@ -575,6 +604,9 @@ func (r *Router) dispatchMenu(ctx context.Context, cb *CallbackQuery, u *model.T
 }
 
 func (r *Router) handleSessionInput(ctx context.Context, m *Message, u *model.TelegramUser, s *session.Session) {
+	if r.handlePayInput(ctx, m, u, s) {
+		return
+	}
 	switch s.Scene {
 	case "redpacket":
 		if r.packets != nil {
@@ -702,6 +734,15 @@ func (r *Router) sendHome(ctx context.Context, chatID, userID int64) {
 			_ = r.client.SendMessage(ctx, chatID, "请选择功能：", kb)
 		}
 	}
+}
+
+// walletKeyboard offers managing the payment password under the wallet.
+func (r *Router) walletKeyboard() *InlineKeyboardMarkup {
+	kb := BackHomeKeyboard()
+	if r.pay != nil {
+		kb.InlineKeyboard = append([][]InlineKeyboardButton{{btn("🔐 支付密码", "pay:manage")}}, kb.InlineKeyboard...)
+	}
+	return &kb
 }
 
 // walletText lists the user's balances: USDT (the shop currency) always, other currencies once

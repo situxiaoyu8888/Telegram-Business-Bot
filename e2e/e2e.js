@@ -39,6 +39,16 @@ async function adminApi(page, path, method = 'GET', body) {
 }
 async function pick(page, id, value) { await page.click(`#${id}Trigger`); await page.click(`[data-owner="${id}"][data-value="${value}"]`); }
 async function nav(page, key) { await page.click(`[data-nav="${key}"]`); await page.waitForTimeout(500); }
+// The shop asks for the payment password before paying or exchanging (and, the first time, has
+// it set twice). Answers every prompt that appears.
+const PIN = '246810';
+async function enterPin(page) {
+  for (let i = 0; i < 3; i++) {
+    await page.waitForTimeout(500);
+    if (!(await page.$('#pinInput'))) return;
+    await page.fill('#pinInput', PIN); await page.click('#pinOk');
+  }
+}
 async function submitModal(page) { await page.click('#submitModal'); await page.waitForTimeout(600); }
 async function toastText(page) { return page.$eval('#toast', e => e.hidden ? '' : e.textContent).catch(() => ''); }
 
@@ -183,7 +193,11 @@ async function toastText(page) { return page.$eval('#toast', e => e.hidden ? '' 
   await shopPage.selectOption('#exFrom', 'CNY'); await shopPage.selectOption('#exTo', 'USDT');
   await shopPage.fill('#exAmount', '72'); await shopPage.waitForTimeout(200); await shot(shopPage, '11d-shop-exchange');
   if ((await shopPage.textContent('#exGet')).trim() !== '10.00') problems.push('exchange preview wrong: ' + await shopPage.textContent('#exGet'));
-  await shopPage.click('#exSubmit'); await shopPage.waitForTimeout(1000); await shot(shopPage, '11e-shop-exchanged');
+  await shopPage.click('#exSubmit'); await shopPage.waitForTimeout(400);
+  if (!(await shopPage.$('#pinInput'))) problems.push('exchange did not ask to set a payment password');
+  else await shot(shopPage, '11d2-shop-pin');
+  await enterPin(shopPage); await shopPage.waitForTimeout(1000); await shot(shopPage, '11e-shop-exchanged');
+  if (sql(`select count(*) from payment_passwords where user_id=${uid}`) !== '1') problems.push('payment password not set from the shop');
   const afterEx = sql(`select group_concat(concat(currency,'=',available) order by currency) from wallet_accounts where user_id=${uid}`);
   if (afterEx !== 'CNY=648.000000,USDT=110.000000') problems.push('exchange balances wrong: ' + afterEx);
   sql(`update wallet_accounts set available=100 where user_id=${uid} and currency='USDT'`);
@@ -214,7 +228,7 @@ async function toastText(page) { return page.$eval('#toast', e => e.hidden ? '' 
   await shopPage.click('[data-pick]'); await shopPage.waitForTimeout(1200);
   const coupon = await shopPage.$('[data-cp]:not([data-cp$=":0"])'); if (coupon) await coupon.click(); else problems.push('coupon not offered at checkout');
   await shopPage.waitForTimeout(1000); await shot(shopPage, '17-checkout-ready');
-  await shopPage.click('#pay'); await shopPage.waitForTimeout(1500); await shot(shopPage, '18-order-paid');
+  await shopPage.click('#pay'); await enterPin(shopPage); await shopPage.waitForTimeout(1500); await shot(shopPage, '18-order-paid');
   const orderNo = sql("select order_no from shop_orders order by id desc limit 1");
   const pay = sql("select pay_amount from shop_orders order by id desc limit 1");
   console.log('  order', orderNo, 'paid', pay, '(expected 2×8.8 − 2 = 15.6)');
@@ -223,7 +237,7 @@ async function toastText(page) { return page.$eval('#toast', e => e.hidden ? '' 
   step('virtual product buy now');
   await shopPage.goto(SHOP_BASE + '/shop/#/product/' + card.id); await shopPage.waitForTimeout(800);
   await shopPage.click('#buyNow'); await shopPage.waitForTimeout(1200);
-  await shopPage.click('#pay'); await shopPage.waitForTimeout(1500); await shot(shopPage, '19-virtual-delivered');
+  await shopPage.click('#pay'); await enterPin(shopPage); await shopPage.waitForTimeout(1500); await shot(shopPage, '19-virtual-delivered');
   const note = await shopPage.textContent('.code').catch(() => '');
   if (!note.includes('CARD-AAA-111')) problems.push('virtual code not shown: ' + note);
 
@@ -271,7 +285,7 @@ async function toastText(page) { return page.$eval('#toast', e => e.hidden ? '' 
   await shopPage.click('[data-sku]:has-text("小份")');
   await shot(shopPage, '32-product-group');
   await shopPage.click('#startGroup'); await shopPage.waitForTimeout(1200); await shot(shopPage, '33-group-checkout');
-  await shopPage.click('#pay'); await shopPage.waitForTimeout(1500); await shot(shopPage, '34-group-waiting');
+  await shopPage.click('#pay'); await enterPin(shopPage); await shopPage.waitForTimeout(1500); await shot(shopPage, '34-group-waiting');
   if (!/\/group\/\d+/.test(shopPage.url())) problems.push('group checkout did not open the group page: ' + shopPage.url());
   const groupId = shopPage.url().match(/group\/(\d+)/)?.[1];
   const friend = { id: 9003, first_name: '阿强', username: 'aqiang' };
@@ -288,7 +302,7 @@ async function toastText(page) { return page.$eval('#toast', e => e.hidden ? '' 
   await fpage.click('text=新增收货地址'); await fpage.waitForTimeout(400);
   await fpage.fill('#aName', '阿强'); await fpage.fill('#aPhone', '0899999999'); await fpage.fill('#aAddr', '清迈古城 8 号');
   await fpage.click('#aSave'); await fpage.waitForTimeout(700); await fpage.click('[data-pick]'); await fpage.waitForTimeout(1200);
-  await fpage.click('#pay'); await fpage.waitForTimeout(1500); await shot(fpage, '36-group-success');
+  await fpage.click('#pay'); await enterPin(fpage); await fpage.waitForTimeout(1500); await shot(fpage, '36-group-success');
   const gstatus = sql(`select status from shop_groups where id=${groupId}`);
   const gorders = sql(`select group_concat(status) from shop_orders where group_id=${groupId}`);
   console.log('  group', groupId, gstatus, gorders);
@@ -456,7 +470,12 @@ async function toastText(page) { return page.$eval('#toast', e => e.hidden ? '' 
     const confirm = (await sentNow()).filter(m => m.chat_id === 9001 && JSON.stringify(m.reply_markup || {}).includes('hbw:send:')).pop();
     const data = confirm && JSON.stringify(confirm.reply_markup).match(/hbw:send:[0-9a-f]+/)[0];
     if (!data) { problems.push('red packet confirmation not shown for ' + type); return null; }
-    await tap(xm, data, { message_id: 1, chat: pchat }); await wait(1500);
+    await tap(xm, data, { message_id: 1, chat: pchat }); await wait(800);
+    await say(xm, '135790'); await wait(800);
+    const pinMsg = seq; await say(xm, PIN); await wait(1500);
+    const toXm = (await sentNow()).filter(m => m.chat_id === 9001);
+    if (!toXm.some(m => /支付密码不正确/.test(m.text || ''))) problems.push('wrong payment password not reported');
+    if (!(await sentNow()).some(m => m.method === 'deleteMessage' && m.chat_id === 9001 && m.message_id === pinMsg)) problems.push('payment password message not deleted');
     return sql("select concat(code,' ',type,' ',total,' ',count,' ',chat_id,' ',message_id) from red_packets order by id desc limit 1").split(' ');
   };
   // Added through a startgroup link: "/start@bot hb" introduces the bot instead of opening a wizard.
@@ -483,7 +502,10 @@ async function toastText(page) { return page.$eval('#toast', e => e.hidden ? '' 
     const data = confirm && JSON.stringify(confirm.reply_markup).match(/hbw:send:[0-9a-f]+/)[0];
     if (!data) problems.push('group wizard confirmation not shown');
     else {
-      await tap(xm, data, wm); await wait(1500);
+      await tap(xm, data, wm); await wait(800);
+      if (!(await sentNow()).some(m => m.method === 'answerCallbackQuery' && (m.url || '').includes('start=hbpay'))) problems.push('group confirm did not open the private chat for the password');
+      await say(xm, '/start hbpay'); await wait(700);
+      await say(xm, PIN); await wait(1500);
       lucky = sql("select concat(code,' ',type,' ',total,' ',count,' ',chat_id,' ',message_id) from red_packets order by id desc limit 1").split(' ');
       if (Number(lucky[5]) !== wizard.mid) problems.push('the wizard message did not become the packet card');
     }

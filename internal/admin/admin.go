@@ -18,6 +18,7 @@ import (
 	"telegram-business-bot/internal/business"
 	"telegram-business-bot/internal/model"
 	"telegram-business-bot/internal/news"
+	"telegram-business-bot/internal/paypass"
 	"telegram-business-bot/internal/push"
 	"telegram-business-bot/internal/shop"
 	"telegram-business-bot/internal/store"
@@ -49,6 +50,7 @@ type Handler struct {
 	st        *store.Store
 	wallet    *wallet.Service
 	news      *news.Service
+	pay       *paypass.Service
 	support   *support.Service
 	tg        *telegram.Client
 	push      *push.Service
@@ -168,6 +170,7 @@ func (h *Handler) RegisterAPI(r *gin.Engine) {
 	api.GET("/redpackets/:id/claims", can("redpackets"), h.redPacketClaims)
 	api.GET("/users/:id/balances", can("users"), h.userBalances)
 	api.POST("/users/:id/adjust", can("users"), h.adjustBalance)
+	api.POST("/users/:id/paypass", can("users"), h.resetPayPassword)
 
 	api.GET("/addresses", can("addresses"), h.addresses)
 	api.POST("/addresses", can("addresses"), h.saveAddress)

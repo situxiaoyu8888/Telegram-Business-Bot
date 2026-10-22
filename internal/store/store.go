@@ -34,7 +34,7 @@ func New(mysqlDSN, redisAddr, redisPassword string, redisDB int) (*Store, error)
 		&model.ShopOrder{}, &model.ShopOrderItem{}, &model.ShopCoupon{}, &model.ShopUserCoupon{}, &model.ShopAfterSale{},
 		&model.ShopBanner{}, &model.ShopReview{}, &model.ShopMerchantEntry{}, &model.ShopSettlement{}, &model.ShopFavorite{}, &model.ShopView{}, &model.ShopMember{}, &model.ShopPointsLog{}, &model.ShopGroup{},
 		&model.ShopMerchantApplication{}, &model.ShopConversation{}, &model.ShopMessage{}, &model.AdminAuditLog{},
-		&model.WalletCurrency{}, &model.WalletExchange{}, &model.RedPacket{}, &model.RedPacketClaim{}, &model.RedPacketMessage{},
+		&model.WalletCurrency{}, &model.WalletExchange{}, &model.RedPacket{}, &model.RedPacketClaim{}, &model.RedPacketMessage{}, &model.PaymentPassword{},
 		&model.NewsCategory{}, &model.NewsArticle{}, &model.NewsFeed{}, &model.NewsChat{}, &model.NewsSubscription{}, &model.NewsDelivery{},
 	); err != nil {
 		return nil, fmt.Errorf("auto migrate: %w", err)

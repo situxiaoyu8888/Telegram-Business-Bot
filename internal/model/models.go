@@ -498,3 +498,13 @@ type RedPacketMessage struct {
 	InlineMessageID string    `gorm:"size:191;not null;uniqueIndex" json:"inline_message_id"`
 	CreatedAt       time.Time `json:"created_at"`
 }
+
+// PaymentPassword is a user's 6-digit payment password (bcrypt). Wrong attempts are counted
+// and lock it for a while.
+type PaymentPassword struct {
+	UserID      uint64     `gorm:"primaryKey;autoIncrement:false" json:"user_id"`
+	Hash        string     `gorm:"size:100;not null" json:"-"`
+	Failed      int        `gorm:"not null" json:"failed"`
+	LockedUntil *time.Time `json:"locked_until"`
+	UpdatedAt   time.Time  `json:"updated_at"`
+}

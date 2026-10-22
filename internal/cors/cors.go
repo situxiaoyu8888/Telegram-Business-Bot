@@ -26,7 +26,7 @@ func Allow(origins []string) gin.HandlerFunc {
 			h.Add("Vary", "Origin")
 			if c.Request.Method == http.MethodOptions {
 				h.Set("Access-Control-Allow-Methods", "GET, POST, DELETE")
-				h.Set("Access-Control-Allow-Headers", "Content-Type, X-Requested-With, X-Telegram-Init-Data, X-Upload-Token")
+				h.Set("Access-Control-Allow-Headers", "Content-Type, X-Requested-With, X-Telegram-Init-Data, X-Upload-Token, X-Pay-Password")
 				h.Set("Access-Control-Max-Age", "600")
 				c.AbortWithStatus(http.StatusNoContent)
 				return

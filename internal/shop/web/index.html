@@ -117,6 +117,9 @@ img{display:block;max-width:100%}
 .me-bal .n .cic{margin-right:3px}
 .asset .cic{font-size:20px;margin-right:10px;width:32px;height:32px}
 .asset .cic.flag{font-size:30px}
+.pin-mask{position:fixed;inset:0;background:#0008;display:grid;place-items:center;z-index:60;padding:16px}
+.pin-box{background:var(--card);border-radius:16px;padding:20px;width:min(320px,100%)}
+.pin-box input{width:100%;font-size:26px;letter-spacing:14px;text-align:center;padding:10px;border:1px solid var(--line);border-radius:10px;background:var(--bg);color:var(--ink);outline:0}
 .me-bal{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:14px}
 .me-bal>div{background:#ffffff1f;border-radius:10px;padding:8px;min-width:0}
 .me-bal .n{font-size:11px;opacity:.8;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -177,10 +180,23 @@ function toast(msg){const t=document.createElement('div');t.className='toast';t.
 function confirmBox(msg){return new Promise(res=>{if(tg?.showConfirm)tg.showConfirm(msg,ok=>res(ok));else res(window.confirm(msg))})}
 function haptic(type){try{tg?.HapticFeedback?.notificationOccurred(type)}catch(e){}}
 async function api(path,opt={}){
- const res=await fetch(document.querySelector('meta[name=api-base]').content+'/shop/api/'+path,{...opt,headers:{'Content-Type':'application/json','X-Telegram-Init-Data':initData}});
+ const res=await fetch(document.querySelector('meta[name=api-base]').content+'/shop/api/'+path,{...opt,headers:{'Content-Type':'application/json','X-Telegram-Init-Data':initData,...(opt.headers||{})}});
  let data;try{data=await res.json()}catch(e){throw Error('服务暂时不可用，请稍后重试')}
  if(!res.ok)throw Error(data.error||'请求失败');return data}
-const post=(path,body={})=>api(path,{method:'POST',body:JSON.stringify(body)});
+const post=(path,body={},headers={})=>api(path,{method:'POST',body:JSON.stringify(body),headers});
+// Paying and exchanging need the payment password (sent as X-Pay-Password). A user without one
+// sets it here first. Returns the password, '' when none is required, or null when cancelled.
+function pinPrompt(title,hint){return new Promise(res=>{const el=document.createElement('div');el.className='pin-mask';el.innerHTML=`<div class="pin-box"><div class="bold" style="font-size:16px">${esc(title)}</div><div class="muted small" style="margin:6px 0 14px">${esc(hint)}</div><input id="pinInput" type="password" inputmode="numeric" pattern="[0-9]*" maxlength="6" autocomplete="off" aria-label="支付密码"><div class="row" style="gap:8px;margin-top:14px"><button class="btn ghost" style="flex:1" id="pinCancel">取消</button><button class="btn" style="flex:1" id="pinOk">确定</button></div></div>`;document.body.append(el);const inp=el.querySelector('#pinInput');setTimeout(()=>inp.focus(),50);const done=v=>{el.remove();res(v)};el.querySelector('#pinCancel').onclick=()=>done(null);el.querySelector('#pinOk').onclick=()=>{const v=inp.value.trim();if(!/^\d{6}$/.test(v)){toast('请输入 6 位数字');return}done(v)};inp.onkeydown=e=>{if(e.key==='Enter')el.querySelector('#pinOk').click()}})}
+async function payAuth(hint){
+ let st;try{st=await api('pay-password')}catch(e){toast(e.message);return null}
+ if(!st.required)return '';
+ if(!st.set){
+  const a=await pinPrompt('设置支付密码','首次付款请设置 6 位数字支付密码，以后发红包、提现、付款都要用到');if(a==null)return null;
+  const b=await pinPrompt('确认支付密码','请再输入一次');if(b==null)return null;
+  if(a!==b){toast('两次输入不一致，请重新设置');return null}
+  try{await post('pay-password',{password:a})}catch(e){toast(e.message);return null}
+  return a}
+ return pinPrompt('输入支付密码',hint)}
 function newRequestID(){return crypto.randomUUID?crypto.randomUUID():Date.now().toString(36)+Math.random().toString(36).slice(2)}
 
 // ---- Routing ----
@@ -364,11 +380,11 @@ async function checkoutPage(v){
  bottomBar(`<div class="grow">实付 ${priceHTML(total.toFixed(6))}</div><button class="btn" id="pay" ${enough?'':'disabled'}>余额支付</button>`);
  $('pay').onclick=async()=>{
   if(needAddr&&!checkout.address_id){toast('请添加收货地址');return}
-  if(!(await confirmBox(`确认使用钱包余额支付 ${money(total.toFixed(6))} USDT？`)))return;
+  const pin=await payAuth(`使用钱包余额支付 ${money(total.toFixed(6))} USDT`);if(pin==null)return;
   $('pay').disabled=true;
   const groups=checkout.groups.map(g=>({items:g.items,delivery_type:g.delivery_type,user_coupon_id:g.user_coupon_id||0,use_points:!!g.use_points,group_mode:g.group_mode||'',group_id:g.group_id||0,remark:g.remark||''}));
   const body=multi?{request_id:checkout.request_id,address_id:checkout.address_id,from_cart:checkout.from_cart,groups}:{request_id:checkout.request_id,address_id:checkout.address_id,from_cart:checkout.from_cart,...groups[0]};
-  try{const r=await post('orders',body);haptic('success');checkout=null;refreshCartCount();location.replace(multi?'#/orders':r.group_id?'#/group/'+r.group_id:'#/order/'+r.id)}
+  try{const r=await post('orders',body,{'X-Pay-Password':pin});haptic('success');checkout=null;refreshCartCount();location.replace(multi?'#/orders':r.group_id?'#/group/'+r.group_id:'#/order/'+r.id)}
   catch(e){haptic('error');toast(e.message);$('pay').disabled=false}}}
 
 // ---- Orders ----
@@ -503,8 +519,9 @@ async function exchangePage(v){
  $('exSubmit').onclick=async()=>{const [f,t]=cur(),amount=$('exAmount').value.trim();
   if(!(Number(amount)>0)){toast('请输入兑换金额');return}
   if(Number(amount)>Number(f.available)){toast(f.name+' 可用余额不足');return}
+  const pin=await payAuth(`兑换 ${amount} ${f.name} → ${t.name}`);if(pin==null)return;
   $('exSubmit').disabled=true;
-  try{const r=await post('exchange',{from:f.code,to:t.code,amount,from_rate:f.rate,to_rate:t.rate,fee_rate:data.fee_rate,request_id:exState.rid});exState.rid='';haptic('success');toast(`兑换成功，到账 ${fmtAmt(r.received,t.decimals)} ${t.name}`);route()}
+  try{const r=await post('exchange',{from:f.code,to:t.code,amount,from_rate:f.rate,to_rate:t.rate,fee_rate:data.fee_rate,request_id:exState.rid},{'X-Pay-Password':pin});exState.rid='';haptic('success');toast(`兑换成功，到账 ${fmtAmt(r.received,t.decimals)} ${t.name}`);route()}
   catch(e){toast(e.message);if(/汇率已更新/.test(e.message)){exState.rid='';route()}else $('exSubmit').disabled=false}};
  refresh()}
 
