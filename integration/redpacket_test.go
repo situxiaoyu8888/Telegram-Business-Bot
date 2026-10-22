@@ -159,12 +159,22 @@ func TestRedPacketExpiryRefundsTheRest(t *testing.T) {
 	p := f.create(t, redpacket.CreateInput{Type: redpacket.TypeEqual, Amount: "2", Count: 4, RequestID: "rp-exp"})
 	_, _, err := f.svc.Claim(p.Code, claimerOf(grabber))
 	must(t, err)
+	must(t, f.svc.RememberInline(p.ID, "inline-1"))
+	must(t, f.svc.RememberInline(p.ID, "inline-1"))
+	if ids, err := f.svc.InlineMessages(p.ID); err != nil || len(ids) != 1 {
+		t.Fatal(ids, err)
+	}
+	var expired []string
+	f.svc.WithExpiredHook(func(_ context.Context, q model.RedPacket) { expired = append(expired, q.Code+":"+q.Status) })
 	must(t, f.db.Model(&model.RedPacket{}).Where("id = ?", p.ID).Update("expires_at", time.Now().Add(-time.Minute)).Error)
 	if _, _, err := f.svc.Claim(p.Code, claimerOf(f.user(t, 8302, "late"))); err == nil {
 		t.Fatal("expired packet claimed")
 	}
 	must(t, f.svc.ExpireDue(context.Background()))
 	must(t, f.svc.ExpireDue(context.Background())) // a second run must not refund again
+	if len(expired) != 1 || expired[0] != p.Code+":expired" {
+		t.Fatalf("expiry hook calls %v", expired)
+	}
 	if balanceOf(t, f.w, f.sender.ID, "USDT") != "98" || len(f.notices) != 1 {
 		t.Fatalf("sender balance %s, notices %v", balanceOf(t, f.w, f.sender.ID, "USDT"), f.notices)
 	}

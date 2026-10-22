@@ -459,9 +459,36 @@ async function toastText(page) { return page.$eval('#toast', e => e.hidden ? '' 
     await tap(xm, data, { message_id: 1, chat: pchat }); await wait(1500);
     return sql("select concat(code,' ',type,' ',total,' ',count,' ',chat_id,' ',message_id) from red_packets order by id desc limit 1").split(' ');
   };
-  await say(xm, '/hb@e2e_bot_111', group); await wait(1500);
-  if (!(await sentNow()).some(m => m.chat_id === -100555 && JSON.stringify(m.reply_markup || {}).includes('start=hb_-100555'))) problems.push('group /hb did not offer the private-chat link');
-  const lucky = await sendPacket('lucky', ['3', '3', '新年快乐']);
+  // Added through a startgroup link: "/start@bot hb" introduces the bot instead of opening a wizard.
+  await say(xh, '/start@e2e_bot_111 hb', group); await wait(1200);
+  if (!(await sentNow()).some(m => m.chat_id === -100555 && /红包机器人已加入本群/.test(m.text || ''))) problems.push('startgroup /start not answered with an introduction');
+  // In the group: /start opens the wizard as a group message; only its starter can use it, and
+  // answers are replies to it. The wizard message then becomes the packet card.
+  await say(xm, '/start@e2e_bot_111', group); await wait(1500);
+  const wizard = (await sentNow()).filter(m => m.chat_id === -100555 && m.method === 'sendMessage' && JSON.stringify(m.reply_markup || {}).includes('hbw:t:lucky')).pop();
+  let lucky = null;
+  if (!wizard) problems.push('group /start did not start the wizard in the group');
+  else {
+    const wm = { message_id: wizard.mid, chat: group };
+    const reply = (text) => inject({ message: { message_id: seq++, date: 1, text, from: xm, chat: group, reply_to_message: { message_id: wizard.mid } } });
+    await tap(xm, 'hbw:t:lucky', wm); await wait(700);
+    await tap(passer, 'hbw:c:USDT', wm); await wait(700);
+    if (!(await sentNow()).some(m => m.method === 'answerCallbackQuery' && m.show_alert && /只有发红包的人/.test(m.text || ''))) problems.push('others could use the group wizard');
+    const currencyStep = (await sentNow()).filter(m => m.method === 'editMessageText' && m.chat_id === -100555 && m.message_id === wizard.mid).pop();
+    if (!currencyStep || /可用/.test(JSON.stringify(currencyStep.reply_markup))) problems.push('group wizard shows balances or no currency step');
+    await tap(xm, 'hbw:c:USDT', wm); await wait(700);
+    await say(xm, '聊点别的', group); await wait(500); // not a reply: ignored by the wizard
+    for (const st of ['3', '3', '新年快乐']) { await reply(st); await wait(700); }
+    const confirm = (await sentNow()).filter(m => m.chat_id === -100555 && m.message_id === wizard.mid && JSON.stringify(m.reply_markup || {}).includes('hbw:send:')).pop();
+    const data = confirm && JSON.stringify(confirm.reply_markup).match(/hbw:send:[0-9a-f]+/)[0];
+    if (!data) problems.push('group wizard confirmation not shown');
+    else {
+      await tap(xm, data, wm); await wait(1500);
+      lucky = sql("select concat(code,' ',type,' ',total,' ',count,' ',chat_id,' ',message_id) from red_packets order by id desc limit 1").split(' ');
+      if (Number(lucky[5]) !== wizard.mid) problems.push('the wizard message did not become the packet card');
+    }
+    if ((await sentNow()).some(m => m.chat_id === 9001 && /发红包到群/.test(m.text || ''))) problems.push('group /hb still used the private chat');
+  }
   if (lucky) {
     console.log('  lucky packet', lucky.join(' '));
     if (lucky[1] !== 'lucky' || lucky[2] !== '3.000000' || lucky[4] !== '-100555' || lucky[5] === '0') problems.push('lucky packet wrong: ' + lucky.join(' '));
@@ -476,6 +503,12 @@ async function toastText(page) { return page.$eval('#toast', e => e.hidden ? '' 
     await inject({ inline_query: { id: 'iq' + seq++, from: xm, query: 'hb ' + lucky[0], offset: '' } }); await wait(1200);
     const iq = (await sentNow()).filter(m => m.method === 'answerInlineQuery').pop();
     if (!iq || iq.results.length !== 1 || !/抢红包/.test(JSON.stringify(iq.results[0].reply_markup))) problems.push('inline query did not offer the packet');
+    // The last share hides the claim button; a later tap only gets "已领完".
+    await tap({ id: 9006, first_name: '阿三' }, 'hb:' + lucky[0], gm); await wait(1200);
+    const finished = (await sentNow()).filter(m => m.method === 'editMessageText' && m.chat_id === -100555 && m.message_id === Number(lucky[5])).pop();
+    if (!finished || !/已领完/.test(finished.text) || JSON.stringify(finished.reply_markup).includes('hb:' + lucky[0])) problems.push('finished packet still shows the claim button');
+    await tap({ id: 9007, first_name: '阿四' }, 'hb:' + lucky[0], gm); await wait(1000);
+    if (!(await sentNow()).some(m => m.method === 'answerCallbackQuery' && /已被领完/.test(m.text || ''))) problems.push('tap on a finished packet not answered');
   }
   const pw = await sendPacket('password', ['2', '2', '芝麻开门', 'default-greeting']);
   if (pw) {
@@ -492,6 +525,8 @@ async function toastText(page) { return page.$eval('#toast', e => e.hidden ? '' 
     const toPasser = (await sentNow()).filter(m => m.chat_id === 9005).map(m => m.text || '');
     if (!toPasser.some(t => /请发送口令/.test(t)) || !toPasser.some(t => /口令不对/.test(t)) || !toPasser.some(t => /抢到/.test(t))) problems.push('password claim in private chat failed: ' + toPasser.join(' | '));
     if (sql(`select status from red_packets where code='${pw[0]}'`) !== 'finished') problems.push('password packet not finished after two claims');
+    const pwCard = (await sentNow()).filter(m => m.method === 'editMessageText' && m.chat_id === -100555 && m.message_id === Number(pw[5])).pop();
+    if (!pwCard || JSON.stringify(pwCard.reply_markup).includes('hb:' + pw[0])) problems.push('finished password packet still shows its button');
   }
   const xmBal = sql(`select available from wallet_accounts where user_id=${uid} and currency='USDT'`);
   if (xmBal !== '95.000000') problems.push('sender not charged 5 USDT for two packets: ' + xmBal);
@@ -523,7 +558,7 @@ async function toastText(page) { return page.$eval('#toast', e => e.hidden ? '' 
   const passerHomes = (await sentNow()).filter(m => m.bot === 222 && m.chat_id === 9005 && /红包机器人/.test(m.text || '')).length;
   if (passerHomes !== 1) problems.push('double /start answered ' + passerHomes + ' times');
   const groupCmds = (await sentNow()).filter(m => m.method === 'setMyCommands' && m.bot === 222 && m.scope && m.scope.type === 'all_group_chats');
-  if (!groupCmds.some(m => JSON.stringify(m.commands).includes('"hb"'))) problems.push('/hb not registered for groups');
+  if (!groupCmds.some(m => JSON.stringify(m.commands).includes('"start"'))) problems.push('/start not registered for groups');
 
   step('news bot: categories, subscriptions, groups/channels, publishing, RSS and search');
   const nb = u => fetch(TG + '/inject', { method: 'POST', body: JSON.stringify({ _bot: 333, ...u }) });

@@ -489,3 +489,12 @@ type NewsDelivery struct {
 	SentAt    *time.Time `json:"sent_at"`
 	CreatedAt time.Time  `json:"created_at"`
 }
+
+// RedPacketMessage is a copy of a packet card sent through inline mode, remembered when someone
+// presses its button so every copy can be updated once the packet is finished or expires.
+type RedPacketMessage struct {
+	ID              uint64    `gorm:"primaryKey" json:"id"`
+	PacketID        uint64    `gorm:"not null;index" json:"packet_id"`
+	InlineMessageID string    `gorm:"size:191;not null;uniqueIndex" json:"inline_message_id"`
+	CreatedAt       time.Time `json:"created_at"`
+}

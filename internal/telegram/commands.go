@@ -63,8 +63,8 @@ func (r *Router) SyncCommandMenu(ctx context.Context) {
 		}
 		err := r.client.registerCommandMenu(attempt, commands, r.menuButton)
 		if err == nil && r.packets != nil {
-			// Groups show only the red packet command, typed as "/hb" in the chat.
-			err = r.client.call(attempt, "setMyCommands", map[string]any{"commands": []BotCommand{{"hb", "发红包"}}, "scope": map[string]string{"type": "all_group_chats"}}, nil)
+			// In groups /start sends a red packet; it is the only command listed there.
+			err = r.client.call(attempt, "setMyCommands", map[string]any{"commands": []BotCommand{{"start", "发红包"}}, "scope": map[string]string{"type": "all_group_chats"}}, nil)
 		}
 		cancel()
 		if err == nil {

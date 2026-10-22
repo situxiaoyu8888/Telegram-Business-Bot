@@ -291,6 +291,10 @@ func (r *Router) handleCallback(ctx context.Context, cb *CallbackQuery) {
 		r.handlePacketButton(ctx, cb, u)
 		return
 	}
+	if strings.HasPrefix(cb.Data, "hbw:") && r.packets != nil && cb.Message != nil && cb.Message.Chat.ID != cb.From.ID {
+		r.handleGroupWizardCallback(ctx, cb, u)
+		return
+	}
 	_ = r.client.AnswerCallback(ctx, cb.ID, "")
 	if cb.Message == nil || u == nil || u.Status != 1 || cb.Message.Chat.ID != cb.From.ID {
 		return

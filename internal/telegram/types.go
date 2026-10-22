@@ -33,6 +33,10 @@ type Message struct {
 	Chat      Chat   `json:"chat"`
 	Text      string `json:"text,omitempty"`
 	Caption   string `json:"caption,omitempty"`
+	// ReplyToMessage is the message this one answers (only its ID is used).
+	ReplyToMessage *struct {
+		MessageID int `json:"message_id"`
+	} `json:"reply_to_message,omitempty"`
 }
 
 type User struct {

@@ -108,6 +108,12 @@ func New(cfg config.Config, logger *zap.Logger) (*App, error) {
 		}
 		return r.WithMenuButton(shopButton)
 	}
+	// An expired packet's cards lose their claim button.
+	packets.WithExpiredHook(func(ctx context.Context, p model.RedPacket) {
+		if sender, err := bots.Sender(ctx, p.BotID); err == nil {
+			telegram.RefreshPacketMessages(ctx, sender, packets, p.Code, "", logger)
+		}
+	})
 	packets.WithNotifier(func(ctx context.Context, botID uint64, telegramUserID int64, html string) error {
 		sender, err := bots.Sender(ctx, botID)
 		if err != nil {

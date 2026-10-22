@@ -57,11 +57,12 @@ func userErr(format string, args ...any) error { return UserError{fmt.Sprintf(fo
 type Notifier func(ctx context.Context, botID uint64, telegramUserID int64, html string) error
 
 type Service struct {
-	st     *store.Store
-	wallet *wallet.Service
-	notify Notifier
-	logger *zap.Logger
-	now    func() time.Time
+	st        *store.Store
+	wallet    *wallet.Service
+	notify    Notifier
+	onExpired func(context.Context, model.RedPacket)
+	logger    *zap.Logger
+	now       func() time.Time
 }
 
 func New(st *store.Store, w *wallet.Service, logger *zap.Logger) *Service {
@@ -73,6 +74,31 @@ func New(st *store.Store, w *wallet.Service, logger *zap.Logger) *Service {
 
 // WithNotifier sets how senders are told about refunds of expired packets.
 func (s *Service) WithNotifier(n Notifier) *Service { s.notify = n; return s }
+
+// WithExpiredHook sets what runs after a packet expires (updating its messages).
+func (s *Service) WithExpiredHook(f func(context.Context, model.RedPacket)) *Service {
+	s.onExpired = f
+	return s
+}
+
+// RememberInline records an inline-mode copy of a packet's card.
+func (s *Service) RememberInline(packetID uint64, inlineMessageID string) error {
+	if inlineMessageID == "" {
+		return nil
+	}
+	err := s.st.DB.Create(&model.RedPacketMessage{PacketID: packetID, InlineMessageID: inlineMessageID}).Error
+	if store.IsDuplicate(err) {
+		return nil
+	}
+	return err
+}
+
+// InlineMessages returns the remembered inline-mode copies of a packet's card.
+func (s *Service) InlineMessages(packetID uint64) ([]string, error) {
+	var ids []string
+	err := s.st.DB.Model(&model.RedPacketMessage{}).Where("packet_id = ?", packetID).Pluck("inline_message_id", &ids).Error
+	return ids, err
+}
 
 // CreateInput describes a new packet. Amount is the total for lucky and password packets and
 // the amount of each share for equal and exclusive packets.
@@ -456,6 +482,11 @@ func (s *Service) ExpireDue(ctx context.Context) error {
 		if err != nil {
 			s.logger.Error("red packet expiry failed", zap.Uint64("packet_id", d.ID), zap.Error(err))
 			continue
+		}
+		if p.Status == StatusActive && !s.now().Before(p.ExpiresAt) && s.onExpired != nil {
+			expired := p
+			expired.Status = StatusExpired
+			s.onExpired(ctx, expired)
 		}
 		if refund.IsPositive() && s.notify != nil {
 			name := p.Currency

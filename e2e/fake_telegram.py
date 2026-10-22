@@ -58,7 +58,7 @@ class H(BaseHTTPRequestHandler):
         if method in ("sendMessage", "sendPhoto", "sendVideo", "editMessageText", "editMessageCaption", "copyMessage"):
             with lock:
                 next_message[0] += 1
-                sent.append({"bot": bot_id, "method": method, **data})
+                sent.append({"bot": bot_id, "method": method, **data, "mid": next_message[0]})
                 mid = next_message[0]
             return self.reply({"ok": True, "result": {"message_id": mid, "chat": {"id": data.get("chat_id")}, "date": int(time.time())}})
         if method in ("answerCallbackQuery", "answerInlineQuery", "setMyCommands"):

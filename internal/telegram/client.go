@@ -151,6 +151,11 @@ func (c *Client) SendMessageID(ctx context.Context, chatID int64, text string, k
 	return resp.Result.MessageID, nil
 }
 
+// DeleteMessage deletes a message (the bot's own, or any when it is a group admin).
+func (c *Client) DeleteMessage(ctx context.Context, chatID int64, messageID int) error {
+	return c.call(ctx, "deleteMessage", map[string]any{"chat_id": chatID, "message_id": messageID}, nil)
+}
+
 // ReplyMessage sends an HTML message in reply to another one in the same chat.
 func (c *Client) ReplyMessage(ctx context.Context, chatID int64, replyTo int, text string, kb *InlineKeyboardMarkup) error {
 	payload := map[string]any{"chat_id": chatID, "text": text, "parse_mode": "HTML", "reply_parameters": map[string]any{"message_id": replyTo, "allow_sending_without_reply": true}}
