@@ -488,8 +488,7 @@ async function exchangePage(v){
  $('app').innerHTML=`<div class="card ex-box"><div class="ex-side"><div class="row between"><span class="muted small">兑出</span><select id="exFrom" aria-label="兑出币种">${opts(exState.from)}</select></div><div class="ex-amt"><input id="exAmount" inputmode="decimal" placeholder="0" autocomplete="off"><button class="btn ghost sm" id="exAll">全部</button></div><div class="muted small" id="exAvail"></div></div>
  <button class="ex-swap" id="exSwap" aria-label="交换币种">⇅</button>
  <div class="ex-side"><div class="row between"><span class="muted small">兑入（预计到账）</span><select id="exTo" aria-label="兑入币种">${opts(exState.to)}</select></div><div class="ex-get" id="exGet">0</div></div>
- <div class="ex-rate muted small" id="exRate"></div></div>`+assets+records;
- bottomBar('<button class="btn grow" id="exSubmit">确认兑换</button>');
+ <div class="ex-rate muted small" id="exRate"></div><button class="btn" id="exSubmit" style="width:100%;margin-top:14px">确认兑换</button></div>`+assets+records;
  const cur=()=>[byCode[$('exFrom').value],byCode[$('exTo').value]];
  const rateOf=(f,t)=>Number(t.rate)*(1-fee)/Number(f.rate);
  const refresh=()=>{const [f,t]=cur();const r=rateOf(f,t),amt=Number($('exAmount').value)||0;
