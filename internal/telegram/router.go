@@ -252,9 +252,15 @@ func (r *Router) handleCallback(ctx context.Context, cb *CallbackQuery) {
 		return
 	}
 	switch {
-	case strings.HasPrefix(cb.Data, "withdraw:network:"):
-		network := strings.TrimPrefix(cb.Data, "withdraw:network:")
-		if network != "TRC20" {
+	case strings.HasPrefix(cb.Data, "withdraw:cur:"), cb.Data == "withdraw:network:TRC20":
+		// "withdraw:network:TRC20" comes from buttons sent before withdrawals had currencies.
+		code := strings.TrimPrefix(cb.Data, "withdraw:cur:")
+		if cb.Data == "withdraw:network:TRC20" {
+			code = "USDT"
+		}
+		cur, err := r.wallet.Currency(code)
+		if err != nil || !cur.Withdrawable {
+			_ = r.client.EditMessage(ctx, chatID, msgID, "该币种暂不支持提现。", ptrKB(BackHomeKeyboard()))
 			return
 		}
 		nonce := make([]byte, 16)
@@ -262,23 +268,26 @@ func (r *Router) handleCallback(ctx context.Context, cb *CallbackQuery) {
 			return
 		}
 		requestID := hex.EncodeToString(nonce)
-		_ = r.sessions.Set(ctx, userID, session.Session{Scene: "withdraw", Step: "input_amount", Data: map[string]any{"network": network, "request_id": requestID}})
-		_ = r.client.EditMessage(ctx, chatID, msgID, "<b>💸 提现 - "+htmlEscape(network)+"</b>\n\n请输入提现金额，例如 <code>100.5</code>。\n发送 /cancel 可取消。", ptrKB(BackHomeKeyboard()))
+		_ = r.sessions.Set(ctx, userID, session.Session{Scene: "withdraw", Step: "input_amount", Data: map[string]any{"currency": cur.Code, "name": cur.Name, "kind": cur.Kind, "request_id": requestID}})
+		rule := ""
+		if cur.Code != "USDT" {
+			rule = fmt.Sprintf("\n最低提现：<code>%s</code>，每笔手续费：<code>%s</code>", trimZeros(cur.MinWithdraw), trimZeros(cur.WithdrawFee))
+		}
+		_ = r.client.EditMessage(ctx, chatID, msgID, "<b>💸 提现 - "+htmlEscape(cur.Name)+"</b>\n\n请输入提现金额，例如 <code>100.5</code>。"+rule+"\n发送 /cancel 可取消。", ptrKB(BackHomeKeyboard()))
 	case strings.HasPrefix(cb.Data, "withdraw:confirm:"):
 		s, _ := r.sessions.Get(ctx, userID)
 		if s == nil || s.Scene != "withdraw" || s.Step != "confirm" || fmt.Sprint(s.Data["request_id"]) != strings.TrimPrefix(cb.Data, "withdraw:confirm:") {
 			return
 		}
 		amount := fmt.Sprint(s.Data["amount"])
-		network := fmt.Sprint(s.Data["network"])
 		address := fmt.Sprint(s.Data["address"])
-		order, err := r.wallet.CreateWithdrawal(u.ID, network, address, amount, fmt.Sprint(s.Data["request_id"]))
+		order, err := r.wallet.CreateCurrencyWithdrawal(u.ID, withdrawCurrency(s), address, amount, fmt.Sprint(s.Data["request_id"]))
 		if err != nil {
 			_ = r.client.EditMessage(ctx, chatID, msgID, "提现提交失败："+htmlEscape(err.Error()), ptrKB(BackHomeKeyboard()))
 			return
 		}
 		_ = r.sessions.Clear(ctx, userID)
-		_ = r.client.EditMessage(ctx, chatID, msgID, fmt.Sprintf("<b>✅ 提现申请已提交</b>\n\n订单：<code>#%d</code>\n状态：待审核\n金额：<code>%s USDT</code>\n\n审核通过后由独立钱包/签名服务执行链上转账。", order.ID, order.Amount), ptrKB(BackHomeKeyboard()))
+		_ = r.client.EditMessage(ctx, chatID, msgID, fmt.Sprintf("<b>✅ 提现申请已提交</b>\n\n订单：<code>#%d</code>\n状态：待审核\n金额：<code>%s %s</code>\n\n%s", order.ID, trimZeros(order.Amount), htmlEscape(withdrawName(s)), map[bool]string{true: "审核通过后由财务人工打款。", false: "审核通过后由独立钱包/签名服务执行链上转账。"}[order.Network == "BANK"]), ptrKB(BackHomeKeyboard()))
 	case cb.Data == "withdraw:cancel":
 		_ = r.sessions.Clear(ctx, userID)
 		r.sendHome(ctx, chatID, userID)
@@ -355,11 +364,23 @@ func (r *Router) dispatchMenu(ctx context.Context, cb *CallbackQuery, u *model.T
 		text := fmt.Sprintf("<b>👤 个人中心</b>\n\nTelegram ID：<code>%d</code>\n用户名：@%s\n推广码：<code>%s</code>\n上级用户ID：<code>%s</code>", u.TelegramUserID, empty(u.Username, "-"), u.ReferralCode, parent)
 		_ = r.menuResponse(ctx, chatID, msgID, text, ptrKB(BackHomeKeyboard()))
 	case "wallet":
-		av, fr, err := r.wallet.Balance(u.ID)
+		balances, err := r.wallet.Balances(u.ID)
 		if err != nil {
 			return
 		}
-		_ = r.menuResponse(ctx, chatID, msgID, fmt.Sprintf("<b>💰 我的钱包</b>\n\n可用：<code>%s USDT</code>\n冻结：<code>%s USDT</code>", av.StringFixed(6), fr.StringFixed(6)), ptrKB(BackHomeKeyboard()))
+		var b strings.Builder
+		b.WriteString("<b>💰 我的钱包</b>\n")
+		for _, x := range balances {
+			// USDT (the shop currency) is always listed; other currencies once they hold money.
+			if x.Code != "USDT" && isZero(x.Available) && isZero(x.Frozen) {
+				continue
+			}
+			fmt.Fprintf(&b, "\n<b>%s</b>\n可用：<code>%s</code>", htmlEscape(x.Name), x.Available)
+			if !isZero(x.Frozen) {
+				fmt.Fprintf(&b, "　冻结：<code>%s</code>", x.Frozen)
+			}
+		}
+		_ = r.menuResponse(ctx, chatID, msgID, b.String(), ptrKB(BackHomeKeyboard()))
 	case "deposit":
 		var a model.DepositAddress
 		err := r.store.DB.Where("user_id=? AND network='TRC20' AND status=1", u.ID).First(&a).Error
@@ -375,7 +396,11 @@ func (r *Router) dispatchMenu(ctx context.Context, cb *CallbackQuery, u *model.T
 		_ = r.menuResponse(ctx, chatID, msgID, "<b>💵 USDT TRC20 充值</b>\n\n地址：\n<code>"+htmlEscape(addr)+"</code>\n\n⚠️ "+htmlEscape(notice), ptrKB(BackHomeKeyboard()))
 	case "withdraw":
 		_ = r.sessions.Set(ctx, u.TelegramUserID, session.Session{Scene: "withdraw", Step: "select_network", Data: map[string]any{}})
-		_ = r.menuResponse(ctx, chatID, msgID, "<b>💸 USDT 提现</b>\n\n请选择网络：", ptrKB(WithdrawKeyboard()))
+		list, err := r.wallet.Currencies(true)
+		if err != nil {
+			return
+		}
+		_ = r.menuResponse(ctx, chatID, msgID, "<b>💸 提现</b>\n\n请选择提现币种：", ptrKB(WithdrawKeyboard(list)))
 	case "records":
 		var rows []model.WalletTransaction
 		_ = r.store.DB.Where("user_id=?", u.ID).Order("id desc").Limit(10).Find(&rows).Error
@@ -419,7 +444,7 @@ func (r *Router) dispatchMenu(ctx context.Context, cb *CallbackQuery, u *model.T
 			var b strings.Builder
 			b.WriteString("<b>💸 待审提现</b>\n\n")
 			for _, x := range rows {
-				b.WriteString(fmt.Sprintf("#%d 用户%d <code>%s USDT</code>\n", x.ID, x.UserID, x.Amount))
+				b.WriteString(fmt.Sprintf("#%d 用户%d <code>%s %s</code>\n", x.ID, x.UserID, trimZeros(x.Amount), x.Currency))
 			}
 			if len(rows) == 0 {
 				b.WriteString("暂无待审提现")
@@ -464,17 +489,17 @@ func (r *Router) handleSessionInput(ctx context.Context, m *Message, u *model.Te
 			s.Data["amount"] = amount.Truncate(6).StringFixed(6)
 			s.Step = "input_address"
 			_ = r.sessions.Set(ctx, m.From.ID, *s)
-			_ = r.client.SendMessage(ctx, m.Chat.ID, "请输入 TRON/TRC20 提现地址：", nil)
+			_ = r.client.SendMessage(ctx, m.Chat.ID, "请输入"+wallet.WithdrawTarget(withdrawKind(s))+"：", nil)
 		case "input_address":
 			addr := strings.TrimSpace(m.Text)
-			if !wallet.ValidTRONAddress(addr) {
-				_ = r.client.SendMessage(ctx, m.Chat.ID, "地址格式看起来不正确，请输入以 T 开头的 TRON 地址。", nil)
+			if err := wallet.CheckWithdrawAddress(withdrawKind(s), addr); err != nil {
+				_ = r.client.SendMessage(ctx, m.Chat.ID, err.Error()+"。", nil)
 				return
 			}
 			s.Data["address"] = addr
 			s.Step = "confirm"
 			_ = r.sessions.Set(ctx, m.From.ID, *s)
-			text := fmt.Sprintf("<b>确认提现</b>\n\n网络：<code>%s</code>\n金额：<code>%s USDT</code>\n地址：<code>%s</code>", htmlEscape(fmt.Sprint(s.Data["network"])), htmlEscape(fmt.Sprint(s.Data["amount"])), htmlEscape(addr))
+			text := fmt.Sprintf("<b>确认提现</b>\n\n币种：<code>%s</code>\n金额：<code>%s</code>\n%s：<code>%s</code>", htmlEscape(withdrawName(s)), htmlEscape(trimZeros(fmt.Sprint(s.Data["amount"]))), map[bool]string{true: "收款信息", false: "地址"}[withdrawKind(s) == wallet.KindFiat], htmlEscape(addr))
 			_ = r.client.SendMessage(ctx, m.Chat.ID, text, ptrKB(ConfirmWithdrawKeyboard(fmt.Sprint(s.Data["request_id"]))))
 		}
 	case "support":
@@ -574,3 +599,39 @@ func (r *Router) WithBotID(id uint64) *Router { r.botID = id; return r }
 
 // WithMenuButton sets the input field's menu button registered by SyncCommandMenu.
 func (r *Router) WithMenuButton(b MenuButton) *Router { r.menuButton = b; return r }
+
+// Withdrawal sessions started before currencies existed carry only network TRC20 (USDT).
+func withdrawCurrency(s *session.Session) string {
+	if c, ok := s.Data["currency"].(string); ok && c != "" {
+		return c
+	}
+	return "USDT"
+}
+
+func withdrawName(s *session.Session) string {
+	if n, ok := s.Data["name"].(string); ok && n != "" {
+		return n
+	}
+	return "USDT-TRC20"
+}
+
+func withdrawKind(s *session.Session) string {
+	if k, ok := s.Data["kind"].(string); ok && k != "" {
+		return k
+	}
+	return wallet.KindTRC20
+}
+
+func isZero(v string) bool {
+	d, err := decimal.NewFromString(v)
+	return err == nil && d.IsZero()
+}
+
+// trimZeros shows a decimal without trailing zeros ("10.500000" → "10.5").
+func trimZeros(v string) string {
+	d, err := decimal.NewFromString(v)
+	if err != nil {
+		return v
+	}
+	return d.String()
+}

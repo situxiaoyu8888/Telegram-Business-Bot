@@ -30,7 +30,7 @@ func TestWithdrawalRejectsInvalidInputsBeforeDB(t *testing.T) {
 func TestWithdrawalReplayDoesNotFreezeAgain(t *testing.T) {
 	db := testutil.DB(t,
 		testutil.Step{Contains: "FOR UPDATE", Columns: []string{"id", "user_id", "currency", "available", "frozen"}, Rows: [][]driver.Value{{int64(1), int64(1), "USDT", "90.000000", "10.000000"}}},
-		testutil.Step{Contains: "request_id=?", Columns: []string{"id", "user_id", "network", "address", "amount", "status", "request_id"}, Rows: [][]driver.Value{{int64(17), int64(1), "TRC20", validAddress, "10.000000", "pending", "same-request"}}},
+		testutil.Step{Contains: "request_id=?", Columns: []string{"id", "user_id", "network", "currency", "address", "amount", "status", "request_id"}, Rows: [][]driver.Value{{int64(17), int64(1), "TRC20", "USDT", validAddress, "10.000000", "pending", "same-request"}}},
 	)
 	order, err := New(&store.Store{DB: db}, "USDT", "1", "0").CreateWithdrawal(1, "TRC20", validAddress, "10", "same-request")
 	if err != nil || order.ID != 17 {

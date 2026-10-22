@@ -325,3 +325,36 @@ type AdminAuditLog struct {
 	DurationMS int64     `gorm:"not null" json:"duration_ms"`
 	CreatedAt  time.Time `gorm:"index" json:"created_at"`
 }
+
+// WalletCurrency is a currency users can hold. Rate is how many units of it one USDT buys; it
+// drives exchanges between currencies. Code "USDT" is the TRC20 token the deposit watcher and the
+// shop use; other codes are credited by the console (or by exchange).
+type WalletCurrency struct {
+	ID           uint64    `gorm:"primaryKey" json:"id"`
+	Code         string    `gorm:"size:16;uniqueIndex;not null" json:"code"`
+	Name         string    `gorm:"size:32;not null" json:"name"`
+	Kind         string    `gorm:"size:16;not null;default:fiat" json:"kind"` // trc20, erc20 or fiat
+	Rate         string    `gorm:"type:decimal(24,8);not null;default:1" json:"rate"`
+	Decimals     int       `gorm:"not null" json:"decimals"` // zero values must be written, so no defaults
+	MinWithdraw  string    `gorm:"type:decimal(24,6);not null;default:0" json:"min_withdraw"`
+	WithdrawFee  string    `gorm:"type:decimal(24,6);not null;default:0" json:"withdraw_fee"`
+	Exchangeable bool      `gorm:"not null" json:"exchangeable"`
+	Withdrawable bool      `gorm:"not null" json:"withdrawable"`
+	Enabled      bool      `gorm:"not null" json:"enabled"`
+	Sort         int       `gorm:"not null" json:"sort"`
+	UpdatedAt    time.Time `json:"updated_at"`
+}
+
+// WalletExchange is one completed exchange between two of a user's balances.
+type WalletExchange struct {
+	ID           uint64    `gorm:"primaryKey" json:"id"`
+	UserID       uint64    `gorm:"index;not null" json:"user_id"`
+	RequestID    string    `gorm:"size:64;uniqueIndex;not null" json:"-"`
+	FromCurrency string    `gorm:"size:16;not null" json:"from_currency"`
+	ToCurrency   string    `gorm:"size:16;not null" json:"to_currency"`
+	Amount       string    `gorm:"type:decimal(24,6);not null" json:"amount"`
+	Received     string    `gorm:"type:decimal(24,6);not null" json:"received"`
+	Rate         string    `gorm:"type:decimal(30,12);not null" json:"rate"` // units of ToCurrency per FromCurrency, after the fee
+	FeeRate      string    `gorm:"type:decimal(10,6);not null" json:"fee_rate"`
+	CreatedAt    time.Time `gorm:"index" json:"created_at"`
+}

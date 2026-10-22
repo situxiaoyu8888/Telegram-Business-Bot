@@ -116,6 +116,9 @@ type digestNotifier struct {
 }
 
 func (digestNotifier) Notify(context.Context, uint64, int64, string, *shop.Link) error { return nil }
+func (d digestNotifier) NotifyMerchant(ctx context.Context, id int64, html string) error {
+	return d.NotifyStaff(ctx, []int64{id}, html)
+}
 func (d digestNotifier) NotifyStaff(_ context.Context, ids []int64, html string) error {
 	if !strings.Contains(html, "待办") {
 		return nil

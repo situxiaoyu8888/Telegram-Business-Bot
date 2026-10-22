@@ -38,11 +38,12 @@ const (
 )
 
 // Notifier delivers shop messages: Notify reaches a buyer through the bot they shopped from,
-// NotifyStaff reaches administrators and merchant contacts.
+// NotifyStaff reaches administrators and NotifyMerchant a merchant's notification contact.
 type Notifier interface {
 	// link, when set, adds a button that opens that shop page.
 	Notify(ctx context.Context, botID uint64, telegramUserID int64, html string, link *Link) error
 	NotifyStaff(ctx context.Context, chatIDs []int64, html string) error
+	NotifyMerchant(ctx context.Context, chatID int64, html string) error
 }
 
 // Link is a button that opens a page of the H5 shop, e.g. Fragment "/order/12".
@@ -79,7 +80,8 @@ func userErr(format string, args ...any) error { return UserError{fmt.Sprintf(fo
 // IsUserError reports whether err carries a message meant for people rather than logs.
 func IsUserError(err error) bool {
 	var u UserError
-	return errors.As(err, &u)
+	var w wallet.UserError
+	return errors.As(err, &u) || errors.As(err, &w)
 }
 
 // parseAmount accepts a non-negative USDT amount with at most 6 decimal places.
@@ -139,25 +141,33 @@ func (s *Service) notifyStaff(merchantID uint64, html string) {
 	if s.notifier == nil {
 		return
 	}
-	ids := append([]int64{}, s.staff...)
+	// A merchant contact who is also an administrator gets the staff message only.
+	var merchantChat int64
 	var m model.Merchant
 	if merchantID != 0 && s.st.DB.Select("notify_chat_id").First(&m, merchantID).Error == nil && m.NotifyChatID != 0 {
-		dup := false
-		for _, id := range ids {
-			dup = dup || id == m.NotifyChatID
-		}
-		if !dup {
-			ids = append(ids, m.NotifyChatID)
+		merchantChat = m.NotifyChatID
+		for _, id := range s.staff {
+			if id == merchantChat {
+				merchantChat = 0
+			}
 		}
 	}
-	if len(ids) == 0 {
+	if len(s.staff) == 0 && merchantChat == 0 {
 		return
 	}
+	staff := append([]int64{}, s.staff...)
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		if err := s.notifier.NotifyStaff(ctx, ids, html); err != nil && s.logger != nil {
-			s.logger.Warn("shop staff notification failed", zap.Error(err))
+		if len(staff) > 0 {
+			if err := s.notifier.NotifyStaff(ctx, staff, html); err != nil && s.logger != nil {
+				s.logger.Warn("shop staff notification failed", zap.Error(err))
+			}
+		}
+		if merchantChat != 0 {
+			if err := s.notifier.NotifyMerchant(ctx, merchantChat, html); err != nil && s.logger != nil {
+				s.logger.Warn("shop merchant notification failed", zap.Uint64("merchant_id", merchantID), zap.Error(err))
+			}
 		}
 	}()
 }

@@ -1,5 +1,7 @@
 package telegram
 
+import "telegram-business-bot/internal/model"
+
 func btn(text, data string) InlineKeyboardButton {
 	return InlineKeyboardButton{Text: text, CallbackData: data}
 }
@@ -24,13 +26,22 @@ func BackHomeKeyboard() InlineKeyboardMarkup {
 	}
 }
 
-func WithdrawKeyboard() InlineKeyboardMarkup {
-	return InlineKeyboardMarkup{
-		InlineKeyboard: [][]InlineKeyboardButton{
-			{btn("TRC20", "withdraw:network:TRC20")},
-			{btn("取消", "home")},
-		},
+// WithdrawKeyboard offers the withdrawable currencies, two per row.
+func WithdrawKeyboard(currencies []model.WalletCurrency) InlineKeyboardMarkup {
+	var rows [][]InlineKeyboardButton
+	for _, c := range currencies {
+		if !c.Enabled || !c.Withdrawable {
+			continue
+		}
+		b := btn(c.Name, "withdraw:cur:"+c.Code)
+		if n := len(rows); n > 0 && len(rows[n-1]) < 2 {
+			rows[n-1] = append(rows[n-1], b)
+		} else {
+			rows = append(rows, []InlineKeyboardButton{b})
+		}
 	}
+	rows = append(rows, []InlineKeyboardButton{btn("取消", "home")})
+	return InlineKeyboardMarkup{InlineKeyboard: rows}
 }
 
 func ConfirmWithdrawKeyboard(requestID string) InlineKeyboardMarkup {

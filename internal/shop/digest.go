@@ -135,7 +135,7 @@ func (s *Service) SendDigest(ctx context.Context, now time.Time) (*Digest, error
 			continue
 		}
 		html := fmt.Sprintf("📋 <b>%s · 今日待办</b>\n\n%s\n\n请登录后台处理。", htmlEscape(t.MerchantName), strings.Join(todoLines(t), "\n"))
-		if err := s.notifier.NotifyStaff(ctx, []int64{t.NotifyChatID}, html); err == nil {
+		if err := s.notifier.NotifyMerchant(ctx, t.NotifyChatID, html); err == nil {
 			d.Sent++
 		}
 	}

@@ -157,6 +157,13 @@ func (h *Handler) RegisterAPI(r *gin.Engine) {
 
 	api.GET("/deposits", can("deposits"), h.deposits)
 
+	// Currency names label balances, withdrawals and exchanges.
+	api.GET("/currencies", can("currencies", "users", "withdrawals", "exchanges"), h.currencies)
+	api.POST("/currencies", can("currencies"), h.saveCurrency)
+	api.GET("/exchanges", can("exchanges"), h.exchanges)
+	api.GET("/users/:id/balances", can("users"), h.userBalances)
+	api.POST("/users/:id/adjust", can("users"), h.adjustBalance)
+
 	api.GET("/addresses", can("addresses"), h.addresses)
 	api.POST("/addresses", can("addresses"), h.saveAddress)
 	api.POST("/addresses/:id/rescan", can("addresses"), func(c *gin.Context) {

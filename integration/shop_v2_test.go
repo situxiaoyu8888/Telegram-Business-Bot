@@ -219,6 +219,9 @@ type capturedNotice struct {
 type fakeNotifier struct{ staff chan capturedNotice }
 
 func (fakeNotifier) Notify(context.Context, uint64, int64, string, *shop.Link) error { return nil }
+func (n fakeNotifier) NotifyMerchant(ctx context.Context, id int64, html string) error {
+	return n.NotifyStaff(ctx, []int64{id}, html)
+}
 func (n fakeNotifier) NotifyStaff(_ context.Context, ids []int64, html string) error {
 	n.staff <- capturedNotice{ids, html}
 	return nil

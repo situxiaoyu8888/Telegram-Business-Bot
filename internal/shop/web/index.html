@@ -59,7 +59,7 @@ img{display:block;max-width:100%}
 .stepper span{min-width:34px;text-align:center}
 .bar{position:fixed;left:0;right:0;bottom:0;background:var(--card);border-top:1px solid var(--line);padding:8px 12px calc(8px + env(safe-area-inset-bottom));display:flex;gap:10px;align-items:center;z-index:5}
 .bar .grow{flex:1}
-.tabbar{position:fixed;left:0;right:0;bottom:0;background:var(--card);border-top:1px solid var(--line);display:grid;grid-template-columns:repeat(4,1fr);padding-bottom:env(safe-area-inset-bottom);z-index:5}
+.tabbar{position:fixed;left:0;right:0;bottom:0;background:var(--card);border-top:1px solid var(--line);display:grid;grid-template-columns:repeat(5,1fr);padding-bottom:env(safe-area-inset-bottom);z-index:5}
 .tabbar button{height:56px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;font-size:11px;color:var(--muted);position:relative}
 .tabbar button.on{color:var(--brand)}
 .tabbar svg{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
@@ -109,6 +109,24 @@ img{display:block;max-width:100%}
 .mcard .go{color:var(--muted);flex:none}
 .mhead .av{width:56px;height:56px;border-radius:14px;flex:none;display:grid;place-items:center;font-weight:700;font-size:22px;color:#fff}
 .mhead h2{margin:0;font-size:18px}
+.me-av{width:52px;height:52px;border-radius:50%;flex:none;overflow:hidden;display:grid;place-items:center;font-size:22px;font-weight:700;background:#ffffff33;color:#fff}
+.me-av img{width:100%;height:100%;object-fit:cover}
+.menu-grid{display:grid;grid-template-columns:1fr 1fr;padding:0;overflow:hidden}
+.menu-grid button{display:flex;align-items:center;gap:6px;padding:14px 12px;border-bottom:1px solid var(--line);text-align:left;min-width:0}
+.menu-grid button:nth-child(odd){border-right:1px solid var(--line)}
+.menu-grid button span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ex-box{position:relative}
+.ex-side{display:flex;flex-direction:column;gap:8px}
+.ex-side select{border:1px solid var(--line);border-radius:10px;background:var(--card);padding:8px 10px;outline:0;font-weight:600;max-width:60%}
+.ex-amt{display:flex;align-items:center;gap:8px}
+.ex-amt input{flex:1;min-width:0;border:0;outline:0;background:transparent;font-size:26px;font-weight:700;padding:4px 0}
+.ex-get{font-size:26px;font-weight:700;padding:4px 0;color:var(--brand);word-break:break-all}
+.ex-swap{display:block;margin:10px auto;width:36px;height:36px;border-radius:50%;border:1px solid var(--line);background:var(--bg);font-size:18px}
+.ex-rate{margin-top:12px;padding-top:10px;border-top:1px solid var(--line)}
+.asset{display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid var(--line)}
+.asset:last-child{border-bottom:0}
+.menu-grid.even button:nth-last-child(-n+2){border-bottom:0}
+.menu-grid button.wide{grid-column:1/-1;justify-content:center;border-right:0;border-bottom:0}
 .strike{color:var(--muted);text-decoration:line-through;font-size:11px;margin-left:4px}
 .stars{color:#f5a623;letter-spacing:1px}
 .stars i{color:var(--line);font-style:normal}
@@ -139,7 +157,7 @@ function money(s){let [i,d='']=String(s||'0').split('.');d=d.replace(/0+$/,'');i
 const priceHTML=(s,list)=>`<span class="price">${money(s)}<small>USDT</small></span>${list&&Number(list)>Number(s)?`<span class="strike">${money(list)}</span>`:''}`;
 const stars=n=>`<span class="stars">${'★'.repeat(Math.round(n))}<i>${'★'.repeat(5-Math.round(n))}</i></span>`;
 const tileHTML=p=>`<button class="tile" onclick="location.hash='#/product/${p.id}'"><div class="img">${imgOr(p.cover)}</div><div class="body"><div class="clamp2">${p.on_promo?'<span class="tag red">限时</span> ':''}${p.kind==='virtual'?'<span class="tag">虚拟</span> ':''}${esc(p.name)}</div><div class="muted small">${esc(p.merchant_name)}</div><div class="row between" style="margin-top:auto;flex-wrap:wrap"><span>${priceHTML(p.min_price,p.on_promo?p.list_price:'')}</span><span class="muted small">${p.in_stock?'已售 '+p.sales:'售罄'}</span></div></div></button>`;
-const icons={home:'M3 11l9-8 9 8M5 10v10h14V10',cart:'M3 4h2l2.4 11h10.2L20 8H6.2M9 20a1 1 0 1 0 0-.01M17 20a1 1 0 1 0 0-.01',order:'M6 3h12v18H6zM9 8h6M9 12h6M9 16h4',me:'M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8M4 21c1.5-4 5-5 8-5s6.5 1 8 5',img:'M4 5h16v14H4zM4 15l4-4 4 4 3-3 5 5'};
+const icons={home:'M3 11l9-8 9 8M5 10v10h14V10',cart:'M3 4h2l2.4 11h10.2L20 8H6.2M9 20a1 1 0 1 0 0-.01M17 20a1 1 0 1 0 0-.01',order:'M6 3h12v18H6zM9 8h6M9 12h6M9 16h4',me:'M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8M4 21c1.5-4 5-5 8-5s6.5 1 8 5',swap:'M7 4v15M3 15l4 4 4-4M17 20V5M13 9l4-4 4 4',img:'M4 5h16v14H4zM4 15l4-4 4 4 3-3 5 5'};
 const svg=n=>`<svg viewBox="0 0 24 24"><path d="${icons[n]}"/></svg>`;
 const statusText={grouping:['拼团中',''],paid:['待处理',''],shipped:['已发货','green'],ready:['待自提','green'],completed:['已完成','gray'],canceled:['已取消','gray']};
 const deliveryText={express:'快递配送',pickup:'到店自提',virtual:'虚拟商品'};
@@ -155,13 +173,13 @@ const post=(path,body={})=>api(path,{method:'POST',body:JSON.stringify(body)});
 function newRequestID(){return crypto.randomUUID?crypto.randomUUID():Date.now().toString(36)+Math.random().toString(36).slice(2)}
 
 // ---- Routing ----
-const routes=[[/^#?\/?$/,home],[/^#\/merchant\/(\d+)$/,merchantPage],[/^#\/product\/(\d+)(?:\?group=(\d+))?$/,product],[/^#\/group\/(\d+)$/,groupPage],[/^#\/cart$/,cart],[/^#\/checkout$/,checkoutPage],[/^#\/orders(?:\/(\w+))?$/,orders],[/^#\/order\/(\d+)$/,orderDetail],[/^#\/me$/,mine],[/^#\/coupons(?:\/(\w+))?$/,coupons],[/^#\/addresses(?:\/(pick))?$/,addresses],[/^#\/address\/(new|\d+)(?:\/(pick))?$/,addressForm],[/^#\/aftersale\/(\d+)$/,afterSaleForm],[/^#\/review\/(\d+)$/,reviewForm],[/^#\/(favorites|history)$/,productList],[/^#\/chat\/(\d+)(?:\?(product|order)=(\d+))?$/,chatPage],[/^#\/messages$/,messageList],[/^#\/apply$/,applyPage],[/^#\/aftersales$/,afterSales]];
-const tabs=[['#/','首页','home'],['#/cart','购物车','cart'],['#/orders','订单','order'],['#/me','我的','me']];
+const routes=[[/^#?\/?$/,home],[/^#\/merchant\/(\d+)$/,merchantPage],[/^#\/product\/(\d+)(?:\?group=(\d+))?$/,product],[/^#\/group\/(\d+)$/,groupPage],[/^#\/cart$/,cart],[/^#\/checkout$/,checkoutPage],[/^#\/orders(?:\/(\w+))?$/,orders],[/^#\/order\/(\d+)$/,orderDetail],[/^#\/me$/,mine],[/^#\/exchange$/,exchangePage],[/^#\/coupons(?:\/(\w+))?$/,coupons],[/^#\/addresses(?:\/(pick))?$/,addresses],[/^#\/address\/(new|\d+)(?:\/(pick))?$/,addressForm],[/^#\/aftersale\/(\d+)$/,afterSaleForm],[/^#\/review\/(\d+)$/,reviewForm],[/^#\/(favorites|history)$/,productList],[/^#\/chat\/(\d+)(?:\?(product|order)=(\d+))?$/,chatPage],[/^#\/messages$/,messageList],[/^#\/apply$/,applyPage],[/^#\/aftersales$/,afterSales]];
+const tabs=[['#/','首页','home'],['#/exchange','换汇','swap'],['#/cart','购物车','cart'],['#/orders','订单','order'],['#/me','我的','me']];
 let renderVersion=0;
 async function route(){
  const hash=location.hash||'#/';const version=++renderVersion;
  $('bottom').innerHTML='';window.scrollTo(0,0);
- const root=['#/','#/cart','#/orders','#/me'].includes(hash)||/^#\/orders\/\w+$/.test(hash);
+ const root=['#/','#/exchange','#/cart','#/orders','#/me'].includes(hash)||/^#\/orders\/\w+$/.test(hash);
  $('tabbar').hidden=!root;document.body.style.paddingBottom=root?'':'0';
  renderTabs(hash);
  if(tg?.BackButton){root?tg.BackButton.hide():tg.BackButton.show()}
@@ -437,14 +455,57 @@ async function applyPage(v){
  bottomBar('<button class="btn grow" id="apSubmit">提交申请</button>');
  $('apSubmit').onclick=async()=>{try{await post('merchant-applications',{shop_name:$('apName').value,contact:$('apContact').value,category:$('apCategory').value,address:$('apAddress').value,description:$('apDesc').value});haptic('success');toast('已提交，请等待审核');route()}catch(e){toast(e.message)}}}
 
+// ---- Exchange ----
+// Rates are "units per 1 USDT"; the server recomputes the result and refuses the exchange when
+// the rates or fee shown here have changed in the meantime.
+let exState={from:'',to:'',rid:''};
+const fmtAmt=(v,d)=>{const n=Number(v);return Number.isFinite(n)?n.toLocaleString('en-US',{minimumFractionDigits:Math.min(d,2),maximumFractionDigits:d}):String(v)};
+const truncTo=(n,d)=>{const f=10**d;return Math.floor(n*f+1e-9)/f};
+async function exchangePage(v){
+ const data=await api('exchange');if(stale(v))return;
+ const all=data.balances,list=all.filter(c=>c.exchangeable),fee=Number(data.fee_rate)||0,byCode=Object.fromEntries(all.map(c=>[c.code,c]));
+ const assets=`<div class="sec-head"><span class="bold">我的资产</span></div><div class="card" style="padding:4px 16px">${all.map(c=>`<div class="asset"><div><div class="bold">${esc(c.name)}</div><div class="muted small">${esc(c.code)}</div></div><div style="text-align:right"><div class="bold">${fmtAmt(c.available,c.decimals)}</div>${Number(c.frozen)>0?`<div class="muted small">冻结 ${fmtAmt(c.frozen,c.decimals)}</div>`:''}</div></div>`).join('')}</div>`;
+ const records=data.records.length?`<div class="sec-head"><span class="bold">兑换记录</span></div><div class="card" style="padding:4px 16px">${data.records.map(r=>{const f=byCode[r.from_currency],t=byCode[r.to_currency];return `<div class="asset"><div><div>${esc(f?.name||r.from_currency)} → ${esc(t?.name||r.to_currency)}</div><div class="muted small">${new Date(r.created_at).toLocaleString('zh-CN')}</div></div><div style="text-align:right"><div class="muted small">-${fmtAmt(r.amount,f?.decimals??6)}</div><div class="bold" style="color:var(--brand)">+${fmtAmt(r.received,t?.decimals??6)}</div></div></div>`}).join('')}</div>`:'';
+ if(list.length<2){$('app').innerHTML=`<div class="empty" style="padding:40px 20px">暂未开放换汇，请稍后再来</div>`+assets+records;return}
+ if(!list.some(c=>c.code===exState.from))exState.from=list[0].code;
+ if(!list.some(c=>c.code===exState.to)||exState.to===exState.from)exState.to=list.find(c=>c.code!==exState.from).code;
+ if(!exState.rid)exState.rid=newRequestID();
+ const opts=sel=>list.map(c=>`<option value="${esc(c.code)}" ${c.code===sel?'selected':''}>${esc(c.name)}</option>`).join('');
+ $('app').innerHTML=`<div class="card ex-box"><div class="ex-side"><div class="row between"><span class="muted small">兑出</span><select id="exFrom" aria-label="兑出币种">${opts(exState.from)}</select></div><div class="ex-amt"><input id="exAmount" inputmode="decimal" placeholder="0" autocomplete="off"><button class="btn ghost sm" id="exAll">全部</button></div><div class="muted small" id="exAvail"></div></div>
+ <button class="ex-swap" id="exSwap" aria-label="交换币种">⇅</button>
+ <div class="ex-side"><div class="row between"><span class="muted small">兑入（预计到账）</span><select id="exTo" aria-label="兑入币种">${opts(exState.to)}</select></div><div class="ex-get" id="exGet">0</div></div>
+ <div class="ex-rate muted small" id="exRate"></div></div>`+assets+records;
+ bottomBar('<button class="btn grow" id="exSubmit">确认兑换</button>');
+ const cur=()=>[byCode[$('exFrom').value],byCode[$('exTo').value]];
+ const rateOf=(f,t)=>Number(t.rate)*(1-fee)/Number(f.rate);
+ const refresh=()=>{const [f,t]=cur();const r=rateOf(f,t),amt=Number($('exAmount').value)||0;
+  $('exAvail').textContent=`可用 ${fmtAmt(f.available,f.decimals)} ${f.name}`;
+  $('exGet').textContent=amt>0?fmtAmt(truncTo(amt*r,t.decimals),t.decimals):'0';
+  $('exRate').innerHTML=`汇率：1 ${esc(f.name)} ≈ ${esc(String(+r.toPrecision(8)))} ${esc(t.name)}${fee?` · 已含手续费 ${+(fee*100).toFixed(4)}%`:''}<br>实际到账以提交时的汇率为准，小数位不足部分舍去`};
+ const pick=(changed)=>{if($('exFrom').value===$('exTo').value){const other=list.find(c=>c.code!==$(changed).value).code;$(changed==='exFrom'?'exTo':'exFrom').value=other}exState.from=$('exFrom').value;exState.to=$('exTo').value;exState.rid=newRequestID();refresh()};
+ $('exFrom').onchange=()=>pick('exFrom');$('exTo').onchange=()=>pick('exTo');
+ $('exAmount').oninput=()=>{exState.rid=newRequestID();refresh()};
+ $('exAll').onclick=()=>{const [f]=cur();$('exAmount').value=Number(f.available)>0?String(+Number(f.available).toFixed(f.decimals)):'';exState.rid=newRequestID();refresh()};
+ $('exSwap').onclick=()=>{const a=$('exFrom').value;$('exFrom').value=$('exTo').value;$('exTo').value=a;pick('exFrom')};
+ $('exSubmit').onclick=async()=>{const [f,t]=cur(),amount=$('exAmount').value.trim();
+  if(!(Number(amount)>0)){toast('请输入兑换金额');return}
+  if(Number(amount)>Number(f.available)){toast(f.name+' 可用余额不足');return}
+  $('exSubmit').disabled=true;
+  try{const r=await post('exchange',{from:f.code,to:t.code,amount,from_rate:f.rate,to_rate:t.rate,fee_rate:data.fee_rate,request_id:exState.rid});exState.rid='';haptic('success');toast(`兑换成功，到账 ${fmtAmt(r.received,t.decimals)} ${t.name}`);route()}
+  catch(e){toast(e.message);if(/汇率已更新/.test(e.message)){exState.rid='';route()}else $('exSubmit').disabled=false}};
+ refresh()}
+
 // ---- Me ----
 async function mine(v){
  const [meInfo,mem,convs]=await Promise.all([api('me'),api('member').catch(()=>null),api('conversations').catch(()=>[])]);const unread=convs.reduce((n,c)=>n+c.buyer_unread,0);me=meInfo;shareInfo=me;if(stale(v))return;
- const entry=(h,icon,label)=>`<button class="row between" style="width:100%;padding:12px 0" onclick="location.hash='${h}'"><span>${icon} ${label}</span><span class="muted">›</span></button>`;
- $('app').innerHTML=`<div class="status-head"><div class="row between" style="align-items:flex-start"><div style="min-width:0"><h2 style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(me.name||'用户')}</h2><div class="small" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${me.username?'@'+esc(me.username):''}</div></div><div style="text-align:right;flex:none"><div class="small" style="opacity:.8">钱包余额</div><div style="font-size:22px;line-height:1.2" class="bold">${money(me.balance)} <span class="small">USDT</span></div></div></div><div class="small" style="opacity:.75;margin-top:8px">充值、提现请回到机器人菜单操作</div></div>
+ const entry=(h,icon,label,cls='')=>`<button class="${cls}" onclick="location.hash='${h}'"><span>${icon} ${label}</span></button>`;
+ // Telegram passes the profile photo to Mini Apps when the user allows it; otherwise show an initial.
+ const photo=tg?.initDataUnsafe?.user?.photo_url||'',initial=esc([...(me.name||'用户').trim()][0]||'用');
+ const avatar=`<div class="me-av">${photo?`<img src="${esc(photo)}" alt="" onerror="this.parentNode.textContent='${initial}'">`:initial}</div>`;
+ $('app').innerHTML=`<div class="status-head"><div class="row between" style="align-items:center"><div class="row" style="min-width:0;gap:12px">${avatar}<div style="min-width:0"><h2 style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(me.name||'用户')}</h2><div class="small" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${me.username?'@'+esc(me.username):''}</div></div></div><div style="text-align:right;flex:none"><div class="small" style="opacity:.8">钱包余额</div><div style="font-size:22px;line-height:1.2" class="bold">${money(me.balance)} <span class="small">USDT</span></div></div></div><div class="small" style="opacity:.75;margin-top:8px">充值、提现请回到机器人菜单操作</div></div>
  ${mem?`<div class="card"><div class="row between"><span class="bold">${mem.level?'💎 '+esc(mem.level.name)+'会员 · '+Math.round((1-Number(mem.level.rate))*100)+'% 折扣':'普通会员'}</span><span>积分 <b>${mem.points}</b></span></div><div class="muted small" style="margin-top:4px">累计消费 ${money(mem.spent)} USDT${mem.next?`，再消费 ${money((Number(mem.next.threshold)-Number(mem.spent)).toFixed(6))} USDT 升级${esc(mem.next.name)}`:''}${Number(mem.points_value)>0?` · ${Math.round(1/Number(mem.points_value))} 积分抵 1 USDT`:''}</div></div>`:''}
  <div class="card small muted">↗️ 在商品页点击分享发给好友，好友通过你的链接注册并下单，订单完成且售后期结束后你可获得推广佣金（以平台设置为准）。</div>
- <div class="card list">${entry('#/orders','📦','我的订单')}${entry('#/messages','💬','我的消息'+(unread?` <span class="tag red">${unread}</span>`:''))}${entry('#/aftersales','🧾','我的售后')}${entry('#/favorites','❤️','我的收藏')}${entry('#/history','🕘','浏览记录')}${entry('#/coupons','🎟','我的优惠券')}${entry('#/coupons/center','🎁','领券中心')}${entry('#/addresses','📍','收货地址')}${entry('#/apply','🏪','商家入驻')}</div>`;
+ <div class="card menu-grid${me.is_merchant?' even':''}">${entry('#/orders','📦','我的订单')}${entry('#/messages','💬','我的消息'+(unread?` <span class="tag red">${unread}</span>`:''))}${entry('#/aftersales','🧾','我的售后')}${entry('#/favorites','❤️','我的收藏')}${entry('#/history','🕘','浏览记录')}${entry('#/coupons','🎟','我的优惠券')}${entry('#/coupons/center','🎁','领券中心')}${entry('#/addresses','📍','收货地址')}${me.is_merchant?'':entry('#/apply','🏪','商家入驻','wide')}</div>`;
  if(tg?.close)$('app').insertAdjacentHTML('beforeend','<button class="btn ghost block" onclick="Telegram.WebApp.close()">返回机器人</button>')}
 
 // ---- Coupons ----

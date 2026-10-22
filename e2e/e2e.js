@@ -164,6 +164,28 @@ async function toastText(page) { return page.$eval('#toast', e => e.hidden ? '' 
   sql(`update wallet_accounts set available=100 where user_id=${uid}`);
   await shopPage.reload(); await shopPage.waitForTimeout(800); await shot(shopPage, '11-shop-me');
 
+  step('admin opens CNY exchange and credits CNY; buyer exchanges CNY to USDT in the shop');
+  await nav(admin, 'currencies'); await shot(admin, '11b-admin-currencies');
+  const cnyId = sql("select id from wallet_currencies where code='CNY'");
+  await admin.click(`[data-action="edit"][data-id="${cnyId}"]`); await admin.waitForTimeout(400);
+  await admin.check('#curExchange'); await submitModal(admin);
+  if (sql("select exchangeable from wallet_currencies where code='CNY'") !== '1') problems.push('CNY exchange not enabled');
+  await nav(admin, 'users');
+  await admin.click(`[data-action="balance"][data-id="${uid}"]`); await admin.waitForTimeout(600);
+  await pick(admin, 'adjCurrency', 'CNY');
+  await admin.fill('#adjAmount', '720'); await admin.fill('#adjRemark', '现金充值'); await shot(admin, '11c-admin-balance');
+  await submitModal(admin);
+  if (sql(`select available from wallet_accounts where user_id=${uid} and currency='CNY'`) !== '720.000000') problems.push('CNY credit failed');
+  await shopPage.goto(SHOP_BASE + '/shop/#/exchange'); await shopPage.waitForTimeout(900);
+  await shopPage.selectOption('#exFrom', 'CNY'); await shopPage.selectOption('#exTo', 'USDT');
+  await shopPage.fill('#exAmount', '72'); await shopPage.waitForTimeout(200); await shot(shopPage, '11d-shop-exchange');
+  if ((await shopPage.textContent('#exGet')).trim() !== '10.00') problems.push('exchange preview wrong: ' + await shopPage.textContent('#exGet'));
+  await shopPage.click('#exSubmit'); await shopPage.waitForTimeout(1000); await shot(shopPage, '11e-shop-exchanged');
+  const afterEx = sql(`select group_concat(concat(currency,'=',available) order by currency) from wallet_accounts where user_id=${uid}`);
+  if (afterEx !== 'CNY=648.000000,USDT=110.000000') problems.push('exchange balances wrong: ' + afterEx);
+  sql(`update wallet_accounts set available=100 where user_id=${uid} and currency='USDT'`);
+  await nav(admin, 'exchanges'); await shot(admin, '11f-admin-exchanges');
+
   step('claim coupon');
   await shopPage.goto(SHOP_BASE + '/shop/#/coupons/center'); await shopPage.waitForTimeout(800);
   await shopPage.click('[data-claim]'); await shopPage.waitForTimeout(600); await shot(shopPage, '12-coupon-center');
@@ -288,6 +310,8 @@ async function toastText(page) { return page.$eval('#toast', e => e.hidden ? '' 
   if (!replyNotice || !JSON.stringify(replyNotice.reply_markup || {}).includes('#/chat/')) problems.push('buyer not notified of merchant reply');
 
   step('friend applies to become a merchant, admin approves');
+  await fpage.goto(SHOP_BASE + '/shop/#/me'); await fpage.waitForTimeout(800);
+  if (!(await fpage.innerText('#app')).includes('商家入驻')) problems.push('buyer does not see the application entry');
   await fpage.goto(SHOP_BASE + '/shop/#/apply'); await fpage.waitForTimeout(800);
   await fpage.fill('#apName', '阿强水果铺'); await fpage.fill('#apContact', '@aqiang'); await fpage.fill('#apCategory', '水果'); await fpage.fill('#apDesc', '每日新鲜进货');
   await shot(fpage, '41-apply-form');
@@ -313,6 +337,8 @@ async function toastText(page) { return page.$eval('#toast', e => e.hidden ? '' 
     await mctx.close();
   }
   await fpage.goto(SHOP_BASE + '/shop/#/apply'); await fpage.waitForTimeout(700); await shot(fpage, '45-apply-approved');
+  await fpage.goto(SHOP_BASE + '/shop/#/me'); await fpage.waitForTimeout(800); await shot(fpage, '45b-me-merchant');
+  if ((await fpage.innerText('#app')).includes('商家入驻')) problems.push('approved merchant still sees the application entry');
 
   step('batch import products via the console');
   await nav(admin, 'shop_products');

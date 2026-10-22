@@ -84,39 +84,45 @@ func (s *Service) CreditDeposit(order model.DepositOrder) error {
 }
 
 func (s *Service) CreateWithdrawal(userID uint64, network, address, amountText, requestID string) (*model.WithdrawalOrder, error) {
+	if network != "TRC20" || !ValidTRONAddress(address) {
+		return nil, userErr("地址格式不正确，请输入以 T 开头的 TRON 地址")
+	}
+	return s.createWithdrawal(userID, s.currency, network, address, amountText, requestID, s.minWithdraw, s.withdrawFee, 6)
+}
+
+// createWithdrawal freezes amount for a pending withdrawal; a repeated request ID returns the
+// first order.
+func (s *Service) createWithdrawal(userID uint64, currency, network, address, amountText, requestID, minText, feeText string, places int) (*model.WithdrawalOrder, error) {
 	if requestID == "" || len(requestID) > 64 {
 		return nil, fmt.Errorf("withdrawal request ID required")
 	}
-	if network != "TRC20" || !ValidTRONAddress(address) {
-		return nil, fmt.Errorf("invalid TRC20 address/network")
-	}
 	amount, err := decimal.NewFromString(amountText)
-	if err != nil || !amount.IsPositive() || !amount.Equal(amount.Truncate(6)) {
-		return nil, fmt.Errorf("invalid amount (maximum 6 decimal places)")
+	if err != nil || !amount.IsPositive() || !amount.Equal(amount.Truncate(int32(places))) {
+		return nil, userErr("金额格式不正确（最多 %d 位小数）", places)
 	}
-	min, minErr := decimal.NewFromString(s.minWithdraw)
-	fee, feeErr := decimal.NewFromString(s.withdrawFee)
-	if minErr != nil || feeErr != nil || !min.IsPositive() || fee.IsNegative() || !fee.Equal(fee.Truncate(6)) {
+	min, minErr := decimal.NewFromString(minText)
+	fee, feeErr := decimal.NewFromString(feeText)
+	if minErr != nil || feeErr != nil || min.IsNegative() || fee.IsNegative() || !fee.Equal(fee.Truncate(6)) {
 		return nil, fmt.Errorf("invalid withdrawal configuration")
 	}
 	if amount.LessThan(min) {
-		return nil, fmt.Errorf("minimum withdrawal is %s", min.String())
+		return nil, userErr("最低提现金额为 %s", min.String())
 	}
 	actual := amount.Sub(fee)
 	if actual.LessThanOrEqual(decimal.Zero) {
-		return nil, fmt.Errorf("amount must be greater than fee")
+		return nil, userErr("提现金额需大于手续费 %s", fee.String())
 	}
-	order := &model.WithdrawalOrder{RequestID: &requestID, UserID: userID, Network: network, Currency: s.currency, Address: address, Amount: amount.Truncate(6).StringFixed(6), Fee: fee.Truncate(6).StringFixed(6), Actual: actual.Truncate(6).StringFixed(6), Status: "pending"}
+	order := &model.WithdrawalOrder{RequestID: &requestID, UserID: userID, Network: network, Currency: currency, Address: address, Amount: amount.StringFixed(6), Fee: fee.StringFixed(6), Actual: actual.StringFixed(6), Status: "pending"}
 	err = s.st.DB.Transaction(func(tx *gorm.DB) error {
 		var acc model.WalletAccount
-		err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("user_id=? AND currency=?", userID, s.currency).First(&acc).Error
+		err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("user_id=? AND currency=?", userID, currency).First(&acc).Error
 		if err != nil {
-			return fmt.Errorf("wallet not found")
+			return userErr("可用余额不足")
 		}
 		var existing model.WithdrawalOrder
 		lookup := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("request_id=?", requestID).First(&existing).Error
 		if lookup == nil {
-			if existing.UserID != userID || existing.Amount != order.Amount || existing.Address != address || existing.Network != network {
+			if existing.UserID != userID || existing.Amount != order.Amount || existing.Address != address || existing.Network != network || existing.Currency != currency {
 				return fmt.Errorf("request ID reused with different withdrawal")
 			}
 			*order = existing
@@ -128,7 +134,7 @@ func (s *Service) CreateWithdrawal(userID uint64, network, address, amountText, 
 		av, _ := decimal.NewFromString(acc.Available)
 		fr, _ := decimal.NewFromString(acc.Frozen)
 		if av.LessThan(amount) {
-			return fmt.Errorf("insufficient balance")
+			return userErr("可用余额不足")
 		}
 		av = av.Sub(amount)
 		fr = fr.Add(amount)
@@ -140,7 +146,7 @@ func (s *Service) CreateWithdrawal(userID uint64, network, address, amountText, 
 		if err := tx.Create(order).Error; err != nil {
 			return err
 		}
-		return tx.Create(&model.WalletTransaction{UserID: userID, Currency: s.currency, Type: "withdraw_freeze", Amount: amount.Neg().StringFixed(6), Balance: av.StringFixed(6), RefType: "withdraw", RefID: order.ID, Remark: "withdrawal pending review"}).Error
+		return tx.Create(&model.WalletTransaction{UserID: userID, Currency: currency, Type: "withdraw_freeze", Amount: amount.Neg().StringFixed(6), Balance: av.StringFixed(6), RefType: "withdraw", RefID: order.ID, Remark: "withdrawal pending review"}).Error
 	})
 	return order, err
 }
@@ -244,17 +250,22 @@ func (s *Service) Refund(tx *gorm.DB, userID uint64, amount decimal.Decimal, ref
 }
 
 func (s *Service) adjust(tx *gorm.DB, userID uint64, delta decimal.Decimal, txType, refType string, refID uint64, remark string) error {
+	return adjustIn(tx, userID, s.currency, delta, txType, refType, refID, remark)
+}
+
+// adjustIn changes a user's available balance in one currency and records the ledger entry.
+func adjustIn(tx *gorm.DB, userID uint64, currency string, delta decimal.Decimal, txType, refType string, refID uint64, remark string) error {
 	if delta.IsZero() {
 		return nil
 	}
 	if !delta.Equal(delta.Truncate(6)) {
 		return fmt.Errorf("invalid amount (maximum 6 decimal places)")
 	}
-	if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&model.WalletAccount{UserID: userID, Currency: s.currency, Available: "0", Frozen: "0"}).Error; err != nil {
+	if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&model.WalletAccount{UserID: userID, Currency: currency, Available: "0", Frozen: "0"}).Error; err != nil {
 		return err
 	}
 	var acc model.WalletAccount
-	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("user_id=? AND currency=?", userID, s.currency).First(&acc).Error; err != nil {
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("user_id=? AND currency=?", userID, currency).First(&acc).Error; err != nil {
 		return err
 	}
 	av, err := decimal.NewFromString(acc.Available)
@@ -268,7 +279,7 @@ func (s *Service) adjust(tx *gorm.DB, userID uint64, delta decimal.Decimal, txTy
 	if err := tx.Model(&acc).Update("available", av.StringFixed(6)).Error; err != nil {
 		return err
 	}
-	return tx.Create(&model.WalletTransaction{UserID: userID, Currency: s.currency, Type: txType, Amount: delta.StringFixed(6), Balance: av.StringFixed(6), RefType: refType, RefID: refID, Remark: remark}).Error
+	return tx.Create(&model.WalletTransaction{UserID: userID, Currency: currency, Type: txType, Amount: delta.StringFixed(6), Balance: av.StringFixed(6), RefType: refType, RefID: refID, Remark: remark}).Error
 }
 
 // Credit adds a positive amount to the available balance inside the caller's transaction,

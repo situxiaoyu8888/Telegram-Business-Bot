@@ -3,6 +3,7 @@ package shop
 import (
 	"context"
 	_ "embed"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -18,6 +19,7 @@ import (
 	"telegram-business-bot/internal/ratelimit"
 	"telegram-business-bot/internal/store"
 	"telegram-business-bot/internal/telegram"
+	"telegram-business-bot/internal/wallet"
 )
 
 //go:embed web/index.html
@@ -132,6 +134,8 @@ func (h *Handler) RegisterAPI(r *gin.Engine) {
 	api.DELETE("/favorites/:id", h.removeFavorite)
 	api.GET("/history", h.history)
 	api.DELETE("/history", h.clearHistory)
+	api.GET("/exchange", h.exchangeInfo)
+	api.POST("/exchange", h.throttle("rl:shop-order:", maxOrdersPerMinute), h.exchange)
 	api.GET("/aftersales", h.myAfterSales)
 	api.POST("/aftersales", h.applyAfterSale)
 	api.POST("/aftersales/:id/cancel", h.cancelAfterSale)
@@ -251,7 +255,12 @@ func (h *Handler) me(c *gin.Context) {
 	if name == "" {
 		name = u.Username
 	}
-	res := gin.H{"name": name, "username": u.Username, "telegram_user_id": u.TelegramUserID, "balance": available.StringFixed(6), "referral_code": u.ReferralCode}
+	isMerchant, err := h.svc.IsMerchant(b)
+	if err != nil {
+		h.fail(c, err)
+		return
+	}
+	res := gin.H{"name": name, "username": u.Username, "telegram_user_id": u.TelegramUserID, "balance": available.StringFixed(6), "referral_code": u.ReferralCode, "is_merchant": isMerchant}
 	if h.botUsername != nil {
 		res["bot_username"] = h.botUsername(c.Request.Context(), buyer(c).BotID)
 	}
@@ -529,8 +538,9 @@ func (h *Handler) submitReturn(c *gin.Context) {
 	h.reply(c, gin.H{"ok": true}, h.svc.SubmitReturn(buyer(c).UserID, idParam(c), b.Carrier, b.TrackingNo))
 }
 
-// BotNotifier sends buyer messages through the bot the order was placed from and staff messages
-// through Staff (the admin bot when configured, otherwise the primary bot).
+// BotNotifier sends buyer messages through the bot the order was placed from, staff messages
+// through Staff (the admin bot when configured, otherwise the primary bot) and merchant messages
+// through the primary bot, which merchants use (falling back to Staff).
 type BotNotifier struct {
 	Bots    *business.Service
 	Staff   telegram.Sender
@@ -549,12 +559,56 @@ func (n BotNotifier) Notify(ctx context.Context, botID uint64, telegramUserID in
 	return sender.SendMessageWithParseMode(ctx, telegramUserID, html, "HTML", kb)
 }
 
+// NotifyStaff tries every chat and reports the ones that failed.
 func (n BotNotifier) NotifyStaff(ctx context.Context, chatIDs []int64, html string) error {
-	var firstErr error
+	var errs []error
 	for _, id := range chatIDs {
-		if err := n.Staff.SendMessageWithParseMode(ctx, id, html, "HTML", nil); err != nil && firstErr == nil {
-			firstErr = err
+		if err := n.Staff.SendMessageWithParseMode(ctx, id, html, "HTML", nil); err != nil {
+			errs = append(errs, fmt.Errorf("chat %d: %w", id, err))
 		}
 	}
-	return firstErr
+	return errors.Join(errs...)
+}
+
+func (n BotNotifier) NotifyMerchant(ctx context.Context, chatID int64, html string) error {
+	sender, err := n.Bots.Sender(ctx, 0)
+	if err == nil {
+		if err = sender.SendMessageWithParseMode(ctx, chatID, html, "HTML", nil); err == nil {
+			return nil
+		}
+	}
+	if n.Staff == nil {
+		return fmt.Errorf("chat %d: %w", chatID, err)
+	}
+	if staffErr := n.Staff.SendMessageWithParseMode(ctx, chatID, html, "HTML", nil); staffErr != nil {
+		return fmt.Errorf("chat %d: %w (admin bot: %v)", chatID, err, staffErr)
+	}
+	return nil
+}
+
+// exchangeInfo returns the buyer's balances, the rates and fee, and their latest exchanges.
+func (h *Handler) exchangeInfo(c *gin.Context) {
+	b := buyer(c)
+	balances, err := h.svc.wallet.Balances(b.UserID)
+	if err != nil {
+		h.fail(c, err)
+		return
+	}
+	fee, err := h.svc.wallet.ExchangeFeeRate()
+	if err != nil {
+		h.fail(c, err)
+		return
+	}
+	records, err := h.svc.wallet.Exchanges(b.UserID, 20)
+	h.reply(c, gin.H{"balances": balances, "fee_rate": fee.String(), "records": records}, err)
+}
+
+func (h *Handler) exchange(c *gin.Context) {
+	var in wallet.ExchangeRequest
+	if err := c.ShouldBindJSON(&in); err != nil {
+		h.fail(c, userErr("参数错误"))
+		return
+	}
+	rec, err := h.svc.wallet.Exchange(buyer(c).UserID, in)
+	h.reply(c, rec, err)
 }

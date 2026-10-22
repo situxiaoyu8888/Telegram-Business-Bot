@@ -68,6 +68,17 @@ func (s *Service) MyApplication(userID uint64) (*model.ShopMerchantApplication, 
 	return &a, err
 }
 
+// IsMerchant reports whether the buyer already runs a store: an approved application, or a
+// merchant whose notification chat is their Telegram account (merchants added in the console).
+func (s *Service) IsMerchant(b Buyer) (bool, error) {
+	var n int64
+	if err := s.st.DB.Model(&model.ShopMerchantApplication{}).Where("user_id = ? AND status = ?", b.UserID, ApplicationApproved).Count(&n).Error; err != nil || n > 0 {
+		return n > 0, err
+	}
+	err := s.st.DB.Model(&model.Merchant{}).Where("notify_chat_id = ?", b.TelegramUserID).Count(&n).Error
+	return n > 0, err
+}
+
 // lockBuyer serialises a buyer's own writes (checkout, applications) on their user row. It must be
 // the first statement of a transaction so later reads see rows committed while it waited.
 func lockBuyer(tx *gorm.DB, userID uint64) error {
