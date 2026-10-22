@@ -22,6 +22,32 @@ import (
 // anywhere through inline mode ("@bot hb <code>"). The "hb:<code>" button claims a share;
 // password packets are claimed by sending the password in the group or to the bot.
 
+// WithRedPacketOnly makes this a red-packet bot: its private chat offers sending red packets,
+// the wallet and (with shopURL) the exchange page, and nothing else.
+func (r *Router) WithRedPacketOnly(shopURL string) *Router {
+	r.packetOnly, r.menuButton = true, MenuButton{}
+	if shopURL != "" {
+		r.exchangeURL = shopURL
+	}
+	return r
+}
+
+const packetHomeText = "<b>🧧 红包机器人</b>\n\n" +
+	"• 发红包：点「发红包」，或在群里发送 /hb\n" +
+	"• 抢红包：点群里红包下方的「抢红包」；口令红包发送口令即可\n" +
+	"• 抢到的钱直接存入钱包，未领完的红包到期自动退回"
+
+func (r *Router) packetHomeKeyboard() *InlineKeyboardMarkup {
+	rows := [][]InlineKeyboardButton{{btn("🧧 发红包", "hbw:new"), btn("💰 我的钱包", "rpo:wallet")}}
+	if r.exchangeURL != "" {
+		rows = append(rows, []InlineKeyboardButton{ShopButton("💱 换汇", r.exchangeURL, "/exchange")})
+	}
+	if name, err := r.client.Username(context.Background()); err == nil && name != "" {
+		rows = append(rows, []InlineKeyboardButton{{Text: "➕ 把机器人加入群聊", URL: "https://t.me/" + name + "?startgroup=hb"}})
+	}
+	return &InlineKeyboardMarkup{InlineKeyboard: rows}
+}
+
 // WithRedPackets enables red packets on this bot.
 func (r *Router) WithRedPackets(s *redpacket.Service) *Router { r.packets = s; return r }
 

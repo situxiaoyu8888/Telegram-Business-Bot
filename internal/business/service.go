@@ -29,7 +29,7 @@ type Service struct {
 	primaryToken       string
 	aead               cipher.AEAD
 	verify             func(context.Context, string) (*telegram.User, error)
-	Router             func(uint64, *telegram.Client) *telegram.Router
+	Router             func(model.BusinessBot, *telegram.Client) *telegram.Router
 }
 
 func New(st *store.Store, primary telegram.Sender, key, primaryToken, adminToken string) *Service {
@@ -69,7 +69,20 @@ func (s *Service) List() ([]model.BusinessBot, error) {
 	err := s.st.DB.Order("id asc").Find(&rows).Error
 	return rows, err
 }
-func (s *Service) Save(ctx context.Context, id uint64, name, token string, enabled bool) (*model.BusinessBot, error) {
+
+// Bot purposes: every feature, or only red packets and the wallet.
+const (
+	PurposeFull      = "full"
+	PurposeRedPacket = "redpacket"
+)
+
+func (s *Service) Save(ctx context.Context, id uint64, name, token string, enabled bool, purpose string) (*model.BusinessBot, error) {
+	if purpose == "" {
+		purpose = PurposeFull
+	}
+	if purpose != PurposeFull && purpose != PurposeRedPacket {
+		return nil, errors.New("未知的机器人用途")
+	}
 	name = strings.TrimSpace(name)
 	token = strings.TrimSpace(token)
 	if name == "" || len([]rune(name)) > 128 {
@@ -107,12 +120,13 @@ func (s *Service) Save(ctx context.Context, id uint64, name, token string, enabl
 	}
 	row.Name = name
 	row.Enabled = enabled
+	row.Purpose = purpose
 	var err error
 	if id == 0 {
 		err = s.st.DB.Create(&row).Error
 	} else {
 		// Never overwrite the poller's offset or health state with an old UI snapshot.
-		err = s.st.DB.Model(&model.BusinessBot{}).Where("id=?", id).Updates(map[string]any{"name": row.Name, "enabled": enabled, "token_encrypted": row.TokenEncrypted, "username": row.Username}).Error
+		err = s.st.DB.Model(&model.BusinessBot{}).Where("id=?", id).Updates(map[string]any{"name": row.Name, "enabled": enabled, "purpose": purpose, "token_encrypted": row.TokenEncrypted, "username": row.Username}).Error
 	}
 	if err != nil {
 		return nil, errors.New("保存失败：机器人可能已存在，请检查数据库连接")
@@ -202,9 +216,10 @@ func (s *Service) DeleteRoute(id uint64) error {
 // Run reconciles enabled channels without requiring an application restart.
 func (s *Service) Run(ctx context.Context) {
 	type running struct {
-		cancel context.CancelFunc
-		done   chan struct{}
-		token  string
+		cancel  context.CancelFunc
+		done    chan struct{}
+		token   string
+		purpose string
 	}
 	active := map[uint64]running{}
 	var wg sync.WaitGroup
@@ -233,7 +248,8 @@ func (s *Service) Run(ctx context.Context) {
 				finished = true
 			default:
 			}
-			if !ok || b.TokenEncrypted != r.token || finished {
+			// A new token or purpose restarts the bot with a new router.
+			if !ok || b.TokenEncrypted != r.token || b.Purpose != r.purpose || finished {
 				r.cancel()
 				<-r.done
 				delete(active, id)
@@ -250,7 +266,7 @@ func (s *Service) Run(ctx context.Context) {
 			}
 			child, cancel := context.WithCancel(ctx)
 			done := make(chan struct{})
-			active[id] = running{cancel, done, b.TokenEncrypted}
+			active[id] = running{cancel, done, b.TokenEncrypted, b.Purpose}
 			wg.Add(1)
 			go func(id uint64, token string) {
 				defer wg.Done()
@@ -277,14 +293,14 @@ func (s *Service) poll(ctx context.Context, id uint64, token string) error {
 		s.st.DB.Model(&model.BusinessBot{}).Where("id=?", id).Update("last_error", "启动失败，请检查 Token 和网络")
 		return errors.New("initialize business bot failed")
 	}
-	router := s.Router(id, client)
-	commandCtx, cancelCommands := context.WithCancel(ctx)
-	defer cancelCommands()
-	go router.SyncCommandMenu(commandCtx)
 	var row model.BusinessBot
 	if err := s.st.DB.First(&row, id).Error; err != nil {
 		return err
 	}
+	router := s.Router(row, client)
+	commandCtx, cancelCommands := context.WithCancel(ctx)
+	defer cancelCommands()
+	go router.SyncCommandMenu(commandCtx)
 	offset := row.Offset
 	for {
 		if err := ctx.Err(); err != nil {

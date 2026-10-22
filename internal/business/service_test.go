@@ -43,7 +43,7 @@ func TestCannotReplaceBotIdentity(t *testing.T) {
 	s.verify = func(context.Context, string) (*telegram.User, error) {
 		return &telegram.User{ID: 43, Username: "different"}, nil
 	}
-	if _, err := s.Save(context.Background(), 1, "test", "token", true); err == nil {
+	if _, err := s.Save(context.Background(), 1, "test", "token", true, ""); err == nil {
 		t.Fatal("bot identity replaced, would break recipients")
 	}
 }
@@ -51,7 +51,7 @@ func TestDefaultAndAdminBotsCannotBeRegisteredTwice(t *testing.T) {
 	for _, id := range []int64{1, 2} {
 		s := New(nil, nil, "key", "1:primary", "2:admin")
 		s.verify = func(context.Context, string) (*telegram.User, error) { return &telegram.User{ID: id}, nil }
-		if _, err := s.Save(context.Background(), 0, "test", "token", true); err == nil {
+		if _, err := s.Save(context.Background(), 0, "test", "token", true, ""); err == nil {
 			t.Fatal("reserved bot accepted")
 		}
 	}
@@ -95,7 +95,7 @@ func TestEditBotPreservesPollerOffsetAndCredentials(t *testing.T) {
 		}
 	})
 	s := New(&store.Store{DB: db}, nil, "key", "1:primary", "")
-	if _, err := s.Save(context.Background(), 3, "renamed", "", false); err != nil {
+	if _, err := s.Save(context.Background(), 3, "renamed", "", false, ""); err != nil {
 		t.Fatal(err)
 	}
 }

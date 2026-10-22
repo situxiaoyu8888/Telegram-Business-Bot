@@ -94,8 +94,12 @@ func New(cfg config.Config, logger *zap.Logger) (*App, error) {
 		return nil, fmt.Errorf("bootstrap admin account: %w", err)
 	}
 	bots := business.New(st, tg, cfg.BusinessBotKey, cfg.TelegramBotToken, cfg.AdminTelegramBotToken)
-	bots.Router = func(id uint64, client *telegram.Client) *telegram.Router {
-		return telegram.NewRouter(client, st, sessions.WithNamespace(fmt.Sprintf("business:%d", id)), walletSvc, menuSvc, supportSvc, refSvc, cfg.AdminIDs, "", false, logger).WithBotID(id).WithMenuButton(shopButton).WithRedPackets(packets)
+	bots.Router = func(bot model.BusinessBot, client *telegram.Client) *telegram.Router {
+		r := telegram.NewRouter(client, st, sessions.WithNamespace(fmt.Sprintf("business:%d", bot.ID)), walletSvc, menuSvc, supportSvc, refSvc, cfg.AdminIDs, "", false, logger).WithBotID(bot.ID).WithRedPackets(packets)
+		if bot.Purpose == business.PurposeRedPacket {
+			return r.WithRedPacketOnly(cfg.ShopH5URL)
+		}
+		return r.WithMenuButton(shopButton)
 	}
 	packets.WithNotifier(func(ctx context.Context, botID uint64, telegramUserID int64, html string) error {
 		sender, err := bots.Sender(ctx, botID)

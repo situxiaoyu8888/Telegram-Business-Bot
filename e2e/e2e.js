@@ -483,6 +483,21 @@ async function toastText(page) { return page.$eval('#toast', e => e.hidden ? '' 
   if (xmBal !== '95.000000') problems.push('sender not charged 5 USDT for two packets: ' + xmBal);
   await nav(admin, 'redpackets'); await shot(admin, '55-admin-redpackets');
 
+  step('red-packet-only business bot');
+  await nav(admin, 'bots'); await admin.click('#create'); await admin.waitForTimeout(400);
+  await admin.fill('#name', '红包机器人'); await admin.fill('#token', '222:redpacket'); await pick(admin, 'botPurpose', 'redpacket');
+  await submitModal(admin); await admin.waitForTimeout(800); await shot(admin, '56-admin-bots');
+  if (sql("select purpose from business_bots where telegram_bot_id=222") !== 'redpacket') problems.push('red packet bot not saved with its purpose');
+  await wait(5000); // the business bot poller starts within a few seconds
+  await fetch(TG + '/inject', { method: 'POST', body: JSON.stringify({ _bot: 222, message: { message_id: seq++, date: 1, text: '/start', from: xh, chat: { id: 9002, type: 'private' } } }) });
+  await fetch(TG + '/inject', { method: 'POST', body: JSON.stringify({ _bot: 222, message: { message_id: seq++, date: 1, text: '烧烤', from: xh, chat: { id: 9002, type: 'private' } } }) });
+  await wait(2500);
+  const rpBot = (await sentNow()).filter(m => m.bot === 222 && m.chat_id === 9002);
+  const homes = rpBot.filter(m => /红包机器人/.test(m.text || ''));
+  console.log(`  red packet bot replies: ${rpBot.length}, home menus: ${homes.length}`);
+  if (homes.length < 2 || !JSON.stringify(homes[0].reply_markup).includes('hbw:new') || JSON.stringify(homes[0].reply_markup).includes('menu:')) problems.push('red packet bot home wrong: ' + JSON.stringify(rpBot.map(m => m.text)));
+  if (rpBot.some(m => /商家/.test(m.text || ''))) problems.push('red packet bot answered with merchant search');
+
   await browser.close();
   console.log('\nPROBLEMS (' + problems.length + '):\n' + problems.map(p => ' - ' + p).join('\n'));
   console.log('Screenshots: ' + SHOTS);

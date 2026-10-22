@@ -38,6 +38,8 @@ type Router struct {
 	adminOnly       bool
 	menuButton      MenuButton
 	packets         *redpacket.Service // nil: red packets off (the admin bot)
+	packetOnly      bool               // a red-packet bot: red packets and the wallet only
+	exchangeURL     string             // the shop's exchange page, offered by red-packet bots
 	logger          *zap.Logger
 }
 
@@ -93,6 +95,9 @@ func (r *Router) saveUser(u *User) *model.TelegramUser {
 	return m
 }
 func (r *Router) homeKeyboard(isAdmin bool) *InlineKeyboardMarkup {
+	if r.packetOnly {
+		return r.packetHomeKeyboard()
+	}
 	var buttons []menu.Button
 	var err error
 	if r.adminOnly {
@@ -135,7 +140,7 @@ func (r *Router) handleMessage(ctx context.Context, m *Message, first bool) {
 		_ = r.client.SendMessage(ctx, m.Chat.ID, "无管理员权限。", nil)
 		return
 	}
-	if first {
+	if first && !r.packetOnly {
 		r.sendWelcome(ctx, m.Chat.ID)
 	}
 	text := strings.TrimSpace(m.Text)
@@ -175,7 +180,7 @@ func (r *Router) handleMessage(ctx context.Context, m *Message, first bool) {
 		r.sendHome(ctx, m.Chat.ID, m.From.ID)
 		return
 	case "/orders":
-		if !r.adminOnly {
+		if !r.adminOnly && !r.packetOnly {
 			r.sendShopOrders(ctx, m.Chat.ID, u.ID)
 			return
 		}
@@ -190,6 +195,9 @@ func (r *Router) handleMessage(ctx context.Context, m *Message, first bool) {
 		_ = r.client.SendMessage(ctx, m.Chat.ID, "已取消当前操作。", r.homeKeyboard(r.isAdmin(m.From.ID)))
 		return
 	case "/contactus":
+		if r.packetOnly {
+			break
+		}
 		r.dispatchMenu(ctx, &CallbackQuery{From: *m.From, Message: &Message{Chat: m.Chat}}, u, model.MenuItem{ActionType: "builtin", ActionValue: "support"})
 		return
 	case "/admin":
@@ -200,7 +208,9 @@ func (r *Router) handleMessage(ctx context.Context, m *Message, first bool) {
 		}
 		return
 	}
-	if item, err := r.menus.ReplyByTitle(text, r.isAdmin(m.From.ID), r.adminOnly); err != nil {
+	if r.packetOnly {
+		// Red-packet bots have no configured menus or merchant search.
+	} else if item, err := r.menus.ReplyByTitle(text, r.isAdmin(m.From.ID), r.adminOnly); err != nil {
 		_ = r.client.SendMessage(ctx, m.Chat.ID, "菜单暂不可用，请稍后重试。", nil)
 		return
 	} else if item != nil {
@@ -229,6 +239,10 @@ func (r *Router) handleMessage(ctx context.Context, m *Message, first bool) {
 	if r.tryPasswordClaim(ctx, 0, m, u) {
 		return
 	}
+	if r.packetOnly {
+		r.sendHome(ctx, m.Chat.ID, m.From.ID)
+		return
+	}
 	if r.searchMerchants(ctx, &CallbackQuery{From: *m.From, Message: &Message{Chat: m.Chat}}, text, false) {
 		return
 	}
@@ -253,6 +267,17 @@ func (r *Router) handleCallback(ctx context.Context, cb *CallbackQuery) {
 	if strings.HasPrefix(cb.Data, "hbw:") && r.packets != nil {
 		r.handlePacketWizardCallback(ctx, cb, u)
 		return
+	}
+	if r.packetOnly {
+		if cb.Data == "rpo:wallet" {
+			if text, err := r.walletText(u); err == nil {
+				_ = r.client.EditMessage(ctx, cb.Message.Chat.ID, cb.Message.MessageID, text, ptrKB(BackHomeKeyboard()))
+			}
+			return
+		}
+		if cb.Data != "home" {
+			return
+		}
 	}
 	chatID, msgID, userID := cb.Message.Chat.ID, cb.Message.MessageID, cb.From.ID
 	r.store.LogAction(userID, "callback", map[string]any{"data": cb.Data})
@@ -399,27 +424,11 @@ func (r *Router) dispatchMenu(ctx context.Context, cb *CallbackQuery, u *model.T
 		text := fmt.Sprintf("<b>👤 个人中心</b>\n\nTelegram ID：<code>%d</code>\n用户名：@%s\n推广码：<code>%s</code>\n上级用户ID：<code>%s</code>", u.TelegramUserID, empty(u.Username, "-"), u.ReferralCode, parent)
 		_ = r.menuResponse(ctx, chatID, msgID, text, ptrKB(BackHomeKeyboard()))
 	case "wallet":
-		balances, err := r.wallet.Balances(u.ID)
+		text, err := r.walletText(u)
 		if err != nil {
 			return
 		}
-		var b strings.Builder
-		b.WriteString("<b>💰 我的钱包</b>\n")
-		for _, x := range balances {
-			// USDT (the shop currency) is always listed; other currencies once they hold money.
-			if x.Code != "USDT" && isZero(x.Available) && isZero(x.Frozen) {
-				continue
-			}
-			icon := x.Icon
-			if icon == "" && x.Kind != wallet.KindFiat {
-				icon = "₮"
-			}
-			fmt.Fprintf(&b, "\n<b>%s %s</b>\n可用：<code>%s</code>", htmlEscape(icon), htmlEscape(x.Name), x.Available)
-			if !isZero(x.Frozen) {
-				fmt.Fprintf(&b, "　冻结：<code>%s</code>", x.Frozen)
-			}
-		}
-		_ = r.menuResponse(ctx, chatID, msgID, b.String(), ptrKB(BackHomeKeyboard()))
+		_ = r.menuResponse(ctx, chatID, msgID, text, ptrKB(BackHomeKeyboard()))
 	case "deposit":
 		var a model.DepositAddress
 		err := r.store.DB.Where("user_id=? AND network='TRC20' AND status=1", u.ID).First(&a).Error
@@ -616,6 +625,10 @@ func (r *Router) sendWelcome(ctx context.Context, chatID int64) {
 	_ = r.client.SendMessage(ctx, chatID, htmlEscape(text), nil)
 }
 func (r *Router) sendHome(ctx context.Context, chatID, userID int64) {
+	if r.packetOnly {
+		_ = r.client.SendMessage(ctx, chatID, packetHomeText, r.homeKeyboard(false))
+		return
+	}
 	name := r.menus.Config("site_name", "Telegram Business Bot")
 	items, err := r.menus.ReplyItems(r.isAdmin(userID), r.adminOnly)
 	if err != nil {
@@ -639,7 +652,36 @@ func (r *Router) sendHome(ctx context.Context, chatID, userID int64) {
 	}
 }
 
+// walletText lists the user's balances: USDT (the shop currency) always, other currencies once
+// they hold money.
+func (r *Router) walletText(u *model.TelegramUser) (string, error) {
+	balances, err := r.wallet.Balances(u.ID)
+	if err != nil {
+		return "", err
+	}
+	var b strings.Builder
+	b.WriteString("<b>💰 我的钱包</b>\n")
+	for _, x := range balances {
+		if x.Code != "USDT" && isZero(x.Available) && isZero(x.Frozen) {
+			continue
+		}
+		icon := x.Icon
+		if icon == "" && x.Kind != wallet.KindFiat {
+			icon = "₮"
+		}
+		fmt.Fprintf(&b, "\n<b>%s %s</b>\n可用：<code>%s</code>", htmlEscape(icon), htmlEscape(x.Name), x.Available)
+		if !isZero(x.Frozen) {
+			fmt.Fprintf(&b, "　冻结：<code>%s</code>", x.Frozen)
+		}
+	}
+	return b.String(), nil
+}
+
 func (r *Router) editHome(ctx context.Context, chatID int64, msgID int, userID int64) {
+	if r.packetOnly {
+		_ = r.client.EditMessage(ctx, chatID, msgID, packetHomeText, r.homeKeyboard(false))
+		return
+	}
 	name := r.menus.Config("site_name", "Telegram Business Bot")
 	_ = r.client.EditMessage(ctx, chatID, msgID, "<b>"+htmlEscape(name)+"</b>\n\n请选择功能：", r.homeKeyboard(r.isAdmin(userID)))
 }

@@ -271,6 +271,7 @@ type BusinessBot struct {
 	Username       string     `gorm:"size:128" json:"username"`
 	TokenEncrypted string     `gorm:"type:text;not null" json:"-"`
 	Enabled        bool       `gorm:"index" json:"enabled"`
+	Purpose        string     `gorm:"size:16;not null;default:full" json:"purpose"` // full, or redpacket (red packets and wallet only)
 	Offset         int        `gorm:"not null;default:0" json:"-"`
 	LastError      string     `gorm:"size:255" json:"last_error"`
 	LastSeenAt     *time.Time `json:"last_seen_at"`

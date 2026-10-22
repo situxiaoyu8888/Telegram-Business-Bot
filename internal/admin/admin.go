@@ -825,12 +825,13 @@ func (h *Handler) saveBot(c *gin.Context) {
 		Name    string `json:"name"`
 		Token   string `json:"token"`
 		Enabled bool   `json:"enabled"`
+		Purpose string `json:"purpose"`
 	}
 	if err := c.ShouldBindJSON(&b); err != nil {
 		respond(c, err)
 		return
 	}
-	row, err := h.bots.Save(c.Request.Context(), b.ID, b.Name, b.Token, b.Enabled)
+	row, err := h.bots.Save(c.Request.Context(), b.ID, b.Name, b.Token, b.Enabled, b.Purpose)
 	if err != nil {
 		respond(c, err)
 		return

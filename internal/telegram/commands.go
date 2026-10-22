@@ -39,7 +39,11 @@ func (b MenuButton) payload() any {
 // Register the private-chat command list and the input field's menu button.
 // Commands stay available by typing "/" when the button opens the H5 page.
 func (c *Client) RegisterCommandMenu(ctx context.Context, adminOnly bool, button MenuButton) error {
-	if err := c.call(ctx, "setMyCommands", map[string]any{"commands": defaultCommands(adminOnly, button.URL != ""), "scope": map[string]string{"type": "all_private_chats"}, "language_code": ""}, nil); err != nil {
+	return c.registerCommandMenu(ctx, defaultCommands(adminOnly, button.URL != ""), button)
+}
+
+func (c *Client) registerCommandMenu(ctx context.Context, commands []BotCommand, button MenuButton) error {
+	if err := c.call(ctx, "setMyCommands", map[string]any{"commands": commands, "scope": map[string]string{"type": "all_private_chats"}, "language_code": ""}, nil); err != nil {
 		return err
 	}
 	return c.call(ctx, "setChatMenuButton", map[string]any{"menu_button": button.payload()}, nil)
@@ -50,7 +54,11 @@ func (c *Client) RegisterCommandMenu(ctx context.Context, adminOnly bool, button
 func (r *Router) SyncCommandMenu(ctx context.Context) {
 	for ctx.Err() == nil {
 		attempt, cancel := context.WithTimeout(ctx, 20*time.Second)
-		err := r.client.RegisterCommandMenu(attempt, r.adminOnly, r.menuButton)
+		commands := defaultCommands(r.adminOnly, r.menuButton.URL != "")
+		if r.packetOnly {
+			commands = []BotCommand{{"start", "开始使用"}, {"hb", "发红包"}, {"cancel", "取消当前操作"}}
+		}
+		err := r.client.registerCommandMenu(attempt, commands, r.menuButton)
 		cancel()
 		if err == nil {
 			return
