@@ -592,9 +592,9 @@ async function withdrawPage(v){
  <div class="field"><label class="muted small" for="wdAmount">提现金额</label><div class="row"><input id="wdAmount" inputmode="decimal" placeholder="0" autocomplete="off"><button class="btn ghost sm" id="wdAll">全部</button></div></div>
  <div class="muted small" id="wdInfo"></div><button class="btn block" id="wdSubmit" style="margin-top:14px">提交提现</button></div>`+recs;
  const rule=()=>d.rules.find(r=>r.currency===$('wdCur').value);
- const refresh=()=>{const r=rule(),b=bal[r.currency],amt=Number($('wdAmount').value)||0,fee=Number(r.withdraw_fee)||0;
+ const refresh=()=>{const r=rule(),b=bal[r.currency],amt=Number($('wdAmount').value)||0,pct=Number(r.withdraw_fee_rate)||0,p=10**r.decimals,fee=(Number(r.withdraw_fee)||0)+Math.ceil(amt*pct*p-1e-9)/p,feeRule=pct>0?(Number(r.withdraw_fee)>0?fmtAmt(r.withdraw_fee,r.decimals)+' + ':'')+(+(pct*100).toFixed(4))+'%':fmtAmt(r.withdraw_fee,r.decimals);
   $('wdTarget').textContent=r.target;$('wdAddr').placeholder=r.kind==='fiat'?'例如：银行名称 / 开户名 / 账号':'请输入'+r.target;
-  $('wdInfo').innerHTML=`可用 ${fmtAmt(b?.available||0,r.decimals)} ${esc(r.name)} · 最低 ${fmtAmt(r.min_withdraw,r.decimals)} · 手续费 ${fmtAmt(r.withdraw_fee,r.decimals)}${amt>0?`<br>预计到账 <b>${fmtAmt(Math.max(0,truncTo(amt-fee,r.decimals)),r.decimals)}</b> ${esc(r.name)}`:''}<br>提交后金额先冻结，审核通过后打款`};
+  $('wdInfo').innerHTML=`可用 ${fmtAmt(b?.available||0,r.decimals)} ${esc(r.name)} · 最低 ${fmtAmt(r.min_withdraw,r.decimals)} · 手续费 ${feeRule}${amt>0?`<br>手续费 ${fmtAmt(fee,r.decimals)}，预计到账 <b>${fmtAmt(Math.max(0,truncTo(amt-fee,r.decimals)),r.decimals)}</b> ${esc(r.name)}`:''}<br>提交后金额先冻结，审核通过后打款`};
  const changed=()=>{wdState.cur=$('wdCur').value;wdState.rid=newRequestID();refresh()};
  $('wdCur').onchange=changed;$('wdAmount').oninput=changed;$('wdAddr').oninput=()=>{wdState.rid=newRequestID()};
  $('wdAll').onclick=()=>{const r=rule(),b=bal[r.currency];$('wdAmount').value=Number(b?.available)>0?String(+Number(b.available).toFixed(r.decimals)):'';changed()};

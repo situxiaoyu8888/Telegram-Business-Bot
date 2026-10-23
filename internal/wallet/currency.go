@@ -346,5 +346,5 @@ func (s *Service) CreateCurrencyWithdrawal(userID uint64, currency, address, amo
 	if err := CheckWithdrawAddress(c.Kind, address); err != nil {
 		return nil, err
 	}
-	return s.createWithdrawal(userID, c.Code, withdrawNetwork(c.Kind), address, amountText, requestID, c.MinWithdraw, c.WithdrawFee, c.Decimals)
+	return s.createWithdrawal(userID, c.Code, withdrawNetwork(c.Kind), address, amountText, requestID, c.MinWithdraw, c.WithdrawFee, c.WithdrawFeeRate, c.Decimals)
 }

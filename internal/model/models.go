@@ -363,20 +363,22 @@ type AdminAuditLog struct {
 // drives exchanges between currencies. Code "USDT" is the TRC20 token the deposit watcher and the
 // shop use; other codes are credited by the console (or by exchange).
 type WalletCurrency struct {
-	ID           uint64    `gorm:"primaryKey" json:"id"`
-	Code         string    `gorm:"size:16;uniqueIndex;not null" json:"code"`
-	Name         string    `gorm:"size:32;not null" json:"name"`
-	Icon         string    `gorm:"size:16;not null;default:''" json:"icon"`   // flag emoji for fiat; empty shows the kind's symbol
-	Kind         string    `gorm:"size:16;not null;default:fiat" json:"kind"` // trc20, erc20 or fiat
-	Rate         string    `gorm:"type:decimal(24,8);not null;default:1" json:"rate"`
-	Decimals     int       `gorm:"not null" json:"decimals"` // zero values must be written, so no defaults
-	MinWithdraw  string    `gorm:"type:decimal(24,6);not null;default:0" json:"min_withdraw"`
-	WithdrawFee  string    `gorm:"type:decimal(24,6);not null;default:0" json:"withdraw_fee"`
-	Exchangeable bool      `gorm:"not null" json:"exchangeable"`
-	Withdrawable bool      `gorm:"not null" json:"withdrawable"`
-	Enabled      bool      `gorm:"not null" json:"enabled"`
-	Sort         int       `gorm:"not null" json:"sort"`
-	UpdatedAt    time.Time `json:"updated_at"`
+	ID          uint64 `gorm:"primaryKey" json:"id"`
+	Code        string `gorm:"size:16;uniqueIndex;not null" json:"code"`
+	Name        string `gorm:"size:32;not null" json:"name"`
+	Icon        string `gorm:"size:16;not null;default:''" json:"icon"`   // flag emoji for fiat; empty shows the kind's symbol
+	Kind        string `gorm:"size:16;not null;default:fiat" json:"kind"` // trc20, erc20 or fiat
+	Rate        string `gorm:"type:decimal(24,8);not null;default:1" json:"rate"`
+	Decimals    int    `gorm:"not null" json:"decimals"` // zero values must be written, so no defaults
+	MinWithdraw string `gorm:"type:decimal(24,6);not null;default:0" json:"min_withdraw"`
+	WithdrawFee string `gorm:"type:decimal(24,6);not null;default:0" json:"withdraw_fee"`
+	// WithdrawFeeRate is charged on top of WithdrawFee as a share of the amount (0.01 = 1%).
+	WithdrawFeeRate string    `gorm:"type:decimal(10,6);not null;default:0" json:"withdraw_fee_rate"`
+	Exchangeable    bool      `gorm:"not null" json:"exchangeable"`
+	Withdrawable    bool      `gorm:"not null" json:"withdrawable"`
+	Enabled         bool      `gorm:"not null" json:"enabled"`
+	Sort            int       `gorm:"not null" json:"sort"`
+	UpdatedAt       time.Time `json:"updated_at"`
 }
 
 // WalletTransfer is one completed transfer between two users' balances of one currency.

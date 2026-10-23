@@ -64,7 +64,15 @@ func (h *Handler) saveCurrency(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "图标请填写一个国旗 emoji 或符号"})
 		return
 	}
-	fields := map[string]any{"name": b.Name, "icon": b.Icon, "rate": rate.StringFixed(8), "decimals": b.Decimals, "min_withdraw": b.MinWithdraw, "withdraw_fee": b.WithdrawFee,
+	feeRate, err := decimal.NewFromString(strings.TrimSpace(b.WithdrawFeeRate))
+	if strings.TrimSpace(b.WithdrawFeeRate) == "" {
+		feeRate, err = decimal.Zero, nil
+	}
+	if err != nil || feeRate.IsNegative() || feeRate.GreaterThanOrEqual(decimal.NewFromInt(1)) || !feeRate.Equal(feeRate.Truncate(6)) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "提现手续费比例需在 0%–100% 之间（最多 4 位小数，例如 0.5%）"})
+		return
+	}
+	fields := map[string]any{"name": b.Name, "icon": b.Icon, "rate": rate.StringFixed(8), "decimals": b.Decimals, "min_withdraw": b.MinWithdraw, "withdraw_fee": b.WithdrawFee, "withdraw_fee_rate": feeRate.StringFixed(6),
 		"exchangeable": b.Exchangeable, "withdrawable": b.Withdrawable, "enabled": b.Enabled, "sort": b.Sort}
 	if b.ID == 0 {
 		b.Code = strings.ToUpper(strings.TrimSpace(b.Code))

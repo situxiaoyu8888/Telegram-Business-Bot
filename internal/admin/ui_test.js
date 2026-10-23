@@ -237,3 +237,11 @@ test('shop order, after-sale and review details are in Chinese with the buyer',(
  const plain=text(`plainDetail({id:3,subject:'x',status:'open',created_at:'2026-10-23T10:00:00Z',replied_at:null,secret_field:1})`);
  assert.ok(plain.includes('工单：3')&&plain.includes('待回复')&&!plain.includes('secret_field'));
 });
+test('withdrawal fee percentage is entered in percent and shown with the fixed fee',()=>{
+ const h=harness();
+ assert.equal(h.run("pctToRate('0.5')"),'0.005');assert.equal(h.run("pctToRate('1.25%')"),'0.0125');assert.equal(h.run("pctToRate('')"),'0');
+ assert.throws(()=>h.run("pctToRate('abc')"),/比例手续费/);
+ assert.equal(h.run("feeLabel({withdraw_fee:'1.000000',withdraw_fee_rate:'0.005000'})"),'1 + 0.5%');
+ assert.equal(h.run("feeLabel({withdraw_fee:'0',withdraw_fee_rate:'0.010000'})"),'1%');
+ assert.equal(h.run("feeLabel({withdraw_fee:'2.5',withdraw_fee_rate:'0'})"),'2.5');
+});

@@ -153,18 +153,18 @@ func (s *Service) CreateWithdrawal(userID uint64, network, address, amountText, 
 	if network != "TRC20" || !ValidTRONAddress(address) {
 		return nil, userErr("地址格式不正确，请输入以 T 开头的 TRON 地址")
 	}
-	min, fee := s.withdrawRule()
-	return s.createWithdrawal(userID, s.currency, network, address, amountText, requestID, min, fee, 6)
+	min, fee, rate := s.withdrawRule()
+	return s.createWithdrawal(userID, s.currency, network, address, amountText, requestID, min, fee, rate, 6)
 }
 
 // withdrawRule is the minimum and fee of a USDT-TRC20 withdrawal, set in the console (币种汇率);
 // the WITHDRAW_MIN_USDT / WITHDRAW_FEE_USDT settings only seed it.
-func (s *Service) withdrawRule() (min, fee string) {
+func (s *Service) withdrawRule() (min, fee, rate string) {
 	var c model.WalletCurrency
 	if s.st == nil || s.st.DB.Where("code = ?", s.currency).First(&c).Error != nil {
-		return s.minWithdraw, s.withdrawFee
+		return s.minWithdraw, s.withdrawFee, "0"
 	}
-	return c.MinWithdraw, c.WithdrawFee
+	return c.MinWithdraw, c.WithdrawFee, c.WithdrawFeeRate
 }
 
 // SeedWithdrawRule copies the configured USDT-TRC20 withdrawal minimum and fee into its currency
@@ -183,9 +183,15 @@ func (s *Service) SeedWithdrawRule() error {
 	})
 }
 
+// WithdrawalFee is the fee of withdrawing amount: the fixed fee plus rate × amount (rounded up to
+// the currency's decimal places).
+func WithdrawalFee(amount, fixed, rate decimal.Decimal, places int) decimal.Decimal {
+	return fixed.Add(amount.Mul(rate).RoundCeil(int32(places)))
+}
+
 // createWithdrawal freezes amount for a pending withdrawal; a repeated request ID returns the
 // first order.
-func (s *Service) createWithdrawal(userID uint64, currency, network, address, amountText, requestID, minText, feeText string, places int) (*model.WithdrawalOrder, error) {
+func (s *Service) createWithdrawal(userID uint64, currency, network, address, amountText, requestID, minText, feeText, rateText string, places int) (*model.WithdrawalOrder, error) {
 	if requestID == "" || len(requestID) > 64 {
 		return nil, fmt.Errorf("withdrawal request ID required")
 	}
@@ -194,10 +200,15 @@ func (s *Service) createWithdrawal(userID uint64, currency, network, address, am
 		return nil, userErr("金额格式不正确（最多 %d 位小数）", places)
 	}
 	min, minErr := decimal.NewFromString(minText)
-	fee, feeErr := decimal.NewFromString(feeText)
-	if minErr != nil || feeErr != nil || min.IsNegative() || fee.IsNegative() || !fee.Equal(fee.Truncate(6)) {
+	fixed, feeErr := decimal.NewFromString(feeText)
+	if rateText == "" {
+		rateText = "0"
+	}
+	rate, rateErr := decimal.NewFromString(rateText)
+	if minErr != nil || feeErr != nil || rateErr != nil || min.IsNegative() || fixed.IsNegative() || !fixed.Equal(fixed.Truncate(6)) || rate.IsNegative() || rate.GreaterThanOrEqual(decimal.NewFromInt(1)) {
 		return nil, fmt.Errorf("invalid withdrawal configuration")
 	}
+	fee := WithdrawalFee(amount, fixed, rate, places)
 	if amount.LessThan(min) {
 		return nil, userErr("最低提现金额为 %s", min.String())
 	}

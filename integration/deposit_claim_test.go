@@ -258,9 +258,23 @@ func TestUSDTWithdrawalRuleIsSetInTheConsole(t *testing.T) {
 	if o.Fee != "2.500000" || o.Actual != "27.500000" {
 		t.Fatalf("fee %s actual %s", o.Fee, o.Actual)
 	}
+	// A percentage is charged on top of the fixed fee, rounded up to the currency's places.
+	must(t, db.Model(&model.WalletCurrency{}).Where("code = 'USDT'").Update("withdraw_fee_rate", "0.01").Error)
+	o, err = w.CreateWithdrawal(u, "TRC20", "TLa2f6VPqDgRE67v1736s7bJ8Ray5wYjU7", "30.5", "w-pct")
+	must(t, err)
+	if o.Fee != "2.805000" || o.Actual != "27.695000" {
+		t.Fatalf("percentage fee %s actual %s", o.Fee, o.Actual)
+	}
+	must(t, db.Model(&model.WalletCurrency{}).Where("code = 'CNY'").Updates(map[string]any{"withdrawable": true, "min_withdraw": "0", "withdraw_fee": "0", "withdraw_fee_rate": "0.003"}).Error)
+	must(t, w.AdminAdjust(u, "CNY", "1000", "admin", "test"))
+	cny, err := w.CreateCurrencyWithdrawal(u, "CNY", "工商银行 张三 6222", "333.33", "w-cny")
+	must(t, err)
+	if cny.Fee != "1.000000" || cny.Actual != "332.330000" { // 0.99999 rounds up to 1.00
+		t.Fatalf("CNY fee %s actual %s", cny.Fee, cny.Actual)
+	}
 	rules, err := w.WithdrawRules()
 	must(t, err)
-	if rules[0].Currency != "USDT" || rules[0].WithdrawFee != "2.500000" {
+	if rules[0].Currency != "USDT" || rules[0].WithdrawFee != "2.500000" || rules[0].WithdrawFeeRate != "0.010000" {
 		t.Fatalf("rules %+v", rules[0])
 	}
 }

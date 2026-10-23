@@ -211,8 +211,11 @@ async function toastText(page) { return page.$eval('#toast', e => e.hidden ? '' 
     const usdtId = sql("select id from wallet_currencies where code='USDT'");
     const seededFee = sql("select withdraw_fee from wallet_currencies where code='USDT'");
     await admin.click(`[data-action="edit"][data-id="${usdtId}"]`); await admin.waitForTimeout(400); await shot(admin, '11b2-admin-usdt-withdraw-fee');
-    if (!(await admin.$('#curFee'))) problems.push('USDT withdrawal fee cannot be set in the console');
-    await admin.fill('#curFee', String(Number(seededFee))); await submitModal(admin);
+    if (!(await admin.$('#curFee')) || !(await admin.$('#curFeeRate'))) problems.push('USDT withdrawal fee cannot be set in the console');
+    await admin.fill('#curFee', String(Number(seededFee))); await admin.fill('#curFeeRate', '0.5'); await submitModal(admin);
+    if (Number(sql("select withdraw_fee_rate from wallet_currencies where code='USDT'")) !== 0.005) problems.push('USDT withdrawal fee percentage not saved');
+    if (!(await admin.textContent('#content')).includes('0.5%')) problems.push('currency list does not show the fee percentage');
+    sql("update wallet_currencies set withdraw_fee_rate=0 where code='USDT'");
     if (Number(sql("select withdraw_fee from wallet_currencies where code='USDT'")) !== Number(seededFee)) problems.push('USDT withdrawal fee not saved');
   }
   const cnyId = sql("select id from wallet_currencies where code='CNY'");

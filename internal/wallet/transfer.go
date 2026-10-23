@@ -164,7 +164,9 @@ type WithdrawRule struct {
 	Decimals    int    `json:"decimals"`
 	MinWithdraw string `json:"min_withdraw"`
 	WithdrawFee string `json:"withdraw_fee"`
-	Target      string `json:"target"`
+	// WithdrawFeeRate is added to WithdrawFee as a share of the amount (0.01 = 1%).
+	WithdrawFeeRate string `json:"withdraw_fee_rate"`
+	Target          string `json:"target"`
 }
 
 // WithdrawRules lists the withdrawable currencies (as the bot's withdrawal menu does); the USDT
@@ -179,7 +181,7 @@ func (s *Service) WithdrawRules() ([]WithdrawRule, error) {
 		if !c.Withdrawable {
 			continue
 		}
-		rule := WithdrawRule{Currency: c.Code, Name: c.Name, Icon: c.Icon, Kind: c.Kind, Decimals: c.Decimals, MinWithdraw: c.MinWithdraw, WithdrawFee: c.WithdrawFee, Target: WithdrawTarget(c.Kind)}
+		rule := WithdrawRule{Currency: c.Code, Name: c.Name, Icon: c.Icon, Kind: c.Kind, Decimals: c.Decimals, MinWithdraw: c.MinWithdraw, WithdrawFee: c.WithdrawFee, WithdrawFeeRate: c.WithdrawFeeRate, Target: WithdrawTarget(c.Kind)}
 		if c.Code == s.currency {
 			rule.Decimals, rule.Target = 6, WithdrawTarget(KindTRC20)
 		}

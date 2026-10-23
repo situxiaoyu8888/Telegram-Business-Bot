@@ -412,10 +412,7 @@ func (r *Router) handleCallback(ctx context.Context, cb *CallbackQuery) {
 		}
 		requestID := hex.EncodeToString(nonce)
 		_ = r.sessions.Set(ctx, userID, session.Session{Scene: "withdraw", Step: "input_amount", Data: map[string]any{"currency": cur.Code, "name": cur.Name, "kind": cur.Kind, "request_id": requestID}})
-		rule := ""
-		if cur.Code != "USDT" {
-			rule = fmt.Sprintf("\n最低提现：<code>%s</code>，每笔手续费：<code>%s</code>", trimZeros(cur.MinWithdraw), trimZeros(cur.WithdrawFee))
-		}
+		rule := fmt.Sprintf("\n最低提现：<code>%s</code>，手续费：%s", trimZeros(cur.MinWithdraw), feeText(cur.WithdrawFee, cur.WithdrawFeeRate))
 		_ = r.client.EditMessage(ctx, chatID, msgID, "<b>💸 提现 - "+htmlEscape(cur.Name)+"</b>\n\n请输入提现金额，例如 <code>100.5</code>。"+rule+"\n发送 /cancel 可取消。", ptrKB(BackHomeKeyboard()))
 	case strings.HasPrefix(cb.Data, "withdraw:confirm:"):
 		s, _ := r.sessions.Get(ctx, userID)
@@ -884,6 +881,20 @@ func isZero(v string) bool {
 }
 
 // trimZeros shows a decimal without trailing zeros ("10.500000" → "10.5").
+// feeText describes a withdrawal fee: a fixed amount, a percentage of the amount, or both.
+func feeText(fixed, rate string) string {
+	f, _ := decimal.NewFromString(fixed)
+	r, _ := decimal.NewFromString(rate)
+	pct := "<code>" + r.Mul(decimal.NewFromInt(100)).String() + "%</code>"
+	switch {
+	case r.IsPositive() && f.IsPositive():
+		return "每笔 <code>" + f.String() + "</code> + 金额的 " + pct
+	case r.IsPositive():
+		return "金额的 " + pct
+	}
+	return "每笔 <code>" + f.String() + "</code>"
+}
+
 func trimZeros(v string) string {
 	d, err := decimal.NewFromString(v)
 	if err != nil {
