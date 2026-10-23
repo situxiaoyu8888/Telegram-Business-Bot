@@ -701,8 +701,33 @@ func (r *Router) confirmPacket(ctx context.Context, chatID, userID int64, s *ses
 	default:
 		b.WriteString("\n\n确认后将从钱包扣款，然后可以把红包转发到任意群聊或好友。")
 	}
-	kb := &InlineKeyboardMarkup{InlineKeyboard: [][]InlineKeyboardButton{{btn("✅ 确认发红包", "hbw:send:"+sessionString(s, "request_id")), btn("❌ 取消", "hbw:x")}}}
+	confirm := btn("✅ 确认发红包", "hbw:send:"+sessionString(s, "request_id"))
+	if inGroupWizard(s) && r.pay != nil {
+		// The payment password is entered in the private chat. A t.me link button opens it inside
+		// Telegram on every client; a callback answered with a URL opens a browser on some.
+		if name, err := r.client.Username(ctx); err == nil && name != "" {
+			confirm = InlineKeyboardButton{Text: "✅ 确认发红包", URL: "https://t.me/" + name + "?start=hbpay_" + sessionString(s, "request_id")}
+		}
+	}
+	kb := &InlineKeyboardMarkup{InlineKeyboard: [][]InlineKeyboardButton{{confirm, btn("❌ 取消", "hbw:x")}}}
 	r.wizardSay(ctx, s, chatID, b.String(), kb, false)
+}
+
+// payFromGroupWizard handles the group wizard's confirm link (/start hbpay_<request ID>) in the
+// private chat: it asks for the payment password there and tells the group message so. Only
+// the user who started that wizard has its session; anyone else is told there is nothing to pay.
+func (r *Router) payFromGroupWizard(ctx context.Context, m *Message, u *model.TelegramUser, requestID string) {
+	s, _ := r.sessions.Get(ctx, m.From.ID)
+	matches := s != nil && s.Scene == "redpacket" && (requestID == "" || sessionString(s, "request_id") == requestID)
+	switch {
+	case matches && isPayStep(s.Step):
+		_ = r.client.SendMessage(ctx, m.Chat.ID, payPrompt(s), nil)
+	case matches && requestID != "" && inGroupWizard(s) && s.Step == "confirm":
+		_ = r.client.SendMessage(ctx, m.Chat.ID, r.requirePayPassword(ctx, m.From.ID, u, s, "redpacket"), nil)
+		r.wizardSay(ctx, s, m.Chat.ID, "🔐 请在<b>机器人私聊</b>中输入支付密码完成支付。", cancelKeyboard(), false)
+	default:
+		_ = r.client.SendMessage(ctx, m.Chat.ID, "没有待支付的红包，或已超时，请在群里重新发送 /start。", nil)
+	}
 }
 
 func (r *Router) sendPacket(ctx context.Context, chatID int64, msgID int, u *model.TelegramUser, s *session.Session) {

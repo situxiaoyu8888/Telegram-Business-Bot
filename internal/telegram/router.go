@@ -172,13 +172,10 @@ func (r *Router) handleMessage(ctx context.Context, m *Message, first bool) {
 	command := commandName(text)
 	if command == "/start" {
 		parts := strings.Fields(text)
-		// "hbpay" comes from a group wizard's confirm button: enter the payment password here.
-		if len(parts) > 1 && parts[1] == "hbpay" && r.pay != nil {
-			if s, _ := r.sessions.Get(ctx, m.From.ID); s != nil && isPayStep(s.Step) {
-				_ = r.client.SendMessage(ctx, m.Chat.ID, payPrompt(s), nil)
-			} else {
-				_ = r.client.SendMessage(ctx, m.Chat.ID, "没有待支付的红包，或已超时，请在群里重新发送 /start。", nil)
-			}
+		// "hbpay_<request ID>" comes from a group wizard's confirm button: enter the payment
+		// password here.
+		if len(parts) > 1 && r.pay != nil && (parts[1] == "hbpay" || strings.HasPrefix(parts[1], "hbpay_")) {
+			r.payFromGroupWizard(ctx, m, u, strings.TrimPrefix(strings.TrimPrefix(parts[1], "hbpay"), "_"))
 			return
 		}
 		// "hbp_<code>" comes from the claim button of a password packet.

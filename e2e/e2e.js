@@ -49,6 +49,13 @@ async function enterPin(page) {
     await page.fill('#pinInput', PIN); await page.click('#pinOk');
   }
 }
+// Flips the 系统配置 switch that makes the shop's categories follow the bot's menus.
+async function setCategoriesFromMenu(page, on) {
+  await nav(page, 'configs');
+  const id = sql("select id from system_configs where system_configs.key='shop_categories_from_menu'");
+  await page.click(`[data-action="edit"][data-id="${id}"]`); await page.waitForTimeout(400);
+  await page.setChecked('#valSwitch', on); await submitModal(page);
+}
 async function submitModal(page) { await page.click('#submitModal'); await page.waitForTimeout(600); }
 async function toastText(page) { return page.$eval('#toast', e => e.hidden ? '' : e.textContent).catch(() => ''); }
 
@@ -103,7 +110,12 @@ async function toastText(page) { return page.$eval('#toast', e => e.hidden ? '' 
   const child = (await adminApi(admin, 'menus')).find(m => m.code === 'food_shops');
   await adminApi(admin, 'merchants', 'POST', { name: '曼谷中餐馆', menu_id: child.id, address: '曼谷素坤逸 1 号', hours: '10:00–22:00', enabled: true, commission_rate: '0.1', notify_chat_id: 888 });
 
-  step('create category via UI');
+  step('shop categories follow the bot menus by default, or are kept by hand');
+  await nav(admin, 'shop_categories'); await shot(admin, '02a-categories-from-menu');
+  const menuCats = await admin.textContent('#content');
+  if (!menuCats.includes('美食') || !menuCats.includes('餐厅') || !(await admin.isHidden('#create'))) problems.push('shop categories do not show the menu categories: ' + menuCats.slice(0, 160));
+  await setCategoriesFromMenu(admin, false); await shot(admin, '02b-configs-switch');
+  if (!(await admin.textContent('#content')).includes('关闭')) problems.push('category switch not shown as off');
   await nav(admin, 'shop_categories');
   await admin.click('#create'); await admin.fill('#scatName', '中餐'); await submitModal(admin);
   await shot(admin, '02-categories');
@@ -156,8 +168,15 @@ async function toastText(page) { return page.$eval('#toast', e => e.hidden ? '' 
   await bctx.route('https://e2e.example/**', r => r.fulfill({ contentType: 'image/svg+xml', body: decodeURIComponent(IMG('#2f9e44', '轮播图').split(',')[1]) }));
   const shopPage = await bctx.newPage(); watch(shopPage, 'shop');
 
+  step('shop home with hand-kept categories');
+  await shopPage.goto(SHOP_BASE + '/shop/#/'); await shopPage.waitForTimeout(1200); await shot(shopPage, '09-shop-home-manual');
+  if (!(await shopPage.locator('.chip', { hasText: '中餐' }).count()) || await shopPage.locator('.chip', { hasText: '美食' }).count()) problems.push('shop home does not use the console categories');
+  await shopPage.click('.chip:has-text("中餐")'); await shopPage.waitForTimeout(900);
+  if (!(await shopPage.locator('#grid', { hasText: '宫保鸡丁' }).count())) problems.push('console category tab does not list its products');
+  await setCategoriesFromMenu(admin, true);
+
   step('shop home');
-  await shopPage.goto(SHOP_BASE + '/shop/#/');
+  await shopPage.goto(SHOP_BASE + '/shop/#/'); await shopPage.reload(); // reopened after the switch
   await shopPage.waitForTimeout(1200); await shot(shopPage, '10-shop-home');
 
   step('shop home lists menu categories and their merchants');
@@ -505,13 +524,17 @@ async function toastText(page) { return page.$eval('#toast', e => e.hidden ? '' 
     await tap(xm, 'hbw:c:USDT', wm); await wait(700);
     await say(xm, '聊点别的', group); await wait(500); // not a reply: ignored by the wizard
     for (const st of ['3', '3', '新年快乐']) { await reply(st); await wait(700); }
-    const confirm = (await sentNow()).filter(m => m.chat_id === -100555 && m.message_id === wizard.mid && JSON.stringify(m.reply_markup || {}).includes('hbw:send:')).pop();
-    const data = confirm && JSON.stringify(confirm.reply_markup).match(/hbw:send:[0-9a-f]+/)[0];
-    if (!data) problems.push('group wizard confirmation not shown');
+    // Confirming is a t.me link to the private chat (opened inside Telegram), where the payment
+    // password is entered; only the wizard's starter has something to pay there.
+    const confirm = (await sentNow()).filter(m => m.chat_id === -100555 && m.message_id === wizard.mid && JSON.stringify(m.reply_markup || {}).includes('start=hbpay_')).pop();
+    const link = confirm && JSON.stringify(confirm.reply_markup).match(/start=(hbpay_[0-9a-f]+)/)[1];
+    if (!link) problems.push('group wizard confirmation is not a link to the private chat');
     else {
-      await tap(xm, data, wm); await wait(800);
-      if (!(await sentNow()).some(m => m.method === 'answerCallbackQuery' && (m.url || '').includes('start=hbpay'))) problems.push('group confirm did not open the private chat for the password');
-      await say(xm, '/start hbpay'); await wait(700);
+      await say(passer, '/start ' + link); await wait(700);
+      if (!(await sentNow()).some(m => m.chat_id === 9005 && /没有待支付的红包/.test(m.text || ''))) problems.push('someone else could pay the group wizard');
+      await say(xm, '/start ' + link); await wait(900);
+      if (!(await sentNow()).some(m => m.chat_id === 9001 && /支付密码/.test(m.text || ''))) problems.push('confirm link did not ask for the payment password');
+      if (!(await sentNow()).some(m => m.method === 'editMessageText' && m.chat_id === -100555 && m.message_id === wizard.mid && /机器人私聊/.test(m.text || ''))) problems.push('group wizard does not say where to pay');
       await say(xm, PIN); await wait(1500);
       lucky = sql("select concat(code,' ',type,' ',total,' ',count,' ',chat_id,' ',message_id) from red_packets order by id desc limit 1").split(' ');
       if (Number(lucky[5]) !== wizard.mid) problems.push('the wizard message did not become the packet card');
@@ -717,6 +740,16 @@ async function toastText(page) { return page.$eval('#toast', e => e.hidden ? '' 
   await nb({ message: { message_id: seq++, date: 1, text: '轻轨', from: xm, chat: { id: 9001, type: 'private' } } }); await wait(1500);
   const searchReply = (await sentNow()).filter(m => m.bot === 333 && m.chat_id === 9001 && /搜索「轻轨」/.test(m.text || '')).pop();
   if (!searchReply || !JSON.stringify(searchReply.reply_markup).includes('nw:a:')) problems.push('news search returned nothing');
+
+  // Long form notes read as a full-width box below the fields.
+  for (const [key, name] of [['roles', '61-admin-role-form'], ['bots', '62-admin-bot-form'], ['menus', '63-admin-menu-form']]) {
+    await nav(admin, key); await admin.click('#create'); await admin.waitForTimeout(500);
+    await admin.$$eval('#modal *', els => els.forEach(e => { if (e.scrollHeight > e.clientHeight + 4) e.scrollTop = e.scrollHeight; }));
+    await shot(admin, name);
+    const hint = await admin.$eval('#modal .form-grid > .hint.full:last-of-type', e => [e.getBoundingClientRect().width, e.parentElement.getBoundingClientRect().width]).catch(() => null);
+    if (!hint || hint[0] < hint[1] - 2) problems.push(key + ' form note does not span the form: ' + JSON.stringify(hint));
+    await admin.click('#closeModal').catch(() => admin.keyboard.press('Escape')); await admin.waitForTimeout(300);
+  }
 
   await browser.close();
   console.log('\nPROBLEMS (' + problems.length + '):\n' + problems.map(p => ' - ' + p).join('\n'));

@@ -426,9 +426,11 @@ func (s *Service) saveProductTx(tx *gorm.DB, p *model.ShopProduct, skus []SKUInp
 	if err := tx.Select("id").First(&m, p.MerchantID).Error; err != nil {
 		return userErr("请选择有效的商家")
 	}
-	var c model.ShopCategory
-	if err := tx.Select("id").First(&c, p.CategoryID).Error; err != nil {
-		return userErr("请选择有效的分类")
+	if p.CategoryID != 0 || !s.CategoriesFromMenu() {
+		var c model.ShopCategory
+		if err := tx.Select("id").First(&c, p.CategoryID).Error; err != nil {
+			return userErr("请选择有效的分类")
+		}
 	}
 	fields := map[string]any{"merchant_id": p.MerchantID, "category_id": p.CategoryID, "name": p.Name, "description": p.Description, "images": strings.TrimSpace(p.Images), "kind": p.Kind, "allow_express": p.AllowExpress, "allow_pickup": p.AllowPickup, "sort": p.Sort, "enabled": p.Enabled, "featured": p.Featured, "promo_starts_at": p.PromoStartsAt, "promo_ends_at": p.PromoEndsAt, "limit_per_user": p.LimitPerUser, "group_size": p.GroupSize, "group_hours": p.GroupHours, "group_rate": p.GroupRate}
 	if p.ID == 0 {

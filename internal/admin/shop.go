@@ -18,6 +18,7 @@ func (h *Handler) WithShop(s *shop.Service) *Handler { h.shop = s; return h }
 
 func (h *Handler) registerShop(api *gin.RouterGroup, can func(...string) gin.HandlerFunc) {
 	api.GET("/shop-categories", can("shop_products"), h.shopCategories)
+	api.GET("/shop-categories/mode", can("shop_products"), h.shopCategoryMode)
 	api.POST("/shop-categories", can("shop_products"), platformOnly, h.saveShopCategory)
 	api.DELETE("/shop-categories/:id", can("shop_products"), platformOnly, h.deleteShopCategory)
 	api.GET("/shop-products", can("shop_products"), h.shopProducts)
@@ -74,6 +75,21 @@ func (h *Handler) registerShop(api *gin.RouterGroup, can func(...string) gin.Han
 func (h *Handler) shopCategories(c *gin.Context) {
 	rows, err := h.shop.AdminCategories()
 	listOrError(c, rows, err)
+}
+
+// shopCategoryMode tells the console whether the shop's categories follow the bot's menus, and
+// lists those menu categories when they do.
+func (h *Handler) shopCategoryMode(c *gin.Context) {
+	fromMenu := h.shop.CategoriesFromMenu()
+	rows := []shop.MenuCategory{}
+	if fromMenu {
+		var err error
+		if rows, err = h.shop.MenuCategories(); err != nil {
+			respond(c, err)
+			return
+		}
+	}
+	c.JSON(200, gin.H{"from_menu": fromMenu, "menu": rows})
 }
 
 func (h *Handler) saveShopCategory(c *gin.Context) {

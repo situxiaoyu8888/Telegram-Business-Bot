@@ -70,6 +70,7 @@ func New(mysqlDSN, redisAddr, redisPassword string, redisDB int) (*Store, error)
 		{Key: "redpacket_max_count", Value: "100", Remark: "单个红包最多可拆分的份数（1–1000）"},
 		{Key: "exchange_fee_rate", Value: "0", Remark: "换汇手续费比例（0.005 = 0.5%，从兑换所得中扣除）"},
 		{Key: "shop_referral_rate", Value: "0", Remark: "商城推广返佣比例（0.05 = 5%，0 为关闭）；订单完成且售后期结束后发给直属上级"},
+		{Key: "shop_categories_from_menu", Value: "1", Remark: "商城分类跟随机器人菜单：开启时 H5 商城和后台「商城分类」显示机器人菜单的分类；关闭后在「商城分类」中手动配置"},
 	} {
 		if err := db.Clauses(clause.OnConflict{DoNothing: true}).Create(&c).Error; err != nil {
 			return nil, err

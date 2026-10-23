@@ -14,11 +14,14 @@ type Home struct {
 	Banners  []model.ShopBanner `json:"banners"`
 	Featured []ProductCard      `json:"featured"`
 	Promos   []ProductCard      `json:"promos"`
+	// CategoriesFromMenu makes the home's tabs the bot's menus; otherwise they are the
+	// console's shop categories.
+	CategoriesFromMenu bool `json:"categories_from_menu"`
 }
 
 func (s *Service) Home() (*Home, error) {
 	now := time.Now()
-	h := &Home{Banners: []model.ShopBanner{}}
+	h := &Home{Banners: []model.ShopBanner{}, CategoriesFromMenu: s.CategoriesFromMenu()}
 	if err := s.st.DB.Where("enabled = ? AND (starts_at IS NULL OR starts_at <= ?) AND (ends_at IS NULL OR ends_at > ?)", true, now, now).Order("sort asc, id desc").Limit(10).Find(&h.Banners).Error; err != nil {
 		return nil, err
 	}

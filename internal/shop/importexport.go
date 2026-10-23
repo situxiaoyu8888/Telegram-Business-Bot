@@ -185,7 +185,11 @@ func (s *Service) ImportProducts(data []byte, merchantScope uint64, apply bool) 
 		}
 		return 0, "", fmt.Errorf("商家「%s」不存在", v)
 	}
+	fromMenu := s.CategoriesFromMenu()
 	findCategory := func(v string) (uint64, error) {
+		if v == "" && fromMenu {
+			return 0, nil
+		}
 		for _, c := range cats {
 			if c.Name == v || strconv.FormatUint(c.ID, 10) == v {
 				return c.ID, nil

@@ -238,13 +238,17 @@ const imgOr=(src,cls='')=>src?`<img src="${esc(src)}" alt="" loading="lazy" clas
 // ---- Home ----
 // The home page mirrors the bot's menus: a tab per top-level category, then its merchant
 // categories with their merchants. Products follow below (search, banner category links).
+// With the console's categories instead (categories_from_menu off), each tab is a shop
+// category that lists its products.
 let homeState={menu:0,category:0,q:'',page:1,items:[],done:false};
 const avatarColors=['#2f80ed','#1fa36a','#f2994a','#9b51e0','#eb5757','#219ebc','#c0841a'];
 const avatarHTML=(m,cls='av')=>`<div class="${cls}" style="background:${avatarColors[m.id%avatarColors.length]}">${esc([...(m.name||'?').trim()][0]||'?')}</div>`;
 const merchantCard=m=>`<button class="mcard" onclick="location.hash='#/merchant/${m.id}'">${avatarHTML(m)}<div class="info"><div class="name">${m.pinned?'<span class="tag red">推荐</span> ':''}${esc(m.name)}</div>${m.description?`<div class="muted small line">${esc(m.description)}</div>`:''}<div class="muted small line">${[m.address&&'📍 '+esc(m.address),m.hours&&'🕒 '+esc(m.hours)].filter(Boolean).join('　')||(m.product_count?'':'查看商家信息')}</div></div><div class="go">${m.product_count?`<span class="tag">${m.product_count} 件商品</span>`:''} ›</div></button>`;
 async function home(v){
  const [dir,cats,hm]=await Promise.all([api('directory'),api('categories'),api('home')]);if(stale(v))return;
- if(homeState.menu&&!dir.some(c=>c.id===homeState.menu))homeState.menu=0;
+ const menuMode=hm.categories_from_menu!==false,tabs=menuMode?dir:[];
+ if(homeState.menu&&!tabs.some(c=>c.id===homeState.menu))homeState.menu=0;
+ if(!menuMode&&homeState.category&&!cats.some(c=>c.id===homeState.category))homeState.category=0;
  const browsing=!homeState.q&&!homeState.category&&!homeState.menu;
  const shelf=(title,list)=>list.length?`<div class="row between" style="margin:4px 0 8px"><span class="bold">${title}</span></div><div class="shelf">${list.map(tileHTML).join('')}</div>`:'';
  const sections=c=>c.sections.map(sec=>`${c.sections.length>1||sec.title!==c.title?`<div class="sub-head">${esc(sec.title)}</div>`:''}<div class="mlist">${sec.merchants.map(merchantCard).join('')}</div>`).join('');
@@ -254,20 +258,21 @@ async function home(v){
   for(const c of dir)for(const sec of c.sections)for(const m of sec.merchants)if(!found.some(x=>x.id===m.id)&&(m.name+' '+m.description+' '+sec.title).toLowerCase().includes(q))found.push(m);
   if(found.length)body+=`<div class="sec-head"><span class="bold">相关商家</span></div><div class="mlist">${found.map(merchantCard).join('')}</div>`;
  }else if(homeState.menu){
-  const c=dir.find(x=>x.id===homeState.menu);body+=sections(c);
+  const c=tabs.find(x=>x.id===homeState.menu);body+=sections(c);
  }else if(!homeState.category){
-  for(const c of dir){const all=c.sections.flatMap(sec=>sec.merchants),shown=all.slice(0,4);
+  for(const c of tabs){const all=c.sections.flatMap(sec=>sec.merchants),shown=all.slice(0,4);
    body+=`<div class="sec-head"><span class="bold">${esc(c.title)}</span>${all.length>shown.length?`<button class="muted small" data-menu="${c.id}">查看全部 ${all.length} 家 ›</button>`:''}</div><div class="mlist">${shown.map(merchantCard).join('')}</div>`}
   body+=shelf('⏰ 限时特惠',hm.promos)+shelf('⭐ 精选推荐',hm.featured);
  }
  const catName=homeState.category?(cats.find(c=>c.id===homeState.category)||{}).name||'分类':'';
  $('app').innerHTML=(browsing&&hm.banners.length?`<div class="banners" id="banners">${hm.banners.map(b=>`<button data-banner="${b.id}">${imgOr(b.image_url)}${b.title?`<span>${esc(b.title)}</span>`:''}</button>`).join('')}</div>`:'')+`<form class="search" id="searchForm"><span class="muted">🔍</span><input id="q" type="search" placeholder="搜索商品或商家" value="${esc(homeState.q)}" enterkeyhint="search"></form>
- <div class="chips">${[{id:0,title:'全部'},...dir].map(c=>`<button class="chip ${!homeState.category&&homeState.menu===c.id?'on':''}" data-menu="${c.id}">${esc(c.title)}</button>`).join('')}${homeState.category?`<button class="chip on" data-menu="0">${esc(catName)} ✕</button>`:''}</div>
+ <div class="chips">${menuMode?[{id:0,title:'全部'},...tabs].map(c=>`<button class="chip ${!homeState.category&&homeState.menu===c.id?'on':''}" data-menu="${c.id}">${esc(c.title)}</button>`).join('')+(homeState.category?`<button class="chip on" data-menu="0">${esc(catName)} ✕</button>`:''):[{id:0,name:'全部'},...cats].map(c=>`<button class="chip ${homeState.category===c.id?'on':''}" data-cat="${c.id}">${esc(c.name)}</button>`).join('')}</div>
  ${body}<div id="productHead"></div><div class="grid" id="grid"></div><div id="more"></div>`;
  document.querySelectorAll('[data-banner]').forEach(el=>el.onclick=()=>{const b=hm.banners.find(x=>String(x.id)===el.dataset.banner);if(b.link_type==='product')location.hash='#/product/'+b.link_value;else if(b.link_type==='category'){homeState.category=Number(b.link_value);homeState.menu=0;route()}else if(b.link_type==='url'){tg?.openLink?tg.openLink(b.link_value):window.open(b.link_value,'_blank')}});
  if(hm.banners.length>1&&$('banners')){let i=0;const box=$('banners');const timer=setInterval(()=>{if(stale(v)||!document.body.contains(box)){clearInterval(timer);return}i=(i+1)%hm.banners.length;box.scrollTo({left:box.clientWidth*i,behavior:'smooth'})},4000)}
  $('searchForm').onsubmit=e=>{e.preventDefault();$('q').blur();homeState.q=$('q').value.trim();route()};
  document.querySelectorAll('[data-menu]').forEach(b=>b.onclick=()=>{homeState.menu=Number(b.dataset.menu);homeState.category=0;homeState.q='';route()});
+ document.querySelectorAll('[data-cat]').forEach(b=>b.onclick=()=>{homeState.category=Number(b.dataset.cat);homeState.menu=0;homeState.q='';route()});
  // A category tab lists merchants only; their products are on each merchant's page.
  if(homeState.menu&&!homeState.q){if(!body)$('more').innerHTML='<div class="empty">该分类暂无商家</div>';return}
  await loadProducts(v,true,!body)}
