@@ -44,7 +44,7 @@ type DepositAddress struct {
 	ID            uint64    `gorm:"primaryKey" json:"id"`
 	UserID        uint64    `gorm:"uniqueIndex:uk_user_network;not null" json:"user_id"`
 	Network       string    `gorm:"size:16;uniqueIndex:uk_user_network;not null" json:"network"`
-	Address       string    `gorm:"size:128;uniqueIndex;not null" json:"address"`
+	Address       string    `gorm:"size:128;index:idx_deposit_address_shared;not null" json:"address"` // several users may share one
 	Status        int8      `gorm:"default:1;index" json:"status"`
 	CreatedAt     time.Time `json:"created_at"`
 	UpdatedAt     time.Time `json:"updated_at"`

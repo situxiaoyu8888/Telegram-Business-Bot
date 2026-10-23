@@ -11,7 +11,7 @@ import (
 func TestDepositHookRunsOncePerCreditedDeposit(t *testing.T) {
 	db := testDatabase(t)
 	var seen []model.DepositOrder
-	w := wallet.New(&store.Store{DB: db}, "USDT", "1", "0").WithDepositHook(func(o model.DepositOrder) { seen = append(seen, o) })
+	w := wallet.New(&store.Store{DB: db}, "USDT", "1", "0").WithDepositHook(func(o model.DepositOrder, _ bool) { seen = append(seen, o) })
 	u := model.TelegramUser{TelegramUserID: 7101, ReferralCode: "dep7101", Status: 1}
 	must(t, db.Create(&u).Error)
 	order := model.DepositOrder{UserID: u.ID, Network: "TRC20", Address: "addr", Amount: "12.5", TxID: "tx-hook"}

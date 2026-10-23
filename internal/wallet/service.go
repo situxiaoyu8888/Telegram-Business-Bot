@@ -17,7 +17,7 @@ import (
 type Service struct {
 	st                                 *store.Store
 	currency, minWithdraw, withdrawFee string
-	onDeposit                          func(model.DepositOrder)
+	onDeposit                          func(o model.DepositOrder, announce bool)
 }
 
 func New(st *store.Store, currency, minWithdraw, withdrawFee string) *Service {
@@ -46,8 +46,12 @@ func OrderNo(kind string, id uint64, created time.Time) string {
 	return fmt.Sprintf("%s%s%06d", kind, created.Format("20060102"), id)
 }
 
-// WithDepositHook sets what runs after a new on-chain deposit is credited (telling the user).
-func (s *Service) WithDepositHook(f func(model.DepositOrder)) *Service { s.onDeposit = f; return s }
+// WithDepositHook sets what runs after a deposit is credited: announce is false when the user
+// claimed it themselves and already got the answer.
+func (s *Service) WithDepositHook(f func(o model.DepositOrder, announce bool)) *Service {
+	s.onDeposit = f
+	return s
+}
 
 // SetWithdrawalBot records which bot a withdrawal was requested through; its review notices go
 // out through that bot.
@@ -100,7 +104,7 @@ func (s *Service) CreditDeposit(order model.DepositOrder) error {
 		return tx.Create(&model.WalletTransaction{UserID: order.UserID, Currency: s.currency, Type: "deposit", Amount: amt.StringFixed(6), Balance: newBal.StringFixed(6), RefType: "deposit", RefID: order.ID, Remark: "TRC20 deposit"}).Error
 	})
 	if err == nil && credited && s.onDeposit != nil {
-		s.onDeposit(order)
+		s.onDeposit(order, true)
 	}
 	return err
 }

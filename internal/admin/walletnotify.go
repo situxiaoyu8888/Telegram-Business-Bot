@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math/rand/v2"
 	"net/http"
 	"strings"
 	"time"
@@ -12,7 +13,6 @@ import (
 	"github.com/shopspring/decimal"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
-	"gorm.io/gorm/clause"
 
 	"telegram-business-bot/internal/model"
 	"telegram-business-bot/internal/wallet"
@@ -92,7 +92,7 @@ func (h *Handler) notifyWithdrawal(id uint64, kind, note string) {
 	h.notifyUser(o.UserID, o.BotID, b.String())
 }
 
-// NotifyDeposit tells the user an on-chain deposit has been credited (the wallet's deposit hook).
+// NotifyDeposit tells the user a deposit has been credited (the wallet's deposit hook).
 func (h *Handler) NotifyDeposit(o model.DepositOrder) {
 	h.notifyUser(o.UserID, 0, fmt.Sprintf("💰 <b>充值到账</b>\n\n订单编号：<code>%s</code>\n金额：<code>%s</code> %s\n网络：%s\n交易哈希：<code>%s</code>\n\n已存入你的钱包。",
 		wallet.OrderNo("D", o.ID, o.CreatedAt), plainAmount(o.Amount), htmlEscape(h.currencyName(o.Currency)), htmlEscape(o.Network), htmlEscape(o.TxID)))
@@ -109,12 +109,33 @@ func (h *Handler) notifyCredit(userID uint64, currency, amount, remark string) {
 }
 
 // ---- Operator address pool ----
+//
+// Deposit addresses come only from the operator's pool. One pool address may be given to several
+// users; deposits to such a shared address are claimed by transaction hash (wallet.ClaimTRC20).
+
+type poolRow struct {
+	model.DepositPoolAddress
+	Users int64 `json:"users"` // users it is assigned to
+}
 
 func (h *Handler) addressPool(c *gin.Context) {
-	rows := []model.DepositPoolAddress{}
-	if err := h.st.DB.Order("status desc, user_id = 0 desc, id desc").Limit(2000).Find(&rows).Error; err != nil {
+	list := []model.DepositPoolAddress{}
+	if err := h.st.DB.Order("status desc, id desc").Limit(2000).Find(&list).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "地址池加载失败"})
 		return
+	}
+	var counts []struct {
+		Address string
+		N       int64
+	}
+	h.st.DB.Model(&model.DepositAddress{}).Select("address, COUNT(*) AS n").Group("address").Scan(&counts)
+	used := map[string]int64{}
+	for _, x := range counts {
+		used[x.Address] = x.N
+	}
+	rows := make([]poolRow, 0, len(list))
+	for _, a := range list {
+		rows = append(rows, poolRow{DepositPoolAddress: a, Users: used[a.Address]})
 	}
 	c.JSON(http.StatusOK, rows)
 }
@@ -162,17 +183,14 @@ func (h *Handler) addPoolAddresses(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "一次最多添加 1000 个地址"})
 		return
 	}
-	// Addresses already in the pool or bound to a user are skipped.
-	var existing []string
 	addrs := make([]string, len(rows))
 	for i, r := range rows {
 		addrs[i] = r.Address
 	}
+	var existing []string
 	h.st.DB.Model(&model.DepositPoolAddress{}).Where("address IN ?", addrs).Pluck("address", &existing)
-	var bound []string
-	h.st.DB.Model(&model.DepositAddress{}).Where("address IN ?", addrs).Pluck("address", &bound)
 	skip := map[string]bool{}
-	for _, a := range append(existing, bound...) {
+	for _, a := range existing {
 		skip[a] = true
 	}
 	fresh := rows[:0]
@@ -190,28 +208,55 @@ func (h *Handler) addPoolAddresses(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"ok": true, "added": len(fresh), "skipped": len(skip)})
 }
 
-// deletePoolAddress removes a free address from the pool; assigned ones stay for the record.
+// deletePoolAddress removes a pool address no user has.
 func (h *Handler) deletePoolAddress(c *gin.Context) {
 	id, ok := idParam(c)
 	if !ok {
 		return
 	}
-	res := h.st.DB.Where("id = ? AND user_id = 0", id).Delete(&model.DepositPoolAddress{})
-	if res.Error != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "删除失败"})
+	var a model.DepositPoolAddress
+	if err := h.st.DB.First(&a, id).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "地址不存在"})
 		return
 	}
-	if res.RowsAffected == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "已分配给用户的地址不能删除"})
+	var n int64
+	h.st.DB.Model(&model.DepositAddress{}).Where("address = ?", a.Address).Count(&n)
+	if n > 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("该地址已分配给 %d 个用户，不能删除", n)})
+		return
+	}
+	if err := h.st.DB.Delete(&a).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "删除失败"})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
-// saveAddress gives a user a deposit address from the operator's pool: the chosen free address,
-// or the oldest free one of the network (pool_id 0). A user's previous address of that network is
-// retired, never reassigned. TRC20 addresses are scanned by the TRON watcher; ERC20 ones are only
-// shown to the user, who is credited from the console.
+// poolAddresses lists the usable pool addresses of a network.
+func (h *Handler) poolAddresses(db *gorm.DB, network string) ([]string, error) {
+	var list []string
+	err := db.Model(&model.DepositPoolAddress{}).Where("network = ? AND status = 1", network).Order("id asc").Pluck("address", &list).Error
+	return list, err
+}
+
+// setUserAddress gives a user the address for a network, replacing the one they had (a new
+// address is scanned from its start).
+func setUserAddress(tx *gorm.DB, userID uint64, network, address string) error {
+	var cur model.DepositAddress
+	err := tx.Where("user_id = ? AND network = ?", userID, network).First(&cur).Error
+	switch {
+	case err == nil && cur.Address == address && cur.Status == 1:
+		return nil
+	case err == nil:
+		return tx.Model(&cur).Updates(map[string]any{"address": address, "status": 1, "scan_timestamp": 0}).Error
+	case errors.Is(err, gorm.ErrRecordNotFound):
+		return tx.Create(&model.DepositAddress{UserID: userID, Network: network, Address: address, Status: 1}).Error
+	}
+	return err
+}
+
+// saveAddress gives one user a pool address of a network: the chosen one (pool_id) or a random
+// one (pool_id 0). The address may be shared with other users.
 func (h *Handler) saveAddress(c *gin.Context) {
 	var b struct {
 		UserID  uint64 `json:"user_id"`
@@ -231,50 +276,170 @@ func (h *Handler) saveAddress(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "用户不存在"})
 		return
 	}
-	var picked model.DepositPoolAddress
-	err := h.st.DB.Transaction(func(tx *gorm.DB) error {
-		q := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("network = ? AND user_id = 0 AND status = 1", b.Network)
-		if b.PoolID != 0 {
-			q = q.Where("id = ?", b.PoolID)
-		}
-		if err := q.Order("id asc").First(&picked).Error; err != nil {
-			if errors.Is(err, gorm.ErrRecordNotFound) {
-				return userError("地址池中没有可用的 " + b.Network + " 地址，请先在「地址池」中添加")
-			}
-			return err
-		}
-		now := time.Now()
-		var old model.DepositAddress
-		err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("user_id = ? AND network = ?", b.UserID, b.Network).First(&old).Error
-		switch {
-		case err == nil:
-			if err := tx.Model(&model.DepositPoolAddress{}).Where("address = ?", old.Address).Update("status", 0).Error; err != nil {
-				return err
-			}
-			if err := tx.Model(&old).Updates(map[string]any{"address": picked.Address, "status": 1, "scan_timestamp": 0}).Error; err != nil {
-				return err
-			}
-		case errors.Is(err, gorm.ErrRecordNotFound):
-			if err := tx.Create(&model.DepositAddress{UserID: b.UserID, Network: b.Network, Address: picked.Address, Status: 1}).Error; err != nil {
-				return err
-			}
-		default:
-			return err
-		}
-		return tx.Model(&picked).Updates(map[string]any{"user_id": b.UserID, "assigned_at": now}).Error
-	})
-	if err != nil {
-		var ue userError
-		if errors.As(err, &ue) {
-			c.JSON(http.StatusBadRequest, gin.H{"error": string(ue)})
+	address := ""
+	if b.PoolID != 0 {
+		var a model.DepositPoolAddress
+		if err := h.st.DB.Where("id = ? AND network = ? AND status = 1", b.PoolID, b.Network).First(&a).Error; err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "请选择地址池中的有效地址"})
 			return
 		}
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "绑定失败"})
+		address = a.Address
+	} else {
+		list, err := h.poolAddresses(h.st.DB, b.Network)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "地址池加载失败"})
+			return
+		}
+		if len(list) == 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "地址池中没有可用的 " + b.Network + " 地址，请先在「地址池」中添加"})
+			return
+		}
+		address = list[rand.IntN(len(list))]
+	}
+	if err := setUserAddress(h.st.DB, b.UserID, b.Network, address); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "分配失败"})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"ok": true, "address": picked.Address})
+	c.JSON(http.StatusOK, gin.H{"ok": true, "address": address})
 }
 
-type userError string
+// bulkAddressPreview tells the console how many active users a bulk assignment covers and how
+// many pool addresses it spreads them over.
+func (h *Handler) bulkAddressPreview(c *gin.Context) {
+	network := c.Query("network")
+	if network != "TRC20" && network != "ERC20" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "请选择地址类型"})
+		return
+	}
+	var users, have int64
+	h.st.DB.Model(&model.TelegramUser{}).Where("status = 1").Count(&users)
+	h.st.DB.Model(&model.DepositAddress{}).Where("network = ?", network).Count(&have)
+	list, err := h.poolAddresses(h.st.DB, network)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "统计失败"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"users": users, "have": have, "free": len(list)})
+}
 
-func (e userError) Error() string { return string(e) }
+// bulkAssignAddresses gives every active user a random pool address of the network, replacing
+// the address they had; with fewer addresses than users, addresses are shared. Users are done in
+// batches so locks stay short.
+func (h *Handler) bulkAssignAddresses(c *gin.Context) {
+	var b struct {
+		Network string `json:"network"`
+	}
+	if c.ShouldBindJSON(&b) != nil || (b.Network != "TRC20" && b.Network != "ERC20") {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "请选择地址类型"})
+		return
+	}
+	list, err := h.poolAddresses(h.st.DB, b.Network)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "地址池加载失败"})
+		return
+	}
+	if len(list) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "地址池中没有可用的 " + b.Network + " 地址，请先在「地址池」中添加"})
+		return
+	}
+	assigned := 0
+	var last uint64
+	for {
+		var ids []uint64
+		if err := h.st.DB.Model(&model.TelegramUser{}).Where("status = 1 AND id > ?", last).Order("id asc").Limit(500).Pluck("id", &ids).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("分配中断（已分配 %d 个用户）", assigned)})
+			return
+		}
+		if len(ids) == 0 {
+			break
+		}
+		err := h.st.DB.Transaction(func(tx *gorm.DB) error {
+			for _, id := range ids {
+				if err := setUserAddress(tx, id, b.Network, list[rand.IntN(len(list))]); err != nil {
+					return err
+				}
+			}
+			return nil
+		})
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("分配中断（已分配 %d 个用户）", assigned)})
+			return
+		}
+		assigned += len(ids)
+		last = ids[len(ids)-1]
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true, "assigned": assigned, "addresses": len(list)})
+}
+
+// ---- Deposits waiting for a person ----
+
+// assignDeposit credits an unclaimed deposit (to a shared address) to a chosen user.
+func (h *Handler) assignDeposit(c *gin.Context) {
+	id, ok := idParam(c)
+	if !ok {
+		return
+	}
+	var b struct {
+		UserID uint64 `json:"user_id"`
+	}
+	if c.ShouldBindJSON(&b) != nil || b.UserID == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "请选择用户"})
+		return
+	}
+	if err := h.st.DB.First(&model.TelegramUser{}, b.UserID).Error; err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "用户不存在"})
+		return
+	}
+	_, err := h.wallet.AssignDeposit(id, b.UserID)
+	walletReply(c, err)
+}
+
+// confirmDeposit credits a user's submitted ERC20 deposit with the verified amount.
+func (h *Handler) confirmDeposit(c *gin.Context) {
+	id, ok := idParam(c)
+	if !ok {
+		return
+	}
+	var b struct {
+		Amount string `json:"amount"`
+	}
+	_ = c.ShouldBindJSON(&b)
+	_, err := h.wallet.ConfirmDeposit(id, b.Amount)
+	walletReply(c, err)
+}
+
+// rejectDeposit turns down a submitted ERC20 deposit and tells the user.
+func (h *Handler) rejectDeposit(c *gin.Context) {
+	id, ok := idParam(c)
+	if !ok {
+		return
+	}
+	var b struct {
+		Note string `json:"note"`
+	}
+	_ = c.ShouldBindJSON(&b)
+	o, err := h.wallet.RejectDeposit(id)
+	if err == nil {
+		text := fmt.Sprintf("❌ <b>充值未通过核对</b>\n\n订单编号：<code>%s</code>\n金额：<code>%s</code> %s\n交易哈希：<code>%s</code>",
+			wallet.OrderNo("D", o.ID, o.CreatedAt), plainAmount(o.Amount), htmlEscape(h.currencyName(o.Currency)), htmlEscape(o.TxID))
+		if note := strings.TrimSpace(b.Note); note != "" {
+			text += "\n原因：" + htmlEscape(note)
+		}
+		h.notifyUser(o.UserID, 0, text+"\n\n如有疑问请联系客服。")
+	}
+	walletReply(c, err)
+}
+
+func walletReply(c *gin.Context, err error) {
+	var ue wallet.UserError
+	switch {
+	case err == nil:
+		c.JSON(http.StatusOK, gin.H{"ok": true})
+	case errors.As(err, &ue):
+		c.JSON(http.StatusBadRequest, gin.H{"error": ue.Msg})
+	case errors.Is(err, gorm.ErrRecordNotFound):
+		c.JSON(http.StatusNotFound, gin.H{"error": "记录不存在"})
+	default:
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "操作失败"})
+	}
+}

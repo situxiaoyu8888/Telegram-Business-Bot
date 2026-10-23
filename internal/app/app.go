@@ -157,7 +157,15 @@ func New(cfg config.Config, logger *zap.Logger) (*App, error) {
 		cfg.UploadMaxVideoMB,
 	).WithBots(bots).WithShop(shopSvc).WithNews(newsSvc).WithPayPassword(payPass).WithLogger(logger).WithPublicURL(cfg.AdminPublicURL)
 	// New on-chain deposits are announced to the user through a bot that reaches them.
-	walletSvc.WithDepositHook(a.admin.NotifyDeposit)
+	walletSvc.WithDepositHook(func(o model.DepositOrder, announce bool) {
+		if announce {
+			a.admin.NotifyDeposit(o)
+		}
+		// Idempotent per deposit; the TRON watcher also awards the ones it credits.
+		if err := refSvc.AwardFromDeposit(o.ID, o.UserID, o.Amount, o.Currency); err != nil {
+			logger.Warn("deposit referral commission failed", zap.Uint64("deposit_id", o.ID), zap.Error(err))
+		}
+	})
 	a.listeners = []Listener{{Addr: cfg.HTTPAddr, Handler: engine, Serves: "webhooks, uploads"}}
 	if !cfg.Split() {
 		shopHandler.Register(engine)

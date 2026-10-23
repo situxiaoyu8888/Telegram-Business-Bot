@@ -161,6 +161,9 @@ func (h *Handler) RegisterAPI(r *gin.Engine) {
 	api.POST("/withdrawals/:id/complete", can("withdrawals"), h.complete)
 
 	api.GET("/deposits", can("deposits"), h.deposits)
+	api.POST("/deposits/:id/assign", can("deposits"), h.assignDeposit)
+	api.POST("/deposits/:id/confirm", can("deposits"), h.confirmDeposit)
+	api.POST("/deposits/:id/reject", can("deposits"), h.rejectDeposit)
 
 	// Currency names label balances, withdrawals and exchanges.
 	api.GET("/currencies", can("currencies", "users", "withdrawals", "exchanges", "redpackets", "deposits"), h.currencies)
@@ -176,8 +179,10 @@ func (h *Handler) RegisterAPI(r *gin.Engine) {
 	api.POST("/users/:id/paypass", can("users"), h.resetPayPassword)
 
 	api.GET("/addresses", can("addresses"), h.addresses)
-	api.GET("/addresses/users", can("addresses"), h.addressUsers)
+	api.GET("/addresses/users", can("addresses", "deposits"), h.addressUsers)
 	api.POST("/addresses", can("addresses"), h.saveAddress)
+	api.GET("/addresses/bulk", can("addresses"), h.bulkAddressPreview)
+	api.POST("/addresses/bulk", can("addresses"), h.bulkAssignAddresses)
 	api.GET("/address-pool", can("addresses"), h.addressPool)
 	api.POST("/address-pool", can("addresses"), h.addPoolAddresses)
 	api.DELETE("/address-pool/:id", can("addresses"), h.deletePoolAddress)

@@ -47,8 +47,16 @@ func (w *Watcher) scan(ctx context.Context) {
 		w.logger.Warn("TRON watcher enabled but TRON_USDT_CONTRACT is empty")
 		return
 	}
-	var addresses []model.DepositAddress
-	if err := w.st.DB.Where("network='TRC20' AND status=1").Find(&addresses).Error; err != nil {
+	// Each address is scanned once; one used by several users (shared) records its deposits as
+	// unclaimed for the sender to claim, since the chain does not say whose they are.
+	var addresses []struct {
+		Address       string
+		ScanTimestamp int64
+		Users         int64
+		UserID        uint64
+	}
+	if err := w.st.DB.Model(&model.DepositAddress{}).Select("address, MIN(scan_timestamp) AS scan_timestamp, COUNT(DISTINCT user_id) AS users, MIN(user_id) AS user_id").
+		Where("network='TRC20' AND status=1").Group("address").Scan(&addresses).Error; err != nil {
 		w.logger.Error("load deposit addresses", zap.Error(err))
 		return
 	}
@@ -73,6 +81,15 @@ func (w *Watcher) scan(ctx context.Context) {
 				continue
 			}
 			order := model.DepositOrder{UserID: a.UserID, Network: "TRC20", Currency: "USDT", Address: a.Address, FromAddress: t.From, Amount: amount.StringFixed(6), TxID: t.TransactionID, BlockTimestamp: t.BlockTimestamp, Status: "confirmed"}
+			if a.Users > 1 {
+				if err := w.wallet.RecordUnclaimed(order); err != nil {
+					complete = false
+					w.logger.Error("record unclaimed deposit", zap.String("txid", t.TransactionID), zap.Error(err))
+				} else if t.BlockTimestamp > checkpoint {
+					checkpoint = t.BlockTimestamp
+				}
+				continue
+			}
 			if err := w.wallet.CreditDeposit(order); err != nil {
 				complete = false
 				w.logger.Error("credit deposit", zap.String("txid", t.TransactionID), zap.Error(err))
@@ -92,8 +109,9 @@ func (w *Watcher) scan(ctx context.Context) {
 				checkpoint = t.BlockTimestamp
 			}
 		}
+		// Rows reset for a rescan meanwhile (below the scanned start) keep their reset.
 		if complete && checkpoint > a.ScanTimestamp {
-			if err := w.st.DB.Model(&model.DepositAddress{}).Where("id=? AND address=? AND scan_timestamp = ?", a.ID, a.Address, a.ScanTimestamp).Update("scan_timestamp", checkpoint).Error; err != nil {
+			if err := w.st.DB.Model(&model.DepositAddress{}).Where("network='TRC20' AND address=? AND scan_timestamp >= ? AND scan_timestamp < ?", a.Address, a.ScanTimestamp, checkpoint).Update("scan_timestamp", checkpoint).Error; err != nil {
 				w.logger.Error("save scan progress", zap.Error(err))
 			}
 		}

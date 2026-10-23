@@ -26,6 +26,13 @@ func New(mysqlDSN, redisAddr, redisPassword string, redisDB int) (*Store, error)
 	if err != nil {
 		return nil, fmt.Errorf("connect mysql: %w", err)
 	}
+	// Several users may now share a deposit address: drop the old unique index on it (AutoMigrate
+	// adds a plain one).
+	if m := db.Migrator(); m.HasTable(&model.DepositAddress{}) && m.HasIndex(&model.DepositAddress{}, "idx_deposit_addresses_address") {
+		if err := m.DropIndex(&model.DepositAddress{}, "idx_deposit_addresses_address"); err != nil {
+			return nil, fmt.Errorf("drop unique deposit address index: %w", err)
+		}
+	}
 	if err := db.AutoMigrate(
 		&model.TelegramUser{}, &model.WalletAccount{}, &model.WalletTransaction{}, &model.DepositAddress{}, &model.DepositOrder{},
 		&model.WithdrawalOrder{}, &model.ReferralCommission{}, &model.SupportTicket{}, &model.MenuItem{}, &model.SystemConfig{}, &model.ActionLog{},

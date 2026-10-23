@@ -559,11 +559,20 @@ async function exchangePage(v){
 // ---- Wallet: deposit, withdraw, transfer, red packets (each spend asks for the payment password) ----
 const dateText=v=>new Date(v).toLocaleString('zh-CN');
 const copyText=(text,okMsg)=>navigator.clipboard?.writeText(text).then(()=>toast(okMsg||'已复制'),()=>toast('请长按内容复制'));
+const depStatus={credited:['已入账','green'],pending:['待核对',''],unclaimed:['待认领',''],rejected:['未通过','red']};
 async function depositPage(v){
  const d=await api('wallet/deposit');if(stale(v))return;
- const box=a=>`<div class="card"><h3>💰 USDT-${esc(a.network)} 充值</h3>${a.qr?`<img class="dep-qr" src="${a.qr}" alt="充值地址二维码">`:''}<div class="muted small">平台为你分配的收款地址（扫码或复制）</div><div class="code" style="margin:6px 0 12px">${esc(a.address)}</div><button class="btn block" data-copy="${esc(a.address)}">复制地址</button><div class="muted small" style="margin-top:12px">⚠️ ${esc(a.notice)}<br>${a.auto?'链上到账后自动存入钱包，无需提交任何信息。':'到账后由客服确认并存入钱包，如有疑问请联系客服。'}</div></div>`;
- $('app').innerHTML=(d.addresses.length?d.addresses.map(box).join(''):'<div class="card"><h3>💰 USDT 充值</h3><div class="muted">尚未为你的账号分配充值地址，请联系客服。</div></div>')+'<div class="card small muted">人民币、泰铢等其他币种请联系客服充值，到账后显示在钱包余额中。</div>';
- document.querySelectorAll('[data-copy]').forEach(b=>b.onclick=()=>copyText(b.dataset.copy,'地址已复制'))}
+ const how=a=>a.network==='TRC20'?(a.claim?'此地址多人共用：转账后请在下方提交交易哈希认领，核对无误立即入账。':'链上到账后自动存入钱包，无需提交任何信息。'):'转账后请在下方提交交易哈希和金额，客服核对后入账。';
+ const box=a=>`<div class="card"><h3>💰 USDT-${esc(a.network)} 充值</h3>${a.qr?`<img class="dep-qr" src="${a.qr}" alt="充值地址二维码">`:''}<div class="muted small">平台为你分配的收款地址（扫码或复制）</div><div class="code" style="margin:6px 0 12px">${esc(a.address)}</div><button class="btn block" data-copy="${esc(a.address)}">复制地址</button><div class="muted small" style="margin-top:12px">⚠️ ${esc(a.notice)}<br>${how(a)}</div></div>`;
+ const claim=d.addresses.some(a=>a.claim)?`<div class="card"><h3>🧾 提交交易哈希</h3><div class="field"><input id="depTx" placeholder="交易哈希（TxID）" autocomplete="off" spellcheck="false"></div><div class="field" id="depAmtBox" hidden><input id="depAmt" inputmode="decimal" placeholder="转账的 USDT 数量" autocomplete="off"></div><button class="btn block" id="depClaim">提交</button><div class="muted small" style="margin-top:8px">TRC20 为 64 位字符；ERC20 为 0x 开头的 66 位字符，需要同时填写数量。</div></div>`:'';
+ const recs=d.records.length?`<div class="sec-head"><span class="bold">我的充值记录</span></div><div class="card" style="padding:4px 16px">${d.records.map(r=>{const [l,c]=depStatus[r.status]||[r.status,''];return `<div class="asset"><div style="min-width:0"><div class="mono small">${esc(r.order_no)}</div><div class="muted small">${dateText(r.created_at)} · ${esc(r.network)}</div></div><div style="text-align:right;flex:none"><div class="bold">+${fmtAmt(r.amount,6)}</div><span class="tag ${c}">${esc(l)}</span></div></div>`}).join('')}</div>`:'';
+ $('app').innerHTML=(d.addresses.length?d.addresses.map(box).join(''):'<div class="card"><h3>💰 USDT 充值</h3><div class="muted">尚未为你的账号分配充值地址，请联系客服。</div></div>')+claim+recs+'<div class="card small muted">人民币、泰铢等其他币种请联系客服充值，到账后显示在钱包余额中。</div>';
+ document.querySelectorAll('[data-copy]').forEach(b=>b.onclick=()=>copyText(b.dataset.copy,'地址已复制'));
+ if(!claim)return;
+ $('depTx').oninput=()=>{$('depAmtBox').hidden=!$('depTx').value.trim().toLowerCase().startsWith('0x')};
+ $('depClaim').onclick=async()=>{const txid=$('depTx').value.trim();if(!txid){toast('请填写交易哈希');return}$('depClaim').disabled=true;
+  try{const r=await post('wallet/deposit/claim',{txid,amount:$('depAmt').value.trim()});haptic('success');toast(r.credited?`认领成功，${r.amount} USDT 已入账`:'已提交，客服核对后入账');route()}
+  catch(e){toast(e.message);$('depClaim').disabled=false}}}
 let wdState={cur:'',rid:''};
 const wdStatus={pending:'待审核',approved:'已审核，待打款',completed:'已完成',rejected:'已拒绝'};
 async function withdrawPage(v){

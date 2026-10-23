@@ -321,6 +321,10 @@ func (r *Router) handleCallback(ctx context.Context, cb *CallbackQuery) {
 		r.startPayManage(ctx, cb.Message.Chat.ID, u)
 		return
 	}
+	if cb.Data == "dep:claim" {
+		r.startDepositClaim(ctx, cb.Message.Chat.ID, u)
+		return
+	}
 	if r.news != nil {
 		if strings.HasPrefix(cb.Data, "nw:") {
 			r.handleNewsCallback(ctx, cb)
@@ -508,8 +512,12 @@ func (r *Router) dispatchMenu(ctx context.Context, cb *CallbackQuery, u *model.T
 			_ = r.menuResponse(ctx, chatID, msgID, "<b>💵 USDT 充值</b>\n\n尚未为你的账号分配充值地址，请联系管理员在后台绑定。", ptrKB(BackHomeKeyboard()))
 			return
 		}
+		claim := r.depositNeedsClaim(list)
 		var b strings.Builder
-		b.WriteString("<b>💵 USDT 充值</b>\n\n以下是平台为你分配的收款地址，转账成功后会通知你。")
+		b.WriteString("<b>💵 USDT 充值</b>\n\n以下是平台为你分配的收款地址，入账后会通知你。")
+		if claim {
+			b.WriteString("\n转账后请点「🧾 提交交易哈希」认领入账。")
+		}
 		captions := make([]string, len(list))
 		for i, a := range list {
 			if a.Network == "TRC20" {
@@ -519,7 +527,11 @@ func (r *Router) dispatchMenu(ctx context.Context, cb *CallbackQuery, u *model.T
 			}
 			b.WriteString("\n\n" + captions[i])
 		}
-		_ = r.menuResponse(ctx, chatID, msgID, b.String(), ptrKB(BackHomeKeyboard()))
+		kb := BackHomeKeyboard()
+		if claim {
+			kb.InlineKeyboard = append([][]InlineKeyboardButton{{btn("🧾 提交交易哈希", "dep:claim")}}, kb.InlineKeyboard...)
+		}
+		_ = r.menuResponse(ctx, chatID, msgID, b.String(), &kb)
 		// A QR code per address, for scanning with a wallet app.
 		for i, a := range list {
 			png, err := qrcode.PNG(a.Address)
@@ -666,6 +678,8 @@ func (r *Router) handleSessionInput(ctx context.Context, m *Message, u *model.Te
 			text := fmt.Sprintf("<b>确认提现</b>\n\n币种：<code>%s</code>\n金额：<code>%s</code>\n%s：<code>%s</code>", htmlEscape(withdrawName(s)), htmlEscape(trimZeros(fmt.Sprint(s.Data["amount"]))), map[bool]string{true: "收款信息", false: "地址"}[withdrawKind(s) == wallet.KindFiat], htmlEscape(addr))
 			_ = r.client.SendMessage(ctx, m.Chat.ID, text, ptrKB(ConfirmWithdrawKeyboard(fmt.Sprint(s.Data["request_id"]))))
 		}
+	case "deposit_claim":
+		r.handleDepositClaimInput(ctx, m, u, s)
 	case "support":
 		if s.Step == "input_content" {
 			content := strings.TrimSpace(m.Text)

@@ -628,6 +628,8 @@ async function toastText(page) { return page.$eval('#toast', e => e.hidden ? '' 
   step('shop: wallet functions on 我的 (deposit, withdraw, transfer, red packet)');
   const usdtOf = id => sql(`select available from wallet_accounts where user_id=${id} and currency='USDT'`);
   const before = Number(usdtOf(uid));
+  const commissionOf = () => Number(sql(`select coalesce(sum(amount),0) from wallet_transactions where user_id=${uid} and type='referral_commission' and currency='USDT'`));
+  const commissionBefore = commissionOf();
   await shopPage.goto(SHOP_BASE + '/shop/#/me'); await shopPage.waitForTimeout(900);
   const actions = await shopPage.$$eval('.wact button', bs => bs.map(b => b.textContent.trim()));
   if (actions.join(',') !== '💰充值,💸提现,🔁转账,🧧发红包') problems.push('我的 wallet actions wrong: ' + actions.join(','));
@@ -651,8 +653,17 @@ async function toastText(page) { return page.$eval('#toast', e => e.hidden ? '' 
   }
   await admin.waitForTimeout(500); await shot(admin, '57b-admin-addresses');
   if (sql(`select group_concat(concat(network,'=',address) order by network) from deposit_addresses where user_id=${uid}`) !== `ERC20=${ERC},TRC20=${TRC}`) problems.push('pool addresses not assigned');
-  if (sql(`select count(*) from deposit_pool_addresses where user_id=${uid}`) !== '2') problems.push('pool addresses not marked as assigned');
   if ((await admin.$$('[data-action="rescan"]')).length !== 1) problems.push('rescan offered for a non-TRC20 address');
+  // Assigning to all users gives everyone a random pool address, replacing theirs: with one TRC20
+  // address in the pool, all users share it, so its deposits are claimed by transaction hash.
+  const active = sql("select count(*) from telegram_users where status=1");
+  await nav(admin, 'addresses'); await admin.click('#create'); await admin.waitForTimeout(400);
+  await pick(admin, 'scope', 'all'); await admin.waitForTimeout(600); await shot(admin, '57g-admin-address-bulk');
+  if (!(await admin.textContent('#bulkInfo')).includes(`给 ${active} 个用户各随机分配`)) problems.push('bulk assignment preview wrong: ' + await admin.textContent('#bulkInfo'));
+  await submitModal(admin); await admin.waitForTimeout(500);
+  if (sql(`select count(*) from deposit_addresses where network='TRC20' and address='${TRC}'`) !== active) problems.push('bulk assignment did not give every user the pool address');
+  await nav(admin, 'address_pool'); await shot(admin, '57h-admin-pool-shared');
+  if (!(await admin.textContent('#content')).includes(`已分配 ${active} 人`)) problems.push('pool does not count the users of a shared address');
   await tap(xm, 'menu:deposit', { message_id: 1, chat: pchat }); await wait(1500);
   const depositMsg = (await sentNow()).filter(m => m.chat_id === 9001 && /USDT 充值/.test(m.text || '')).pop();
   if (!depositMsg || !depositMsg.text.includes(TRC) || !depositMsg.text.includes(ERC)) problems.push('bot deposit menu does not show both addresses');
@@ -662,6 +673,31 @@ async function toastText(page) { return page.$eval('#toast', e => e.hidden ? '' 
   const depText = await shopPage.textContent('#app');
   if (!depText.includes(TRC) || !depText.includes(ERC) || !depText.includes('USDT-ERC20')) problems.push('shop deposit page does not show both addresses');
   if ((await shopPage.$$('img.dep-qr')).length !== 2) problems.push('shop deposit page has no QR codes');
+  if (!depText.includes('多人共用') || !(await shopPage.$('#depClaim'))) problems.push('shared address shows no claim form');
+  // A deposit seen on the shared address waits unclaimed; the sender claims it by hash.
+  const claimHash = 'c1'.repeat(32), otherHash = 'd2'.repeat(32);
+  for (const [h, amt] of [[claimHash, '3.5'], [otherHash, '2']]) sql(`insert into deposit_orders (user_id,network,currency,address,from_address,amount,tx_id,block_timestamp,status,created_at,updated_at) values (0,'TRC20','USDT','${TRC}','',${amt},'${h}',0,'unclaimed',now(),now())`);
+  await shopPage.fill('#depTx', claimHash); await shopPage.click('#depClaim'); await shopPage.waitForTimeout(1200); await shot(shopPage, '56a2-shop-deposit-claimed');
+  if (sql(`select concat(user_id,' ',status) from deposit_orders where tx_id='${claimHash}'`) !== `${uid} credited`) problems.push('shop claim did not credit the deposit');
+  if (!(await shopPage.textContent('#app')).includes('已入账')) problems.push('claimed deposit missing from the shop records');
+  // ERC20 through the bot: hash, then amount; the console confirms it.
+  const ercHash = '0x' + 'e3'.repeat(32);
+  await tap(xm, 'dep:claim', { message_id: 1, chat: pchat }); await wait(700);
+  await say(xm, ercHash); await wait(700); await say(xm, '7'); await wait(900);
+  if (!(await sentNow()).some(m => m.chat_id === 9001 && /已提交/.test(m.text || ''))) problems.push('bot ERC20 claim not acknowledged');
+  const ercId = sql(`select id from deposit_orders where tx_id='${ercHash}' and status='pending'`);
+  if (!ercId) problems.push('bot ERC20 claim not recorded');
+  else {
+    await nav(admin, 'deposits'); await shot(admin, '57i-admin-deposits-review');
+    await admin.click(`[data-action="dconfirm"][data-id="${ercId}"]`); await admin.waitForTimeout(400); await admin.fill('#depAmount', '6.5'); await submitModal(admin); await wait(1200);
+    if (sql(`select concat(status,' ',amount) from deposit_orders where id=${ercId}`) !== 'credited 6.500000') problems.push('console did not confirm the ERC20 deposit');
+    if (!(await sentNow()).some(m => m.chat_id === 9001 && /充值到账/.test(m.text || '') && /6\.5/.test(m.text || ''))) problems.push('confirmed ERC20 deposit not announced');
+    const otherId = sql(`select id from deposit_orders where tx_id='${otherHash}'`);
+    await admin.click(`[data-action="assign"][data-id="${otherId}"]`); await admin.waitForTimeout(400);
+    await admin.click('#depUserTrigger'); await admin.fill('#depUserSearch', '小红'); await admin.waitForTimeout(200);
+    await admin.click(`[data-owner="depUser"][data-value="${sql("select id from telegram_users where telegram_user_id=9002")}"]`); await submitModal(admin);
+    if (sql(`select status from deposit_orders where id=${otherId}`) !== 'credited') problems.push('console did not assign the unclaimed deposit');
+  }
   // A console credit (e.g. a confirmed ERC20 deposit) is announced to the user.
   await adminApi(admin, `users/${uid}/adjust`, 'POST', { currency: 'USDT_ERC20', amount: '5', remark: 'ERC20 充值' }); await wait(1500);
   if (!(await sentNow()).some(m => m.chat_id === 9001 && /充值到账/.test(m.text || '') && /USDT-ERC20/.test(m.text || ''))) problems.push('console credit not announced to the user');
@@ -720,7 +756,8 @@ async function toastText(page) { return page.$eval('#toast', e => e.hidden ? '' 
   if (!h5Card || !/周末快乐/.test(h5Card.caption || '') || !JSON.stringify(h5Card.reply_markup || {}).includes('hb ' + h5Packet[0])) problems.push('shop red packet card not sent to the private chat');
   if (!(await shopPage.$('#rpShare'))) problems.push('shop red packet share button missing');
   const after = Number(usdtOf(uid));
-  if (Math.abs(before - after - 13.5) > 1e-9) problems.push(`wallet functions charged ${before - after}, expected 13.5`);
+  const earned = commissionOf() - commissionBefore; // a referred user's deposit was credited meanwhile
+  if (Math.abs(before - after + earned - 10) > 1e-6) problems.push(`wallet functions changed USDT by ${before - after} (commission ${earned}), expected 13.5 spent and 3.5 claimed`);
 
   await nav(admin, 'redpackets'); await shot(admin, '55-admin-redpackets');
   if (lucky) {

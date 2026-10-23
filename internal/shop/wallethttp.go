@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"html"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/shopspring/decimal"
@@ -32,6 +33,7 @@ func (h *Handler) WithWallet(packets *redpacket.Service, senders SenderSource) *
 
 func (h *Handler) registerWallet(api *gin.RouterGroup) {
 	api.GET("/wallet/deposit", h.depositInfo)
+	api.POST("/wallet/deposit/claim", h.throttle("rl:shop-order:", maxOrdersPerMinute), h.claimDeposit)
 	api.GET("/wallet/withdraw", h.withdrawInfo)
 	api.POST("/wallet/withdraw", h.throttle("rl:shop-order:", maxOrdersPerMinute), h.withdraw)
 	api.GET("/wallet/transfer", h.transferInfo)
@@ -81,20 +83,72 @@ func (h *Handler) depositInfo(c *gin.Context) {
 		Address string `json:"address"`
 		Auto    bool   `json:"auto"`
 		Notice  string `json:"notice"`
-		QR      string `json:"qr"` // PNG data URI
+		QR      string `json:"qr"`    // PNG data URI
+		Claim   bool   `json:"claim"` // deposits are claimed by transaction hash (shared or ERC20)
 	}
 	out := []address{}
 	for _, a := range list {
-		row := address{a.Network, a.Address, true, notice, ""}
+		row := address{a.Network, a.Address, true, notice, "", false}
 		if a.Network != "TRC20" {
-			row.Auto, row.Notice = false, "仅支持以太坊网络的 USDT（ERC20）"
+			row.Auto, row.Claim, row.Notice = false, true, "仅支持以太坊网络的 USDT（ERC20）"
+		} else {
+			var n int64
+			h.st.DB.Model(&model.DepositAddress{}).Where("network = 'TRC20' AND address = ?", a.Address).Count(&n)
+			row.Auto, row.Claim = n <= 1, n > 1
 		}
 		if png, err := qrcode.PNG(a.Address); err == nil {
 			row.QR = "data:image/png;base64," + base64.StdEncoding.EncodeToString(png)
 		}
 		out = append(out, row)
 	}
-	h.reply(c, gin.H{"addresses": out}, nil)
+	type record struct {
+		OrderNo  string `json:"order_no"`
+		Network  string `json:"network"`
+		Currency string `json:"currency"`
+		Amount   string `json:"amount"`
+		TxID     string `json:"txid"`
+		Status   string `json:"status"`
+		Created  string `json:"created_at"`
+	}
+	var orders []model.DepositOrder
+	h.st.DB.Where("user_id = ?", buyer(c).UserID).Order("id desc").Limit(10).Find(&orders)
+	records := []record{}
+	for _, o := range orders {
+		records = append(records, record{wallet.OrderNo("D", o.ID, o.CreatedAt), o.Network, o.Currency, o.Amount, o.TxID, o.Status, o.CreatedAt.Format(time.RFC3339)})
+	}
+	h.reply(c, gin.H{"addresses": out, "records": records}, nil)
+}
+
+// claimDeposit claims a deposit by its transaction hash: a TRC20 one to a shared address is
+// credited at once; an ERC20 one (with its amount) waits for the console to confirm it.
+func (h *Handler) claimDeposit(c *gin.Context) {
+	var in struct {
+		TxID   string `json:"txid"`
+		Amount string `json:"amount"`
+	}
+	if c.ShouldBindJSON(&in) != nil {
+		h.fail(c, userErr("参数错误"))
+		return
+	}
+	b := buyer(c)
+	switch wallet.DepositHashNetwork(in.TxID) {
+	case "TRC20":
+		o, err := h.svc.wallet.ClaimTRC20(b.UserID, in.TxID)
+		if err != nil {
+			h.fail(c, err)
+			return
+		}
+		h.reply(c, gin.H{"credited": true, "amount": decimalText(o.Amount), "order_no": wallet.OrderNo("D", o.ID, o.CreatedAt)}, nil)
+	case "ERC20":
+		o, err := h.svc.wallet.SubmitERC20(b.UserID, in.TxID, in.Amount)
+		if err != nil {
+			h.fail(c, err)
+			return
+		}
+		h.reply(c, gin.H{"pending": true, "order_no": wallet.OrderNo("D", o.ID, o.CreatedAt)}, nil)
+	default:
+		h.fail(c, userErr("交易哈希格式不正确：TRC20 为 64 位字符，ERC20 为 0x 开头的 66 位字符"))
+	}
 }
 
 func (h *Handler) withdrawInfo(c *gin.Context) {
