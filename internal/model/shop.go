@@ -117,24 +117,29 @@ type ShopOrder struct {
 	// PlatformSubsidy is the part of the discounts the platform bears (platform coupons, member
 	// tier and points when shop_discount_bearer was "platform" at order time); the merchant is
 	// settled on the payment plus it.
-	PlatformSubsidy string     `gorm:"type:decimal(24,6);not null;default:0" json:"platform_subsidy"`
-	GroupID         uint64     `gorm:"not null;default:0;index" json:"group_id"` // group-buying group, 0 = regular order
-	UserCouponID    uint64     `gorm:"not null;default:0" json:"user_coupon_id"`
-	ContactName     string     `gorm:"size:64" json:"contact_name"`
-	ContactPhone    string     `gorm:"size:32" json:"contact_phone"`
-	Address         string     `gorm:"size:512" json:"address"`
-	Remark          string     `gorm:"size:255" json:"remark"`
-	Carrier         string     `gorm:"size:64" json:"carrier"`
-	TrackingNo      string     `gorm:"size:128" json:"tracking_no"`
-	DeliveryNote    string     `gorm:"type:text" json:"delivery_note"` // virtual codes or pickup instructions shown to the buyer
-	CancelReason    string     `gorm:"size:255" json:"cancel_reason"`
-	HandledBy       string     `gorm:"size:128" json:"handled_by"`
-	PaidAt          time.Time  `json:"paid_at"`
-	ShippedAt       *time.Time `json:"shipped_at"`
-	CompletedAt     *time.Time `json:"completed_at"`
-	CanceledAt      *time.Time `json:"canceled_at"`
-	CreatedAt       time.Time  `gorm:"index" json:"created_at"`
-	UpdatedAt       time.Time  `json:"updated_at"`
+	PlatformSubsidy string `gorm:"type:decimal(24,6);not null;default:0" json:"platform_subsidy"`
+	// MemberGranted is set once the order counted towards the buyer's member spend and points
+	// (at completion); MemberSpent and PointsEarned are what it still adds, lowered by refunds.
+	MemberGranted bool       `gorm:"not null;default:false" json:"member_granted"`
+	MemberSpent   string     `gorm:"type:decimal(24,6);not null;default:0" json:"member_spent"`
+	PointsEarned  int64      `gorm:"not null;default:0" json:"points_earned"`
+	GroupID       uint64     `gorm:"not null;default:0;index" json:"group_id"` // group-buying group, 0 = regular order
+	UserCouponID  uint64     `gorm:"not null;default:0" json:"user_coupon_id"`
+	ContactName   string     `gorm:"size:64" json:"contact_name"`
+	ContactPhone  string     `gorm:"size:32" json:"contact_phone"`
+	Address       string     `gorm:"size:512" json:"address"`
+	Remark        string     `gorm:"size:255" json:"remark"`
+	Carrier       string     `gorm:"size:64" json:"carrier"`
+	TrackingNo    string     `gorm:"size:128" json:"tracking_no"`
+	DeliveryNote  string     `gorm:"type:text" json:"delivery_note"` // virtual codes or pickup instructions shown to the buyer
+	CancelReason  string     `gorm:"size:255" json:"cancel_reason"`
+	HandledBy     string     `gorm:"size:128" json:"handled_by"`
+	PaidAt        time.Time  `json:"paid_at"`
+	ShippedAt     *time.Time `json:"shipped_at"`
+	CompletedAt   *time.Time `json:"completed_at"`
+	CanceledAt    *time.Time `json:"canceled_at"`
+	CreatedAt     time.Time  `gorm:"index" json:"created_at"`
+	UpdatedAt     time.Time  `json:"updated_at"`
 }
 
 // ShopOrderItem snapshots the product at purchase time.

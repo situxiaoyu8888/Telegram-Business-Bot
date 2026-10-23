@@ -61,6 +61,9 @@ func New(cfg config.Config, logger *zap.Logger) (*App, error) {
 		return nil, err
 	}
 	walletSvc := wallet.New(st, cfg.WalletCurrency, cfg.WithdrawMinUSDT, cfg.WithdrawFeeUSDT)
+	if err := walletSvc.SeedWithdrawRule(); err != nil {
+		logger.Warn("seed USDT withdrawal rule", zap.Error(err))
+	}
 	menuSvc := menu.New(st)
 	supportSvc := support.New(st)
 	refSvc := referral.New(st, cfg.ReferralRate)

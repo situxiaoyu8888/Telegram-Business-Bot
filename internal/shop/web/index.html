@@ -49,7 +49,11 @@ img{display:block;max-width:100%}
 .tag.green{background:#1fa36a22;color:#1a8f5c}
 .gallery{display:flex;overflow-x:auto;scroll-snap-type:x mandatory;margin:-12px -12px 10px;scrollbar-width:none;background:var(--card)}
 .gallery::-webkit-scrollbar{display:none}
-.gallery img,.gallery .ph{flex:none;width:100%;aspect-ratio:1;object-fit:cover;scroll-snap-align:start}
+/* Pictures are shown whole (portrait ones too), up to most of the screen height. */
+.gallery{align-items:center}
+.gallery img,.gallery .ph{flex:none;width:100%;scroll-snap-align:start}
+.gallery img{height:auto;max-height:78vh;object-fit:contain;background:#000}
+.gallery .ph{aspect-ratio:1}
 .gallery .ph{display:grid;place-items:center;color:var(--muted)}
 .skus{display:flex;flex-wrap:wrap;gap:8px}
 .sku{padding:7px 14px;border-radius:10px;border:1px solid var(--line);background:var(--card)}

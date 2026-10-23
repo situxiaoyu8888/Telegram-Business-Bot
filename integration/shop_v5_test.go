@@ -39,12 +39,16 @@ func TestShopPointsAndMemberTiers(t *testing.T) {
 		must(t, f.svc.Fulfil(o.ID, shop.Scope{}, "顺丰", o.OrderNo, "", "admin"))
 		must(t, f.svc.ConfirmReceipt(b.UserID, o.ID))
 	}
-	// No tier yet: 6 × 10 = 60 USDT, earns 600 points after the after-sale window.
+	// No tier yet: 6 × 10 = 60 USDT, earns 600 points as soon as the order completes.
 	first := order("p1", 6, false)
 	if first.PayAmount != "60.000000" || first.MemberLevel != "" {
 		t.Fatal(first.PayAmount, first.MemberLevel)
 	}
 	finish(first)
+	if f.points(t, b.UserID) != 600 {
+		t.Fatal("points not granted at completion", f.points(t, b.UserID))
+	}
+	// The after-sale window closing (referral commissions) does not grant them again.
 	must(t, f.svc.GrantCommissions(context.Background(), time.Now().AddDate(0, 0, 8)))
 	if f.points(t, b.UserID) != 600 {
 		t.Fatal("points", f.points(t, b.UserID))
@@ -168,5 +172,34 @@ func TestShopGroupBuyingExpiresAndRefunds(t *testing.T) {
 	}
 	if _, err := f.svc.CreateOrder(member, shop.CheckoutRequest{RequestID: "late", Items: []shop.CheckoutItem{{SKUID: f.sku.ID, Quantity: 1}}, DeliveryType: shop.DeliveryExpress, AddressID: maddr, GroupMode: "join", GroupID: g2.GroupID}); err == nil {
 		t.Fatal("joined a failed group")
+	}
+}
+
+func TestShopMemberCreditIsTakenBackOnRefund(t *testing.T) {
+	f := newShopFixture(t, 100, "physical")
+	f.config(t, "shop_points_per_usdt", "10")
+	f.config(t, "shop_member_levels", "白银:50:0.9")
+	b, addr := f.buyer(t, 8011, "500")
+	o, err := f.svc.CreateOrder(b, shop.CheckoutRequest{RequestID: "m1", Items: []shop.CheckoutItem{{SKUID: f.sku.ID, Quantity: 6}}, DeliveryType: shop.DeliveryExpress, AddressID: addr})
+	must(t, err)
+	must(t, f.svc.Fulfil(o.ID, shop.Scope{}, "顺丰", "1", "", "admin"))
+	must(t, f.svc.ConfirmReceipt(b.UserID, o.ID))
+	info, err := f.svc.Member(b.UserID)
+	must(t, err)
+	if info.Spent != "60.000000" || info.Level == nil || info.Level.Name != "白银" || f.points(t, b.UserID) != 600 {
+		t.Fatalf("after completion: spent %s level %+v points %d", info.Spent, info.Level, f.points(t, b.UserID))
+	}
+	// Refunding 20 after completion takes back 20 of spend and 200 points: below the tier again.
+	a, err := f.svc.ApplyAfterSale(b.UserID, shop.AfterSaleRequest{OrderID: o.ID, Type: shop.AfterSaleRefund, Reason: "少件", Amount: "20"})
+	must(t, err)
+	must(t, f.svc.RefundAfterSale(a.ID, shop.Scope{}, "20", "", "admin"))
+	info, err = f.svc.Member(b.UserID)
+	must(t, err)
+	if info.Spent != "40.000000" || info.Level != nil || f.points(t, b.UserID) != 400 {
+		t.Fatalf("after refund: spent %s level %+v points %d", info.Spent, info.Level, f.points(t, b.UserID))
+	}
+	must(t, f.svc.GrantCommissions(context.Background(), time.Now().AddDate(0, 0, 8)))
+	if info, _ = f.svc.Member(b.UserID); info.Spent != "40.000000" || f.points(t, b.UserID) != 400 {
+		t.Fatal("granted again when the after-sale window closed", info.Spent, f.points(t, b.UserID))
 	}
 }

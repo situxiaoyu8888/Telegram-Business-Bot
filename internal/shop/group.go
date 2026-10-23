@@ -97,8 +97,9 @@ func (s *Service) notifyGroupSuccess(groupID uint64) {
 		return
 	}
 	for _, o := range orders {
-		s.notify(o.BotID, o.TelegramUserID, fmt.Sprintf("🎉 <b>拼团成功</b>\n\n订单号：<code>%s</code>\n商家会尽快为你处理。", o.OrderNo), o.ID)
-		s.notifyStaff(o.MerchantID, fmt.Sprintf("🛒 <b>拼团成团，订单待处理</b>\n\n订单号：<code>%s</code>\n商家：%s", o.OrderNo, htmlEscape(o.MerchantName)))
+		items := s.itemsText(o.ID)
+		s.notify(o.BotID, o.TelegramUserID, fmt.Sprintf("🎉 <b>拼团成功</b>\n\n订单号：<code>%s</code>%s\n\n商家会尽快为你处理。", o.OrderNo, items), o.ID)
+		s.notifyStaff(o.MerchantID, fmt.Sprintf("🛒 <b>拼团成团，订单待处理</b>\n\n订单号：<code>%s</code>\n商家：%s%s\n配送：%s", o.OrderNo, htmlEscape(o.MerchantName), items, deliveryNames[o.DeliveryType]))
 	}
 }
 

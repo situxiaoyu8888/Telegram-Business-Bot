@@ -27,6 +27,9 @@ func (s *Service) recordSale(tx *gorm.DB, orderID uint64) error {
 	if err := tx.First(&o, orderID).Error; err != nil {
 		return err
 	}
+	if err := s.grantMemberTx(tx, o); err != nil {
+		return err
+	}
 	gross := saleBasis(o)
 	if !gross.IsPositive() {
 		return nil

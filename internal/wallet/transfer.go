@@ -181,7 +181,7 @@ func (s *Service) WithdrawRules() ([]WithdrawRule, error) {
 		}
 		rule := WithdrawRule{Currency: c.Code, Name: c.Name, Icon: c.Icon, Kind: c.Kind, Decimals: c.Decimals, MinWithdraw: c.MinWithdraw, WithdrawFee: c.WithdrawFee, Target: WithdrawTarget(c.Kind)}
 		if c.Code == s.currency {
-			rule.Decimals, rule.MinWithdraw, rule.WithdrawFee, rule.Target = 6, s.minWithdraw, s.withdrawFee, WithdrawTarget(KindTRC20)
+			rule.Decimals, rule.Target = 6, WithdrawTarget(KindTRC20)
 		}
 		out = append(out, rule)
 	}

@@ -162,10 +162,10 @@ test('merchant accounts see their shop pages but not categories or the platform 
 });
 test('home page shows to-dos, platform figures and per-currency money flows',()=>{
  const h=harness();
- h.run(`me={id:1,role:'super'};current='home';overview={range:'7d',since:'2026-10-17',todo:{pending_withdrawals:2,pending_deposits:1},platform:{users:30,new_users:4,merchants:3,enabled_merchants:2},shop:{orders:5,by_status:{paid:2,completed:3},paid:'100.5',refunded:'10',net:'90.5'},currencies:[{code:'USDT',name:'USDT-TRC20',deposit_count:3,deposit_amount:'500',withdraw_count:1,withdraw_amount:'620',net_flow:'-120',packet_count:2,packet_amount:'20',balance_available:'1234.5'},{code:'CNY',name:'人民币<b>',credit_amount:'88'}]};nav();render()`);
+ h.run(`me={id:1,role:'super'};current='home';overview={range:'7d',since:'2026-10-17',todo:{pending_withdrawals:2,pending_deposits:1},platform:{users:30,new_users:4,merchants:3,enabled_merchants:2},shop:{orders:5,by_status:{paid:2,completed:3},paid:'100.5',refunded:'10',net:'90.5'},operations:{users:{referred:2,commission:'1.5'},shop:{valid_orders:4,avg_order:'22.625',commission:'3.2'},redpackets:{claims:9},service:{push_sent:9,push_failed:1}},trend:[{day:'2026-10-23',new_users:3,orders:2,sales:'40',deposits:'500',withdraws:'0',packets:1}],currencies:[{code:'USDT',name:'USDT-TRC20',deposit_count:3,deposit_amount:'500',withdraw_count:1,withdraw_amount:'620',withdraw_fee:'1.25',withdraw_actual:'618.75',net_flow:'-120',packet_count:2,packet_amount:'20',balance_available:'1234.5'},{code:'CNY',name:'人民币<b>',credit_amount:'88'}]};nav();render()`);
  const html=h.elements.get('content').innerHTML;
  assert.ok(h.elements.get('navigation').innerHTML.includes('data-nav="home"'));
- for(const text of ['待审提现','data-go="withdrawals"','近 7 天','2026-10-17 至今','90.5','待处理 2 · 已完成 3','充提差额','class="negative">-120','1,234.5','红包个数','人民币&lt;b&gt;'])assert.ok(html.includes(text),text);
+ for(const text of ['提现手续费','1.25','618.75','运营统计','有效订单','22.625','平台佣金收入','送达率 90.0%','每日趋势','2026-10-23','待审提现','data-go="withdrawals"','近 7 天','2026-10-17 至今','90.5','待处理 2 · 已完成 3','充提差额','class="negative">-120','1,234.5','红包个数','人民币&lt;b&gt;'])assert.ok(html.includes(text),text);
 });
 test('merchant accounts get reports, settlements and reviews but not marketing',()=>{
  const h=harness();
@@ -221,4 +221,19 @@ test('navigation groups collapse and expand, keeping the open page visible',()=>
  assert.ok(!html.includes('data-nav="withdrawals"'));assert.ok(html.includes('aria-expanded="false"'));
  h.run("current='withdrawals';nav()");assert.ok(h.elements.get('navigation').innerHTML.includes('data-nav="withdrawals"'));
  h.run("current='home';toggleGroup('业务管理')");assert.ok(h.elements.get('navigation').innerHTML.includes('data-nav="withdrawals"'));
+});
+test('shop order, after-sale and review details are in Chinese with the buyer',()=>{
+ const h=harness();
+ const text=code=>h.run(code).map(([k,v])=>k+'：'+v).join('\n');
+ h.run("current='shop_orders'");
+ const order=text(`shopDetail({order_no:'S1',merchant_name:'甲',user_id:5,telegram_user_id:9001,username:'xiaoming',user_name:'小明',status:'paid',delivery_type:'express',items:[{product_name:'茶',sku_name:'大份',quantity:2,price:'5'}],goods_amount:'10',discount:'1',member_discount:'0',points_discount:'0',platform_subsidy:'1',pay_amount:'9',refunded_amount:'0',contact_name:'张三',address:'曼谷',created_at:'2026-10-23T10:00:00Z',commission_done:false})`);
+ for(const t of ['订单编号','小明 · @xiaoming · TG 9001','茶 · 大份 × 2','优惠券：−1 USDT','平台补贴','实付金额','收货地址：曼谷'])assert.ok(order.includes(t),t);
+ assert.ok(!/会员折扣|积分抵扣|快递单号|order_no|created_at/.test(order));
+ h.run("current='shop_reviews'");
+ const review=text(`shopDetail({order_no:'S1',product_name:'茶',sku_name:'A牌',buyer_name:'R**',username:'r',telegram_user_id:7,user_id:1,rating:5,content:'非常nice',hidden:false,reply:'',created_at:'2026-10-23T10:00:00Z'})`);
+ for(const t of ['评价内容：非常nice','正常显示','5 分','@r'])assert.ok(review.includes(t),t);
+ assert.ok(!/false|null|sku_name|order_item_id/.test(review));
+ h.run("current='tickets'");
+ const plain=text(`plainDetail({id:3,subject:'x',status:'open',created_at:'2026-10-23T10:00:00Z',replied_at:null,secret_field:1})`);
+ assert.ok(plain.includes('工单：3')&&plain.includes('待回复')&&!plain.includes('secret_field'));
 });

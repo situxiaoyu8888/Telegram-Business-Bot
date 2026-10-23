@@ -18,6 +18,7 @@ const (
 	PointsSpend  = "spend"
 	PointsRefund = "refund"
 	PointsAdjust = "adjust"
+	PointsRevoke = "revoke" // taken back after an after-sale refund
 )
 
 // Level is a member tier reached at Threshold of completed spend; Rate is the price multiplier.
@@ -113,6 +114,67 @@ func addPoints(tx *gorm.DB, userID uint64, delta int64, typ string, orderID uint
 		return err
 	}
 	return tx.Create(&model.ShopPointsLog{UserID: userID, Delta: delta, Balance: balance, Type: typ, OrderID: orderID, Remark: remark, Operator: operator}).Error
+}
+
+// grantMemberTx counts a completed order towards the buyer's member spend (tier) and points, once,
+// inside the caller's transaction (which has locked the order).
+func (s *Service) grantMemberTx(tx *gorm.DB, o model.ShopOrder) error {
+	if o.MemberGranted || o.Status != StatusCompleted {
+		return nil
+	}
+	net := amount(o.PayAmount).Sub(amount(o.RefundedAmount))
+	earned := int64(0)
+	if net.IsPositive() {
+		m, err := lockMember(tx, o.UserID)
+		if err != nil {
+			return err
+		}
+		if err := tx.Model(&model.ShopMember{}).Where("user_id = ?", o.UserID).Update("spent", amount(m.Spent).Add(net).StringFixed(6)).Error; err != nil {
+			return err
+		}
+		if earned = net.Mul(decimal.NewFromInt(int64(s.configInt("shop_points_per_usdt", 10)))).Floor().IntPart(); earned > 0 {
+			if err := addPoints(tx, o.UserID, earned, PointsEarn, o.ID, "商城订单 "+o.OrderNo, ""); err != nil {
+				return err
+			}
+		}
+	} else {
+		net = decimal.Zero
+	}
+	return tx.Model(&model.ShopOrder{}).Where("id = ?", o.ID).Updates(map[string]any{"member_granted": true, "member_spent": net.StringFixed(6), "points_earned": earned}).Error
+}
+
+// revokeMemberTx takes back the member spend and points a completed order earned for the part
+// refunded after completion (points already spent are taken only as far as the balance goes).
+func (s *Service) revokeMemberTx(tx *gorm.DB, o model.ShopOrder, refund decimal.Decimal) error {
+	if !o.MemberGranted || !refund.IsPositive() {
+		return nil
+	}
+	granted := amount(o.MemberSpent)
+	if !granted.IsPositive() {
+		return nil
+	}
+	back := decimal.Min(refund, granted)
+	points := decimal.NewFromInt(o.PointsEarned).Mul(back).Div(granted).Ceil().IntPart()
+	if points > o.PointsEarned {
+		points = o.PointsEarned
+	}
+	m, err := lockMember(tx, o.UserID)
+	if err != nil {
+		return err
+	}
+	spent := amount(m.Spent).Sub(back)
+	if spent.IsNegative() {
+		spent = decimal.Zero
+	}
+	if err := tx.Model(&model.ShopMember{}).Where("user_id = ?", o.UserID).Update("spent", spent.StringFixed(6)).Error; err != nil {
+		return err
+	}
+	if take := min(points, m.Points); take > 0 {
+		if err := addPoints(tx, o.UserID, -take, PointsRevoke, o.ID, "售后退款扣回 "+o.OrderNo, ""); err != nil {
+			return err
+		}
+	}
+	return tx.Model(&model.ShopOrder{}).Where("id = ?", o.ID).Updates(map[string]any{"member_spent": granted.Sub(back).StringFixed(6), "points_earned": o.PointsEarned - points}).Error
 }
 
 // MemberInfo is the buyer's points, tier and progress to the next tier.

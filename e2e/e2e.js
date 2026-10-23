@@ -207,6 +207,14 @@ async function toastText(page) { return page.$eval('#toast', e => e.hidden ? '' 
 
   step('admin opens CNY exchange and credits CNY; buyer exchanges CNY to USDT in the shop');
   await nav(admin, 'currencies'); await shot(admin, '11b-admin-currencies');
+  {
+    const usdtId = sql("select id from wallet_currencies where code='USDT'");
+    const seededFee = sql("select withdraw_fee from wallet_currencies where code='USDT'");
+    await admin.click(`[data-action="edit"][data-id="${usdtId}"]`); await admin.waitForTimeout(400); await shot(admin, '11b2-admin-usdt-withdraw-fee');
+    if (!(await admin.$('#curFee'))) problems.push('USDT withdrawal fee cannot be set in the console');
+    await admin.fill('#curFee', String(Number(seededFee))); await submitModal(admin);
+    if (Number(sql("select withdraw_fee from wallet_currencies where code='USDT'")) !== Number(seededFee)) problems.push('USDT withdrawal fee not saved');
+  }
   const cnyId = sql("select id from wallet_currencies where code='CNY'");
   await admin.click(`[data-action="edit"][data-id="${cnyId}"]`); await admin.waitForTimeout(400);
   await admin.check('#curExchange'); await submitModal(admin);
@@ -250,6 +258,10 @@ async function toastText(page) { return page.$eval('#toast', e => e.hidden ? '' 
   await shopPage.goto(SHOP_BASE + '/shop/#/'); await shopPage.waitForTimeout(800);
   await shopPage.locator('#grid .tile').filter({ hasText: '宫保鸡丁' }).first().click();
   await shopPage.waitForTimeout(800); await shot(shopPage, '13-product');
+  {
+    const fit = await shopPage.$eval('.gallery img', img => getComputedStyle(img).objectFit).catch(() => 'none');
+    if (fit === 'cover') problems.push('product pictures are cropped in the gallery');
+  }
   await shopPage.click('[data-sku]:has-text("大份")'); await shopPage.click('#plus');
   await shot(shopPage, '14-product-promo-sku');
   await shopPage.click('#addCart'); await shopPage.waitForTimeout(500);
@@ -284,6 +296,13 @@ async function toastText(page) { return page.$eval('#toast', e => e.hidden ? '' 
   step('admin ships the order');
   await nav(admin, 'shop_orders'); await shot(admin, '20-admin-orders');
   const orderId = sql(`select id from shop_orders where order_no='${orderNo}'`);
+  if (!(await admin.textContent('#content')).includes('@xiaoming')) problems.push('shop orders lack the buyer username');
+  await admin.click(`[data-action="detail"][data-id="${orderId}"]`); await admin.waitForTimeout(400); await shot(admin, '20a-admin-order-detail');
+  {
+    const d = await admin.textContent('#modal');
+    if (!d.includes('订单详情') || !d.includes('实付金额') || !d.includes('@xiaoming') || /order_no|created_at|telegram_user_id|null|false/.test(d)) problems.push('order detail not in Chinese: ' + d.slice(0, 160));
+  }
+  await admin.click('#closeModal'); await admin.waitForTimeout(300);
   await admin.click(`[data-action="fulfil"][data-id="${orderId}"]`);
   await admin.fill('#fCarrier', '泰国邮政'); await admin.fill('#fTracking', 'TH123456789');
   await submitModal(admin);
@@ -308,6 +327,12 @@ async function toastText(page) { return page.$eval('#toast', e => e.hidden ? '' 
   const rvId = sql('select id from shop_reviews order by id desc limit 1');
   await admin.click(`[data-action="rvreply"][data-id="${rvId}"]`); await admin.fill('#rvText', '感谢支持，米饭已退款！'); await submitModal(admin);
   await shot(admin, '26-admin-reviews');
+  await admin.click(`[data-action="detail"][data-id="${rvId}"]`); await admin.waitForTimeout(400); await shot(admin, '26a-admin-review-detail');
+  {
+    const d = await admin.textContent('#modal');
+    if (!d.includes('评价详情') || !d.includes('评价内容') || !d.includes('感谢支持') || /order_item_id|sku_name|null|false|updated_at/.test(d)) problems.push('review detail not in Chinese: ' + d.slice(0, 160));
+  }
+  await admin.click('#closeModal'); await admin.waitForTimeout(300);
   // Only orders past their after-sale period are settled; the shop worker marks them, so the
   // test moves the period on.
   sql("update shop_orders set commission_done=1 where status='completed'");
@@ -468,6 +493,13 @@ async function toastText(page) { return page.$eval('#toast', e => e.hidden ? '' 
 
   step('to-do digest and database backup');
   await nav(admin, 'shop_reports'); await admin.click('#rpDigest'); await admin.waitForTimeout(800);
+  {
+    const all = await (await fetch(TG + '/sent')).json();
+    const placed = all.find(m => /下单成功/.test(m.text || ''));
+    const staff = all.find(m => /商城新订单/.test(m.text || ''));
+    if (!placed || !/商品：\n• .+ × \d+/.test(placed.text)) problems.push('order notice lacks its goods: ' + (placed && placed.text));
+    if (!staff || !/商品：\n• .+ × \d+/.test(staff.text)) problems.push('merchant order notice lacks its goods: ' + (staff && staff.text));
+  }
   const digestMsg = (await (await fetch(TG + '/sent')).json()).find(m => m.chat_id === 777 && /今日待办汇总/.test(m.text || ''));
   console.log('  digest to admins:', !!digestMsg);
   await nav(admin, 'configs'); await shot(admin, '52-configs-backup');
@@ -792,9 +824,10 @@ async function toastText(page) { return page.$eval('#toast', e => e.hidden ? '' 
 
   step('console home page: to-dos and platform statistics');
   await nav(admin, 'home'); await admin.waitForTimeout(400); await shot(admin, '56-admin-home');
+  await admin.screenshot({ path: `${SHOTS}/56a-admin-home-full.png`, fullPage: true });
   const homeText = await admin.textContent('#content');
   const deposited = sql("select coalesce(sum(amount),0) from deposit_orders where status='credited' and currency='USDT'");
-  for (const t of ['待审提现', '用户总数', '商户数', '商城订单', '资金统计', '充提差额', '红包与余额', 'USDT-TRC20', Number(deposited).toLocaleString('en-US', { maximumFractionDigits: 6 })]) if (!homeText.includes(t)) problems.push('home page lacks ' + t);
+  for (const t of ['提现手续费', '实际出款', '运营统计', '有效订单', '平台佣金收入', '领取次数', '每日趋势', '待审提现', '用户总数', '商户数', '商城订单', '资金统计', '充提差额', '红包与余额', 'USDT-TRC20', Number(deposited).toLocaleString('en-US', { maximumFractionDigits: 6 })]) if (!homeText.includes(t)) problems.push('home page lacks ' + t);
   if (await admin.$('#stats')) problems.push('per-page stat cards still shown');
   await admin.click('[data-range="today"]'); await admin.waitForTimeout(500); await shot(admin, '56b-admin-home-today');
   if (!(await admin.textContent('#content')).includes('至今')) problems.push('home range switch did not apply');

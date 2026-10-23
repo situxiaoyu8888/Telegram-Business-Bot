@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"net/http"
 	"strconv"
 	"strings"
 	"time"
@@ -150,7 +151,44 @@ func (h *Handler) importShopCodes(c *gin.Context) {
 
 func (h *Handler) shopOrders(c *gin.Context) {
 	rows, err := h.shop.AdminOrders(shop.AdminOrderQuery{Status: c.Query("status"), Keyword: c.Query("q"), MerchantID: merchantScope(c)})
-	listOrError(c, rows, err)
+	if err != nil {
+		listOrError(c, rows, err)
+		return
+	}
+	ids := make([]uint64, 0, len(rows))
+	for _, r := range rows {
+		ids = append(ids, r.UserID)
+	}
+	users := h.walletUsers(ids)
+	out := make([]shopOrderRow, 0, len(rows))
+	for _, r := range rows {
+		u := users[r.UserID]
+		out = append(out, shopOrderRow{OrderDetail: r, buyerName: buyerName{Username: u.Username, UserName: u.UserName}})
+	}
+	c.JSON(http.StatusOK, out)
+}
+
+// buyerName is a buyer's Telegram username and name, shown next to their Telegram ID.
+type buyerName struct {
+	Username string `json:"username"`
+	UserName string `json:"user_name"`
+}
+
+type shopOrderRow struct {
+	shop.OrderDetail
+	buyerName
+}
+
+type shopAfterSaleRow struct {
+	model.ShopAfterSale
+	buyerName
+}
+
+type shopReviewRow struct {
+	model.ShopReview
+	buyerName
+	TelegramUserID int64  `json:"telegram_user_id"`
+	OrderNo        string `json:"order_no"`
 }
 
 func (h *Handler) fulfilShopOrder(c *gin.Context) {
@@ -246,7 +284,21 @@ func (h *Handler) issueShopCoupon(c *gin.Context) {
 
 func (h *Handler) shopAfterSales(c *gin.Context) {
 	rows, err := h.shop.AdminAfterSales(c.Query("status"), merchantScope(c))
-	listOrError(c, rows, err)
+	if err != nil {
+		listOrError(c, rows, err)
+		return
+	}
+	ids := make([]uint64, 0, len(rows))
+	for _, r := range rows {
+		ids = append(ids, r.UserID)
+	}
+	users := h.walletUsers(ids)
+	out := make([]shopAfterSaleRow, 0, len(rows))
+	for _, r := range rows {
+		u := users[r.UserID]
+		out = append(out, shopAfterSaleRow{ShopAfterSale: r, buyerName: buyerName{Username: u.Username, UserName: u.UserName}})
+	}
+	c.JSON(http.StatusOK, out)
 }
 
 func (h *Handler) approveShopAfterSale(c *gin.Context) {
@@ -289,7 +341,29 @@ func (h *Handler) rejectShopAfterSale(c *gin.Context) {
 
 func (h *Handler) shopReviews(c *gin.Context) {
 	rows, err := h.shop.AdminReviews(merchantScope(c))
-	listOrError(c, rows, err)
+	if err != nil {
+		listOrError(c, rows, err)
+		return
+	}
+	ids, orderIDs := make([]uint64, 0, len(rows)), make([]uint64, 0, len(rows))
+	for _, r := range rows {
+		ids, orderIDs = append(ids, r.UserID), append(orderIDs, r.OrderID)
+	}
+	users := h.walletUsers(ids)
+	orderNos := map[uint64]string{}
+	if len(orderIDs) > 0 {
+		var orders []model.ShopOrder
+		h.st.DB.Select("id", "order_no").Where("id IN ?", orderIDs).Find(&orders)
+		for _, o := range orders {
+			orderNos[o.ID] = o.OrderNo
+		}
+	}
+	out := make([]shopReviewRow, 0, len(rows))
+	for _, r := range rows {
+		u := users[r.UserID]
+		out = append(out, shopReviewRow{ShopReview: r, buyerName: buyerName{Username: u.Username, UserName: u.UserName}, TelegramUserID: u.TelegramUserID, OrderNo: orderNos[r.OrderID]})
+	}
+	c.JSON(http.StatusOK, out)
 }
 
 func (h *Handler) replyShopReview(c *gin.Context) {

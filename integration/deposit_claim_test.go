@@ -241,3 +241,26 @@ func TestERC20ClaimsCannotBeSquatted(t *testing.T) {
 		t.Fatalf("ERC20 balances %s", got)
 	}
 }
+
+func TestUSDTWithdrawalRuleIsSetInTheConsole(t *testing.T) {
+	db, w, _, user := depositFixture(t)
+	u := user(7401)
+	must(t, w.AdminAdjust(u, "USDT", "100", "admin", "test"))
+	// Seeded once from the environment (here min 1, fee 0), then the console owns it.
+	must(t, w.SeedWithdrawRule())
+	must(t, db.Model(&model.WalletCurrency{}).Where("code = 'USDT'").Updates(map[string]any{"min_withdraw": "20", "withdraw_fee": "2.5"}).Error)
+	must(t, w.SeedWithdrawRule())
+	if _, err := w.CreateWithdrawal(u, "TRC20", "TLa2f6VPqDgRE67v1736s7bJ8Ray5wYjU7", "10", "w-low"); err == nil || !strings.Contains(err.Error(), "最低") {
+		t.Fatal("console minimum ignored:", err)
+	}
+	o, err := w.CreateWithdrawal(u, "TRC20", "TLa2f6VPqDgRE67v1736s7bJ8Ray5wYjU7", "30", "w-ok")
+	must(t, err)
+	if o.Fee != "2.500000" || o.Actual != "27.500000" {
+		t.Fatalf("fee %s actual %s", o.Fee, o.Actual)
+	}
+	rules, err := w.WithdrawRules()
+	must(t, err)
+	if rules[0].Currency != "USDT" || rules[0].WithdrawFee != "2.500000" {
+		t.Fatalf("rules %+v", rules[0])
+	}
+}

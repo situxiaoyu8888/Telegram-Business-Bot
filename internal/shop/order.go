@@ -323,21 +323,45 @@ func (s *Service) CreateOrders(b Buyer, req CheckoutRequest) ([]model.ShopOrder,
 		}
 		for _, o := range orders {
 			if o.Status == StatusGrouping {
-				s.notify(o.BotID, o.TelegramUserID, fmt.Sprintf("👥 <b>拼团已支付，等待成团</b>\n\n订单号：<code>%s</code>\n分享给好友一起拼，未成团将自动退款。", o.OrderNo), o.ID)
+				s.notify(o.BotID, o.TelegramUserID, fmt.Sprintf("👥 <b>拼团已支付，等待成团</b>\n\n订单号：<code>%s</code>%s\n实付：<code>%s USDT</code>\n\n分享给好友一起拼，未成团将自动退款。", o.OrderNo, s.itemsText(o.ID), amount(o.PayAmount).String()), o.ID)
 				continue
 			}
 			if o.GroupID != 0 {
 				continue // a filled group is announced by notifyGroupSuccess
 			}
-			msg := fmt.Sprintf("🛒 <b>下单成功</b>\n\n订单号：<code>%s</code>\n商家：%s\n实付：<code>%s USDT</code>", o.OrderNo, htmlEscape(o.MerchantName), amount(o.PayAmount).String())
+			items := s.itemsText(o.ID)
+			msg := fmt.Sprintf("🛒 <b>下单成功</b>\n\n订单号：<code>%s</code>\n商家：%s%s\n实付：<code>%s USDT</code>", o.OrderNo, htmlEscape(o.MerchantName), items, amount(o.PayAmount).String())
 			if o.Status == StatusCompleted {
 				msg += "\n\n🎁 卡密已发放，请在商城「订单详情」中查看。"
 			}
 			s.notify(o.BotID, o.TelegramUserID, msg, o.ID)
-			s.notifyStaff(o.MerchantID, fmt.Sprintf("🛒 <b>商城新订单</b>\n\n订单号：<code>%s</code>\n商家：%s\n配送：%s\n实付：<code>%s USDT</code>\n买家 Telegram ID：<code>%d</code>%s", o.OrderNo, htmlEscape(o.MerchantName), deliveryNames[o.DeliveryType], amount(o.PayAmount).String(), o.TelegramUserID, map[bool]string{true: "\n\n卡密已自动发放。", false: ""}[o.Status == StatusCompleted]))
+			s.notifyStaff(o.MerchantID, fmt.Sprintf("🛒 <b>商城新订单</b>\n\n订单号：<code>%s</code>\n商家：%s%s\n配送：%s\n实付：<code>%s USDT</code>\n买家 Telegram ID：<code>%d</code>%s", o.OrderNo, htmlEscape(o.MerchantName), items, deliveryNames[o.DeliveryType], amount(o.PayAmount).String(), o.TelegramUserID, map[bool]string{true: "\n\n卡密已自动发放。", false: ""}[o.Status == StatusCompleted]))
 		}
 	}
 	return orders, nil
+}
+
+// itemsText lists an order's goods for a Telegram notice ("\n商品：\n• 名称（规格）× 数量"), at
+// most 10 lines.
+func (s *Service) itemsText(orderID uint64) string {
+	var items []model.ShopOrderItem
+	if s.st.DB.Where("order_id = ?", orderID).Order("id asc").Find(&items).Error != nil || len(items) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("\n商品：")
+	for i, it := range items {
+		if i == 10 {
+			fmt.Fprintf(&b, "\n…… 等共 %d 种商品", len(items))
+			break
+		}
+		b.WriteString("\n• " + htmlEscape(it.ProductName))
+		if name := strings.TrimSpace(it.SKUName); name != "" && name != "默认" {
+			b.WriteString("（" + htmlEscape(name) + "）")
+		}
+		fmt.Fprintf(&b, " × %d", it.Quantity)
+	}
+	return b.String()
 }
 
 var deliveryNames = map[string]string{DeliveryExpress: "快递配送", DeliveryPickup: "到店自提", DeliveryVirtual: "虚拟商品"}
@@ -789,19 +813,19 @@ func (s *Service) Fulfil(id uint64, scope Scope, carrier, trackingNo, note, oper
 				return err
 			}
 			updates["status"], updates["carrier"], updates["tracking_no"], updates["shipped_at"] = StatusShipped, strings.TrimSpace(carrier), strings.TrimSpace(trackingNo), now
-			msg = fmt.Sprintf("🚚 <b>订单已发货</b>\n\n订单号：<code>%s</code>\n快递：%s\n单号：<code>%s</code>", o.OrderNo, htmlEscape(strings.TrimSpace(carrier)), htmlEscape(strings.TrimSpace(trackingNo)))
+			msg = fmt.Sprintf("🚚 <b>订单已发货</b>\n\n订单号：<code>%s</code>%s\n快递：%s\n单号：<code>%s</code>", o.OrderNo, s.itemsText(o.ID), htmlEscape(strings.TrimSpace(carrier)), htmlEscape(strings.TrimSpace(trackingNo)))
 		case DeliveryPickup:
 			if err := checkLen(note, "取货说明", 1000, false); err != nil {
 				return err
 			}
 			updates["status"], updates["delivery_note"], updates["shipped_at"] = StatusReady, strings.TrimSpace(note), now
-			msg = fmt.Sprintf("🏪 <b>商品已备好，可以到店自提</b>\n\n订单号：<code>%s</code>\n地址：%s", o.OrderNo, htmlEscape(o.Address))
+			msg = fmt.Sprintf("🏪 <b>商品已备好，可以到店自提</b>\n\n订单号：<code>%s</code>%s\n地址：%s", o.OrderNo, s.itemsText(o.ID), htmlEscape(o.Address))
 		case DeliveryVirtual:
 			if err := checkLen(note, "发货内容", 5000, true); err != nil {
 				return err
 			}
 			updates["status"], updates["delivery_note"], updates["completed_at"] = StatusCompleted, strings.TrimSpace(note), now
-			msg = fmt.Sprintf("🎁 <b>虚拟商品已发放</b>\n\n订单号：<code>%s</code>\n请在商城「订单详情」中查看。", o.OrderNo)
+			msg = fmt.Sprintf("🎁 <b>虚拟商品已发放</b>\n\n订单号：<code>%s</code>%s\n\n请在商城「订单详情」中查看。", o.OrderNo, s.itemsText(o.ID))
 		}
 		if err := tx.Model(&model.ShopOrder{}).Where("id = ?", o.ID).Updates(updates).Error; err != nil {
 			return err

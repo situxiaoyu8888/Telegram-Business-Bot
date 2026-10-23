@@ -27,6 +27,7 @@
 - `REDIS_PASSWORD`：设置后 docker compose 的 Redis 自动启用密码，程序读取同一个变量。
 - `DB_PASSWORD` / `DB_ROOT_PASSWORD`：只在**全新**数据卷首次创建时生效。已有数据库要改密码，先在 MariaDB 里执行 `ALTER USER`，再改 `.env`，否则程序会连不上数据库。
 - `BUSINESS_BOT_KEY`：务必设置。未设置时用主机器人 token 派生密钥，一旦更换主机器人 token，所有业务机器人都会失效。
+- `WITHDRAW_MIN_USDT` / `WITHDRAW_FEE_USDT`：升级后首次启动时写入后台「币种汇率」的 USDT-TRC20 一行，之后以后台设置为准，修改环境变量不再生效。
 - `NEWS_ALLOW_PRIVATE_FEEDS`：只用于本地测试，生产环境不要设置。
 - 数据库和 Redis 端口只绑定 `127.0.0.1`；Docker 健康检查固定访问 8080 端口，修改 `HTTP_ADDR` 端口时需同步修改 `Dockerfile`。
 

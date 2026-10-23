@@ -20,6 +20,23 @@ func (s *Service) GrantCommissions(ctx context.Context, now time.Time) error {
 	if err != nil || rate.IsNegative() || rate.GreaterThanOrEqual(decimal.NewFromInt(1)) {
 		rate = decimal.Zero
 	}
+	// Completed orders not yet counted for the buyer's membership (completed before that
+	// happened at completion) are counted now.
+	var pending []uint64
+	if err := s.st.DB.WithContext(ctx).Model(&model.ShopOrder{}).Where("status = ? AND member_granted = ? AND commission_done = ?", StatusCompleted, false, false).Order("id asc").Limit(500).Pluck("id", &pending).Error; err != nil {
+		return err
+	}
+	for _, id := range pending {
+		if err := s.st.DB.Transaction(func(tx *gorm.DB) error {
+			o, err := lockOrder(tx, id, Scope{})
+			if err != nil {
+				return err
+			}
+			return s.grantMemberTx(tx, o)
+		}); err != nil {
+			return err
+		}
+	}
 	cutoff := now.AddDate(0, 0, -s.configInt("shop_aftersale_days", 7))
 	var ids []uint64
 	if err := s.st.DB.WithContext(ctx).Model(&model.ShopOrder{}).
@@ -58,7 +75,8 @@ func (s *Service) grantCommission(orderID uint64, rate decimal.Decimal) error {
 			return err
 		}
 		net := amount(o.PayAmount).Sub(amount(o.RefundedAmount))
-		if net.IsPositive() {
+		// Orders completed before members were credited at completion get it now.
+		if !o.MemberGranted && net.IsPositive() {
 			m, err := lockMember(tx, buyer.ID)
 			if err != nil {
 				return err

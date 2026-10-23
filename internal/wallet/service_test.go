@@ -29,6 +29,7 @@ func TestWithdrawalRejectsInvalidInputsBeforeDB(t *testing.T) {
 }
 func TestWithdrawalReplayDoesNotFreezeAgain(t *testing.T) {
 	db := testutil.DB(t,
+		testutil.Step{Contains: "wallet_currencies", Columns: []string{"id", "code", "min_withdraw", "withdraw_fee"}, Rows: [][]driver.Value{{int64(1), "USDT", "1.000000", "0.500000"}}},
 		testutil.Step{Contains: "FOR UPDATE", Columns: []string{"id", "user_id", "currency", "available", "frozen"}, Rows: [][]driver.Value{{int64(1), int64(1), "USDT", "90.000000", "10.000000"}}},
 		testutil.Step{Contains: "request_id=?", Columns: []string{"id", "user_id", "network", "currency", "address", "amount", "status", "request_id"}, Rows: [][]driver.Value{{int64(17), int64(1), "TRC20", "USDT", validAddress, "10.000000", "pending", "same-request"}}},
 	)

@@ -153,7 +153,34 @@ func (s *Service) CreateWithdrawal(userID uint64, network, address, amountText, 
 	if network != "TRC20" || !ValidTRONAddress(address) {
 		return nil, userErr("地址格式不正确，请输入以 T 开头的 TRON 地址")
 	}
-	return s.createWithdrawal(userID, s.currency, network, address, amountText, requestID, s.minWithdraw, s.withdrawFee, 6)
+	min, fee := s.withdrawRule()
+	return s.createWithdrawal(userID, s.currency, network, address, amountText, requestID, min, fee, 6)
+}
+
+// withdrawRule is the minimum and fee of a USDT-TRC20 withdrawal, set in the console (币种汇率);
+// the WITHDRAW_MIN_USDT / WITHDRAW_FEE_USDT settings only seed it.
+func (s *Service) withdrawRule() (min, fee string) {
+	var c model.WalletCurrency
+	if s.st == nil || s.st.DB.Where("code = ?", s.currency).First(&c).Error != nil {
+		return s.minWithdraw, s.withdrawFee
+	}
+	return c.MinWithdraw, c.WithdrawFee
+}
+
+// SeedWithdrawRule copies the configured USDT-TRC20 withdrawal minimum and fee into its currency
+// row once, so the console takes over from the environment without changing the rule.
+func (s *Service) SeedWithdrawRule() error {
+	return s.st.DB.Transaction(func(tx *gorm.DB) error {
+		var c model.WalletCurrency
+		if err := tx.Where("code = ?", s.currency).First(&c).Error; err != nil {
+			return err
+		}
+		claim := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&model.SeedMigration{Name: "usdt_withdraw_rule_v1"})
+		if claim.Error != nil || claim.RowsAffected == 0 {
+			return claim.Error
+		}
+		return tx.Model(&c).Updates(map[string]any{"min_withdraw": s.minWithdraw, "withdraw_fee": s.withdrawFee}).Error
+	})
 }
 
 // createWithdrawal freezes amount for a pending withdrawal; a repeated request ID returns the
