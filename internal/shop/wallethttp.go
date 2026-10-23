@@ -119,8 +119,8 @@ func (h *Handler) depositInfo(c *gin.Context) {
 	h.reply(c, gin.H{"addresses": out, "records": records}, nil)
 }
 
-// claimDeposit claims a deposit by its transaction hash: a TRC20 one to a shared address is
-// credited at once; an ERC20 one (with its amount) waits for the console to confirm it.
+// claimDeposit records the buyer's claim of an on-chain deposit by its transaction hash (and, for
+// ERC20, the amount) for the console to confirm.
 func (h *Handler) claimDeposit(c *gin.Context) {
 	var in struct {
 		TxID   string `json:"txid"`
@@ -130,25 +130,12 @@ func (h *Handler) claimDeposit(c *gin.Context) {
 		h.fail(c, userErr("参数错误"))
 		return
 	}
-	b := buyer(c)
-	switch wallet.DepositHashNetwork(in.TxID) {
-	case "TRC20":
-		o, err := h.svc.wallet.ClaimTRC20(b.UserID, in.TxID)
-		if err != nil {
-			h.fail(c, err)
-			return
-		}
-		h.reply(c, gin.H{"credited": true, "amount": decimalText(o.Amount), "order_no": wallet.OrderNo("D", o.ID, o.CreatedAt)}, nil)
-	case "ERC20":
-		o, err := h.svc.wallet.SubmitERC20(b.UserID, in.TxID, in.Amount)
-		if err != nil {
-			h.fail(c, err)
-			return
-		}
-		h.reply(c, gin.H{"pending": true, "order_no": wallet.OrderNo("D", o.ID, o.CreatedAt)}, nil)
-	default:
-		h.fail(c, userErr("交易哈希格式不正确：TRC20 为 64 位字符，ERC20 为 0x 开头的 66 位字符"))
+	o, err := h.svc.wallet.SubmitClaim(buyer(c).UserID, in.TxID, in.Amount)
+	if err != nil {
+		h.fail(c, err)
+		return
 	}
+	h.reply(c, gin.H{"pending": true, "order_no": wallet.OrderNo("D", o.ID, o.CreatedAt)}, nil)
 }
 
 func (h *Handler) withdrawInfo(c *gin.Context) {

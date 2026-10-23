@@ -331,23 +331,80 @@ func (s *Service) newsBots() ([]uint64, error) {
 
 // PendingDeliveries returns queued deliveries, oldest first.
 func (s *Service) PendingDeliveries(limit int) ([]model.NewsDelivery, error) {
+	now := s.now()
+	// A send interrupted by a crash or restart is retried after a while (it may have gone out, so
+	// only a few times), and ones that keep being interrupted are given up.
+	stuck := s.st.DB.Model(&model.NewsDelivery{}).Where("status = ? AND (claimed_at < ? OR claimed_at IS NULL)", "sending", now.Add(-stuckSending))
+	if err := stuck.Session(&gorm.Session{}).Where("attempts >= ?", maxDeliveryRetries).Updates(map[string]any{"status": "failed", "error": "发送中断次数过多"}).Error; err != nil {
+		return nil, err
+	}
+	if err := stuck.Session(&gorm.Session{}).Where("attempts < ?", maxDeliveryRetries).Updates(map[string]any{"status": "pending", "attempts": gorm.Expr("attempts + 1")}).Error; err != nil {
+		return nil, err
+	}
 	out := []model.NewsDelivery{}
-	return out, s.st.DB.Where("status = ?", "pending").Order("id asc").Limit(limit).Find(&out).Error
+	return out, s.st.DB.Where("status = ? AND (retry_at IS NULL OR retry_at <= ?)", "pending", now).Order("id asc").Limit(limit).Find(&out).Error
 }
+
+const (
+	stuckSending       = 10 * time.Minute
+	maxDeliveryRetries = 5
+)
 
 // ClaimDelivery marks a pending delivery as being sent; false when another worker took it.
 func (s *Service) ClaimDelivery(id uint64) (bool, error) {
-	res := s.st.DB.Model(&model.NewsDelivery{}).Where("id = ? AND status = ?", id, "pending").Update("status", "sending")
+	res := s.st.DB.Model(&model.NewsDelivery{}).Where("id = ? AND status = ?", id, "pending").Updates(map[string]any{"status": "sending", "claimed_at": s.now()})
 	return res.RowsAffected == 1, res.Error
 }
 
-// FinishDelivery records the result of sending.
+// FinishDelivery records the result of sending. Failures where nothing went out (rate limits,
+// server errors, no connection) are retried later, a few times; anything else is final, since a
+// timeout may have delivered the message. A group or channel that removed the bot stops getting
+// news.
 func (s *Service) FinishDelivery(id uint64, sendErr error) error {
 	updates := map[string]any{"status": "sent", "sent_at": s.now(), "error": ""}
 	if sendErr != nil {
-		updates["status"], updates["error"] = "failed", truncate(sendErr.Error(), 255)
+		msg := sendErr.Error()
+		updates["status"], updates["error"] = "failed", truncate(msg, 255)
+		var d model.NewsDelivery
+		if err := s.st.DB.Select("id", "bot_id", "chat_id", "attempts").First(&d, id).Error; err != nil {
+			return err
+		}
+		switch {
+		case !retryableSendError(msg):
+			// Permanent, or possibly delivered (timeout): not sent again.
+			if permanentSendError(msg) && d.ChatID < 0 {
+				if err := s.st.DB.Model(&model.NewsChat{}).Where("bot_id = ? AND chat_id = ?", d.BotID, d.ChatID).Update("push_enabled", false).Error; err != nil {
+					return err
+				}
+			}
+		case d.Attempts < maxDeliveryRetries:
+			wait := time.Duration(30<<d.Attempts) * time.Second // 30s, 1m, 2m, 4m, 8m
+			updates["status"], updates["attempts"], updates["retry_at"] = "pending", d.Attempts+1, s.now().Add(wait)
+		}
 	}
 	return s.st.DB.Model(&model.NewsDelivery{}).Where("id = ?", id).Updates(updates).Error
+}
+
+// retryableSendError reports failures where the message certainly did not go out: rate limits,
+// Telegram server errors and connections that never reached it.
+func retryableSendError(msg string) bool {
+	for _, s := range []string{"http 429", "error 429", "Too Many Requests", "http 5", "error 5", "connection refused", "no such host", "network is unreachable"} {
+		if strings.Contains(msg, s) {
+			return true
+		}
+	}
+	return false
+}
+
+// permanentSendError reports Bot API errors that retrying cannot fix: the bot was blocked,
+// kicked or never added, or the chat is gone.
+func permanentSendError(msg string) bool {
+	for _, s := range []string{"Forbidden", "chat not found", "bot was kicked", "bot is not a member", "user is deactivated", "CHAT_WRITE_FORBIDDEN", "have no rights"} {
+		if strings.Contains(msg, s) {
+			return true
+		}
+	}
+	return false
 }
 
 // Article loads any article (for delivery, regardless of status).

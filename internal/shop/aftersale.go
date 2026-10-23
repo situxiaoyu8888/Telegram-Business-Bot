@@ -33,7 +33,8 @@ func (s *Service) afterSaleAllowed(o model.ShopOrder, now time.Time) error {
 	case StatusShipped, StatusReady:
 	case StatusCompleted:
 		days := s.configInt("shop_aftersale_days", 7)
-		if o.CompletedAt == nil || days == 0 || now.After(o.CompletedAt.AddDate(0, 0, days)) {
+		// A finalised order (commission granted, settleable) takes no more after-sales.
+		if o.CompletedAt == nil || days == 0 || o.CommissionDone || now.After(o.CompletedAt.AddDate(0, 0, days)) {
 			return userErr("已超过售后申请期限")
 		}
 	case StatusPaid:

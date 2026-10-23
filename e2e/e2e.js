@@ -115,6 +115,11 @@ async function toastText(page) { return page.$eval('#toast', e => e.hidden ? '' 
   const menuCats = await admin.textContent('#content');
   if (!menuCats.includes('美食') || !menuCats.includes('餐厅') || !(await admin.isHidden('#create'))) problems.push('shop categories do not show the menu categories: ' + menuCats.slice(0, 160));
   await setCategoriesFromMenu(admin, false); await shot(admin, '02b-configs-switch');
+  const bearerId = sql("select id from system_configs where system_configs.key='shop_discount_bearer'");
+  await admin.click(`[data-action="edit"][data-id="${bearerId}"]`); await admin.waitForTimeout(400); await shot(admin, '02c-discount-bearer-edit');
+  await pick(admin, 'valChoice', 'platform'); await submitModal(admin); await shot(admin, '02d-discount-bearer');
+  if (sql("select value from system_configs where system_configs.key='shop_discount_bearer'") !== 'platform' || !(await admin.textContent('#content')).includes('平台承担')) problems.push('discount bearer not switched to the platform');
+  sql("update system_configs set value='merchant' where system_configs.key='shop_discount_bearer'");
   if (!(await admin.textContent('#content')).includes('关闭')) problems.push('category switch not shown as off');
   await nav(admin, 'shop_categories');
   await admin.click('#create'); await admin.fill('#scatName', '中餐'); await submitModal(admin);
@@ -230,6 +235,12 @@ async function toastText(page) { return page.$eval('#toast', e => e.hidden ? '' 
   if (afterEx !== 'CNY=648.000000,USDT=110.000000') problems.push('exchange balances wrong: ' + afterEx);
   sql(`update wallet_accounts set available=100 where user_id=${uid} and currency='USDT'`);
   await nav(admin, 'exchanges'); await shot(admin, '11f-admin-exchanges');
+  const exList = await admin.textContent('#content');
+  if (!/X\d{14}/.test(exList) || !exList.includes('@xiaoming')) problems.push('exchange list lacks order number or user');
+  await admin.click('[data-action="detail"]'); await admin.waitForTimeout(500); await shot(admin, '11g-admin-exchange-detail');
+  const exDetail = await admin.textContent('#modalBody');
+  if (!exDetail.includes('换汇') && !exDetail.includes('兑出') || /from_currency|fee_rate/.test(exDetail)) problems.push('exchange detail not in Chinese: ' + exDetail.slice(0, 120));
+  await admin.click('#closeModal').catch(() => admin.keyboard.press('Escape')); await admin.waitForTimeout(300);
 
   step('claim coupon');
   await shopPage.goto(SHOP_BASE + '/shop/#/coupons/center'); await shopPage.waitForTimeout(800);
@@ -297,6 +308,9 @@ async function toastText(page) { return page.$eval('#toast', e => e.hidden ? '' 
   const rvId = sql('select id from shop_reviews order by id desc limit 1');
   await admin.click(`[data-action="rvreply"][data-id="${rvId}"]`); await admin.fill('#rvText', '感谢支持，米饭已退款！'); await submitModal(admin);
   await shot(admin, '26-admin-reviews');
+  // Only orders past their after-sale period are settled; the shop worker marks them, so the
+  // test moves the period on.
+  sql("update shop_orders set commission_done=1 where status='completed'");
   await nav(admin, 'shop_settlements'); await shot(admin, '27-admin-settlements');
   await admin.click('[data-settle]'); await submitModal(admin);
   const stId = sql('select id from shop_settlements order by id desc limit 1');
@@ -408,6 +422,7 @@ async function toastText(page) { return page.$eval('#toast', e => e.hidden ? '' 
   const groupOrder = sql(`select id from shop_orders where group_id=${groupId} order by id limit 1`);
   await adminApi(admin, `shop-orders/${groupOrder}/fulfil`, 'POST', { carrier: '泰国邮政', tracking_no: 'TH2' });
   await adminApi(admin, `shop-orders/${groupOrder}/complete`, 'POST', {});
+  sql(`update shop_orders set commission_done=1 where id=${groupOrder}`); // its after-sale period is over
   const octx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
   const owner = await octx.newPage(); watch(owner, 'owner');
   if (OPS_BASE !== MERCHANT_BASE) {
@@ -674,12 +689,20 @@ async function toastText(page) { return page.$eval('#toast', e => e.hidden ? '' 
   if (!depText.includes(TRC) || !depText.includes(ERC) || !depText.includes('USDT-ERC20')) problems.push('shop deposit page does not show both addresses');
   if ((await shopPage.$$('img.dep-qr')).length !== 2) problems.push('shop deposit page has no QR codes');
   if (!depText.includes('多人共用') || !(await shopPage.$('#depClaim'))) problems.push('shared address shows no claim form');
-  // A deposit seen on the shared address waits unclaimed; the sender claims it by hash.
+  // A deposit seen on the shared address waits unclaimed; the user submits its hash and the
+  // console confirms the claim (the amount comes from the chain record).
   const claimHash = 'c1'.repeat(32), otherHash = 'd2'.repeat(32);
-  for (const [h, amt] of [[claimHash, '3.5'], [otherHash, '2']]) sql(`insert into deposit_orders (user_id,network,currency,address,from_address,amount,tx_id,block_timestamp,status,created_at,updated_at) values (0,'TRC20','USDT','${TRC}','',${amt},'${h}',0,'unclaimed',now(),now())`);
+  for (const [h, amt] of [[claimHash, '3.500000'], [otherHash, '2.000000']]) sql(`insert into deposit_orders (user_id,network,currency,address,from_address,amount,tx_id,event_key,block_timestamp,status,created_at,updated_at) values (0,'TRC20','USDT','${TRC}','Tsender',${amt},'${h}','trc20:${h}:${TRC}:${amt}:0',0,'unclaimed',now(),now())`);
   await shopPage.fill('#depTx', claimHash); await shopPage.click('#depClaim'); await shopPage.waitForTimeout(1200); await shot(shopPage, '56a2-shop-deposit-claimed');
-  if (sql(`select concat(user_id,' ',status) from deposit_orders where tx_id='${claimHash}'`) !== `${uid} credited`) problems.push('shop claim did not credit the deposit');
-  if (!(await shopPage.textContent('#app')).includes('已入账')) problems.push('claimed deposit missing from the shop records');
+  const trcClaim = sql(`select id from deposit_orders where tx_id='${claimHash}' and user_id=${uid} and status='pending'`);
+  if (!trcClaim) problems.push('shop claim not recorded for review');
+  if (!(await shopPage.textContent('#app')).includes('待核对')) problems.push('pending claim missing from the shop records');
+  else {
+    await nav(admin, 'deposits'); await admin.click(`[data-action="dconfirm"][data-id="${trcClaim}"]`); await admin.waitForTimeout(500); await shot(admin, '57j-admin-trc20-claim');
+    if ((await admin.inputValue('#depAmount')) !== '3.5') problems.push('claim review does not show the chain amount');
+    await submitModal(admin); await wait(800);
+    if (sql(`select concat(status,' ',amount) from deposit_orders where id=${trcClaim}`) !== 'credited 3.500000' || sql(`select status from deposit_orders where tx_id='${claimHash}' and user_id=0`) !== 'merged') problems.push('console did not confirm the TRC20 claim');
+  }
   // ERC20 through the bot: hash, then amount; the console confirms it.
   const ercHash = '0x' + 'e3'.repeat(32);
   await tap(xm, 'dep:claim', { message_id: 1, chat: pchat }); await wait(700);
@@ -766,6 +789,23 @@ async function toastText(page) { return page.$eval('#toast', e => e.hidden ? '' 
     if (!(await admin.textContent('#modal')).includes('USDT-TRC20')) problems.push('red packet claims dialog lacks the currency');
     await admin.click('#closeModal').catch(() => admin.keyboard.press('Escape')); await admin.waitForTimeout(300);
   }
+
+  step('console home page: to-dos and platform statistics');
+  await nav(admin, 'home'); await admin.waitForTimeout(400); await shot(admin, '56-admin-home');
+  const homeText = await admin.textContent('#content');
+  const deposited = sql("select coalesce(sum(amount),0) from deposit_orders where status='credited' and currency='USDT'");
+  for (const t of ['待审提现', '用户总数', '商户数', '商城订单', '资金统计', '充提差额', '红包与余额', 'USDT-TRC20', Number(deposited).toLocaleString('en-US', { maximumFractionDigits: 6 })]) if (!homeText.includes(t)) problems.push('home page lacks ' + t);
+  if (await admin.$('#stats')) problems.push('per-page stat cards still shown');
+  await admin.click('[data-range="today"]'); await admin.waitForTimeout(500); await shot(admin, '56b-admin-home-today');
+  if (!(await admin.textContent('#content')).includes('至今')) problems.push('home range switch did not apply');
+  await admin.click('[data-group="业务管理"]'); await admin.waitForTimeout(200); await shot(admin, '56c-admin-nav-collapsed');
+  if (await admin.$('[data-nav="withdrawals"]')) problems.push('navigation group did not collapse');
+  await admin.reload(); await admin.waitForTimeout(800);
+  if (await admin.$('[data-nav="withdrawals"]')) problems.push('collapsed navigation group not remembered');
+  await admin.click('[data-group="业务管理"]'); await admin.waitForTimeout(200);
+  if (!(await admin.$('[data-nav="withdrawals"]'))) problems.push('navigation group did not expand');
+  await admin.click('[data-go="withdrawals"]'); await admin.waitForTimeout(500);
+  if ((await admin.textContent('#pageTitle')) !== '提现审核') problems.push('home to-do card does not open its page');
 
   step('red-packet-only business bot');
   await nav(admin, 'bots'); await admin.click('#create'); await admin.waitForTimeout(400);

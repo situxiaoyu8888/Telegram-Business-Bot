@@ -77,7 +77,8 @@ func (s *Service) ExportProducts(w io.Writer, merchantID uint64) error {
 					promoStock = strconv.FormatInt(*k.PromoStock, 10)
 				}
 			}
-			_ = cw.Write([]string{strconv.FormatUint(p.ID, 10), merchants[p.MerchantID], cats[p.CategoryID], p.Name, kind, strings.Join(delivery, ","), k.Name, amount(k.Price).String(), strconv.FormatInt(k.Stock, 10), promo, promoStock, strconv.FormatInt(p.LimitPerUser, 10), yes(p.Enabled), yes(p.Featured), strconv.Itoa(p.Sort), images, p.Description})
+			// Text that merchants or applicants typed is neutralised against spreadsheet formulas.
+			_ = cw.Write([]string{strconv.FormatUint(p.ID, 10), safeCell(merchants[p.MerchantID]), safeCell(cats[p.CategoryID]), safeCell(p.Name), kind, strings.Join(delivery, ","), safeCell(k.Name), amount(k.Price).String(), strconv.FormatInt(k.Stock, 10), promo, promoStock, strconv.FormatInt(p.LimitPerUser, 10), yes(p.Enabled), yes(p.Featured), strconv.Itoa(p.Sort), safeCell(images), safeCell(p.Description)})
 		}
 	}
 	cw.Flush()
@@ -164,7 +165,12 @@ func (s *Service) ImportProducts(data []byte, merchantScope uint64, apply bool) 
 	}
 	cell := func(rec []string, name string) string {
 		if i, ok := col[name]; ok && i < len(rec) {
-			return strings.TrimSpace(rec[i])
+			v := strings.TrimSpace(rec[i])
+			// Undo the export's formula guard (a leading ' before = + - @).
+			if len(v) > 1 && v[0] == '\'' && strings.ContainsRune("=+-@", rune(v[1])) {
+				v = v[1:]
+			}
+			return v
 		}
 		return ""
 	}

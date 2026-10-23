@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	mysqldriver "github.com/go-sql-driver/mysql"
+	"strings"
 	"time"
 
 	"telegram-business-bot/internal/model"
@@ -26,12 +27,18 @@ func New(mysqlDSN, redisAddr, redisPassword string, redisDB int) (*Store, error)
 	if err != nil {
 		return nil, fmt.Errorf("connect mysql: %w", err)
 	}
+	// Bounded pool: polling, workers and HTTP together must stay under MariaDB's max_connections,
+	// and connections are recycled before proxies or the server drop idle ones.
+	if sqlDB, err := db.DB(); err == nil {
+		sqlDB.SetMaxOpenConns(50)
+		sqlDB.SetMaxIdleConns(10)
+		sqlDB.SetConnMaxLifetime(30 * time.Minute)
+	}
 	// Several users may now share a deposit address: drop the old unique index on it (AutoMigrate
 	// adds a plain one).
-	if m := db.Migrator(); m.HasTable(&model.DepositAddress{}) && m.HasIndex(&model.DepositAddress{}, "idx_deposit_addresses_address") {
-		if err := m.DropIndex(&model.DepositAddress{}, "idx_deposit_addresses_address"); err != nil {
-			return nil, fmt.Errorf("drop unique deposit address index: %w", err)
-		}
+	// One transaction may carry several deposits: tx_id is no longer unique (event_key is).
+	if err := dropIndexes(db, map[any]string{&model.DepositAddress{}: "idx_deposit_addresses_address", &model.DepositOrder{}: "idx_deposit_orders_tx_id"}); err != nil {
+		return nil, err
 	}
 	if err := db.AutoMigrate(
 		&model.TelegramUser{}, &model.WalletAccount{}, &model.WalletTransaction{}, &model.DepositAddress{}, &model.DepositOrder{},
@@ -41,10 +48,51 @@ func New(mysqlDSN, redisAddr, redisPassword string, redisDB int) (*Store, error)
 		&model.ShopOrder{}, &model.ShopOrderItem{}, &model.ShopCoupon{}, &model.ShopUserCoupon{}, &model.ShopAfterSale{},
 		&model.ShopBanner{}, &model.ShopReview{}, &model.ShopMerchantEntry{}, &model.ShopSettlement{}, &model.ShopFavorite{}, &model.ShopView{}, &model.ShopMember{}, &model.ShopPointsLog{}, &model.ShopGroup{},
 		&model.ShopMerchantApplication{}, &model.ShopConversation{}, &model.ShopMessage{}, &model.AdminAuditLog{},
-		&model.WalletCurrency{}, &model.WalletExchange{}, &model.WalletTransfer{}, &model.RedPacket{}, &model.RedPacketClaim{}, &model.RedPacketMessage{}, &model.RedPacketCover{}, &model.DepositPoolAddress{}, &model.PaymentPassword{},
+		&model.WalletCurrency{}, &model.WalletExchange{}, &model.WalletTransfer{}, &model.RedPacket{}, &model.RedPacketClaim{}, &model.RedPacketMessage{}, &model.RedPacketCover{}, &model.DepositPoolAddress{}, &model.DepositAddressHolder{}, &model.PaymentPassword{},
 		&model.NewsCategory{}, &model.NewsArticle{}, &model.NewsFeed{}, &model.NewsChat{}, &model.NewsSubscription{}, &model.NewsDelivery{},
 	); err != nil {
 		return nil, fmt.Errorf("auto migrate: %w", err)
+	}
+	// Deposits recorded before event keys existed get theirs (same format the watcher uses).
+	if err := db.Exec(`UPDATE deposit_orders SET event_key = CASE WHEN network = 'TRC20'
+		THEN CONCAT('trc20:', LOWER(tx_id), ':', address, ':', CAST(amount AS CHAR), ':0')
+		ELSE CONCAT('erc20:', tx_id, ':', user_id) END WHERE event_key IS NULL`).Error; err != nil {
+		return nil, fmt.Errorf("backfill deposit event keys: %w", err)
+	}
+	// Roles that could adjust balances or confirm deposits before the funds permission existed
+	// keep that ability (once).
+	if err := db.Transaction(func(tx *gorm.DB) error {
+		claim := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&model.SeedMigration{Name: "roles_funds_v1"})
+		if claim.Error != nil || claim.RowsAffected == 0 {
+			return claim.Error
+		}
+		return tx.Exec(`UPDATE admin_roles SET permissions = CONCAT(permissions, ',funds')
+			WHERE (FIND_IN_SET('users', permissions) > 0 OR FIND_IN_SET('deposits', permissions) > 0) AND FIND_IN_SET('funds', permissions) = 0`).Error
+	}); err != nil {
+		return nil, fmt.Errorf("grant funds permission: %w", err)
+	}
+	// The home page shows the platform's money figures: roles that already saw deposits or
+	// withdrawals get it (once); others can be given it in the console.
+	if err := db.Transaction(func(tx *gorm.DB) error {
+		claim := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&model.SeedMigration{Name: "roles_home_v1"})
+		if claim.Error != nil || claim.RowsAffected == 0 {
+			return claim.Error
+		}
+		return tx.Exec(`UPDATE admin_roles SET permissions = CONCAT('home,', permissions)
+			WHERE (FIND_IN_SET('withdrawals', permissions) > 0 OR FIND_IN_SET('deposits', permissions) > 0) AND FIND_IN_SET('home', permissions) = 0`).Error
+	}); err != nil {
+		return nil, fmt.Errorf("grant home permission: %w", err)
+	}
+	// Addresses bound before holders were tracked count their current holder (once).
+	if err := db.Transaction(func(tx *gorm.DB) error {
+		claim := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&model.SeedMigration{Name: "deposit_holders_v1"})
+		if claim.Error != nil || claim.RowsAffected == 0 {
+			return claim.Error
+		}
+		return tx.Exec(`INSERT IGNORE INTO deposit_address_holders (network, address, user_id, assigned_at)
+			SELECT network, address, user_id, COALESCE(updated_at, created_at, NOW()) FROM deposit_addresses`).Error
+	}); err != nil {
+		return nil, fmt.Errorf("backfill deposit address holders: %w", err)
 	}
 	rdb := redis.NewClient(&redis.Options{Addr: redisAddr, Password: redisPassword, DB: redisDB})
 	if err := rdb.Ping(context.Background()).Err(); err != nil {
@@ -77,6 +125,7 @@ func New(mysqlDSN, redisAddr, redisPassword string, redisDB int) (*Store, error)
 		{Key: "redpacket_max_count", Value: "100", Remark: "单个红包最多可拆分的份数（1–1000）"},
 		{Key: "exchange_fee_rate", Value: "0", Remark: "换汇手续费比例（0.005 = 0.5%，从兑换所得中扣除）"},
 		{Key: "shop_referral_rate", Value: "0", Remark: "商城推广返佣比例（0.05 = 5%，0 为关闭）；订单完成且售后期结束后发给直属上级"},
+		{Key: "shop_discount_bearer", Value: "merchant", Remark: "平台优惠（平台通用优惠券、会员折扣、积分抵扣）由谁承担：merchant = 商家承担（按用户实付结算），platform = 平台承担（按实付 + 平台优惠结算）；商家自己的优惠券始终由商家承担，修改只影响之后的订单"},
 		{Key: "shop_categories_from_menu", Value: "1", Remark: "商城分类跟随机器人菜单：开启时 H5 商城和后台「商城分类」显示机器人菜单的分类；关闭后在「商城分类」中手动配置"},
 	} {
 		if err := db.Clauses(clause.OnConflict{DoNothing: true}).Create(&c).Error; err != nil {
@@ -278,4 +327,19 @@ func (s *Store) seedShopCommissions() error {
 func IsDuplicate(err error) bool {
 	var me *mysqldriver.MySQLError
 	return errors.As(err, &me) && me.Number == 1062
+}
+
+// dropIndexes drops the named indexes that still exist; another instance migrating at the same
+// time may have dropped one already (MariaDB error 1091), which is fine.
+func dropIndexes(db *gorm.DB, indexes map[any]string) error {
+	m := db.Migrator()
+	for table, name := range indexes {
+		if !m.HasTable(table) || !m.HasIndex(table, name) {
+			continue
+		}
+		if err := m.DropIndex(table, name); err != nil && !strings.Contains(err.Error(), "1091") {
+			return fmt.Errorf("drop index %s: %w", name, err)
+		}
+	}
+	return nil
 }

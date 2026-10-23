@@ -67,7 +67,9 @@ func (r *Router) Handle(ctx context.Context, u Update) error {
 	if userID <= 0 {
 		return nil
 	}
-	return lease.Run(ctx, r.store.Redis, fmt.Sprintf("tg:lock:%t:%d:%d", r.adminOnly, r.botID, userID), func(ctx context.Context) error {
+	// A short lease: one left behind by a crashed instance holds this user's updates (and, while
+	// polling retries it, everyone's) only briefly.
+	return lease.RunFor(ctx, r.store.Redis, fmt.Sprintf("tg:lock:%t:%d:%d", r.adminOnly, r.botID, userID), 20*time.Second, func(ctx context.Context) error {
 		private := u.Message != nil && u.Message.Chat.ID == userID || u.CallbackQuery != nil && u.CallbackQuery.Message != nil && u.CallbackQuery.Message.Chat.ID == userID
 		first := false
 		if private && !r.adminOnly {
@@ -78,7 +80,16 @@ func (r *Router) Handle(ctx context.Context, u Update) error {
 			// A new subscription row means this user is activating this bot for the first time.
 			first = res.RowsAffected == 1
 		}
-		r.handle(ctx, u, first)
+		// A panic while handling one update is logged and the update skipped; re-delivering it would
+		// only crash the program again.
+		func() {
+			defer func() {
+				if p := recover(); p != nil && r.logger != nil {
+					r.logger.Error("update handler panicked", zap.Any("panic", p), zap.Int("update_id", u.UpdateID), zap.Stack("stack"))
+				}
+			}()
+			r.handle(ctx, u, first)
+		}()
 		return ctx.Err()
 	})
 }
@@ -188,6 +199,13 @@ func (r *Router) handleMessage(ctx context.Context, m *Message, first bool) {
 		// "hb" opens the red packet wizard; "hb_<groupID>" comes from /hb in that group.
 		if len(parts) > 1 && r.packets != nil && (parts[1] == "hb" || strings.HasPrefix(parts[1], "hb_")) {
 			group, _ := strconv.ParseInt(strings.TrimPrefix(parts[1], "hb_"), 10, 64)
+			// The link names any chat; the packet goes there only if the sender is in that group,
+			// so it cannot be used to post into strangers' groups or private chats.
+			if group != 0 {
+				if ok, err := r.client.IsChatMember(ctx, group, m.From.ID); group > 0 || err != nil || !ok {
+					group = 0
+				}
+			}
 			r.startPacketWizard(ctx, m.Chat.ID, m.From.ID, group)
 			return
 		}
@@ -281,9 +299,8 @@ func (r *Router) handleMessage(ctx context.Context, m *Message, first bool) {
 		_ = r.client.SendMessage(ctx, m.Chat.ID, "当前操作状态暂不可用，请稍后重试。", nil)
 		return
 	}
-	if r.tryPasswordClaim(ctx, 0, m, u) {
-		return
-	}
+	// A password typed in the private chat is not matched against every group's packets (anyone
+	// could guess common passwords): a packet is claimed here only after pressing its button.
 	if r.packetOnly {
 		r.sendHome(ctx, m.Chat.ID, m.From.ID)
 		return
@@ -516,7 +533,7 @@ func (r *Router) dispatchMenu(ctx context.Context, cb *CallbackQuery, u *model.T
 		var b strings.Builder
 		b.WriteString("<b>💵 USDT 充值</b>\n\n以下是平台为你分配的收款地址，入账后会通知你。")
 		if claim {
-			b.WriteString("\n转账后请点「🧾 提交交易哈希」认领入账。")
+			b.WriteString("\n转账后请点「🧾 提交交易哈希」，客服核对后入账。")
 		}
 		captions := make([]string, len(list))
 		for i, a := range list {

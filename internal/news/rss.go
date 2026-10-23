@@ -8,10 +8,13 @@ import (
 	"fmt"
 	"html"
 	"io"
+	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"regexp"
 	"strings"
+	"syscall"
 	"time"
 
 	"go.uber.org/zap"
@@ -25,7 +28,64 @@ type Fetcher func(ctx context.Context, url string) ([]byte, error)
 
 const maxFeedBytes = 4 << 20
 
-var feedClient = &http.Client{Timeout: 20 * time.Second}
+// AllowPrivateFeeds lets feeds live on loopback or private networks (local tests only); otherwise
+// a console account could use feed URLs to reach internal services.
+var AllowPrivateFeeds bool
+
+var errPrivateFeed = errors.New("订阅源地址指向本机或内网，已拒绝")
+
+// publicOnly refuses connections to loopback, private, link-local and other non-public
+// addresses. It runs on the resolved address, so DNS names and redirects are covered too.
+func publicOnly(_, address string, _ syscall.RawConn) error {
+	if AllowPrivateFeeds {
+		return nil
+	}
+	host, _, err := net.SplitHostPort(address)
+	if err != nil {
+		return err
+	}
+	ip, err := netip.ParseAddr(host)
+	if err != nil {
+		return errPrivateFeed
+	}
+	ip = ip.Unmap()
+	if ip.IsLoopback() || ip.IsPrivate() || ip.IsUnspecified() || ip.IsLinkLocalUnicast() ||
+		ip.IsLinkLocalMulticast() || ip.IsInterfaceLocalMulticast() || ip.IsMulticast() {
+		return errPrivateFeed
+	}
+	for _, p := range nonPublic {
+		if p.Contains(ip) {
+			return errPrivateFeed
+		}
+	}
+	return nil
+}
+
+// nonPublic are further ranges no feed lives on: carrier-grade NAT (cloud metadata such as
+// 100.100.100.200), "this network", benchmarking, protocol assignments, reserved, and NAT64.
+var nonPublic = []netip.Prefix{
+	netip.MustParsePrefix("0.0.0.0/8"),
+	netip.MustParsePrefix("100.64.0.0/10"),
+	netip.MustParsePrefix("192.0.0.0/24"),
+	netip.MustParsePrefix("198.18.0.0/15"),
+	netip.MustParsePrefix("240.0.0.0/4"),
+	netip.MustParsePrefix("64:ff9b::/96"),
+	netip.MustParsePrefix("64:ff9b:1::/48"),
+}
+
+var feedClient = &http.Client{
+	Timeout: 20 * time.Second,
+	Transport: &http.Transport{
+		DialContext:         (&net.Dialer{Timeout: 10 * time.Second, Control: publicOnly}).DialContext,
+		TLSHandshakeTimeout: 10 * time.Second,
+	},
+	CheckRedirect: func(_ *http.Request, via []*http.Request) error {
+		if len(via) >= 5 {
+			return errors.New("订阅源重定向次数过多")
+		}
+		return nil
+	},
+}
 
 func httpFetch(ctx context.Context, rawURL string) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
@@ -36,11 +96,14 @@ func httpFetch(ctx context.Context, rawURL string) ([]byte, error) {
 	req.Header.Set("Accept", "application/rss+xml, application/atom+xml, application/xml, text/xml, */*")
 	resp, err := feedClient.Do(req)
 	if err != nil {
-		return nil, err
+		if errors.Is(err, errPrivateFeed) {
+			return nil, errPrivateFeed
+		}
+		return nil, errors.New("无法连接订阅源")
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
+		return nil, errors.New("订阅源返回错误，请检查地址")
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxFeedBytes+1))
 	if err != nil {

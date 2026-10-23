@@ -2,6 +2,8 @@ package integration
 
 import (
 	"bytes"
+	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -78,6 +80,15 @@ func TestShopSettlementLedgerFollowsCompletionsAndRefunds(t *testing.T) {
 	// sales 15 + 30, refund −10 → amount 35; commission 1.5 + 3 − 1 = 3.5; net 31.5
 	if len(balances) != 1 || balances[0].Entries != 3 || balances[0].Amount != "35.000000" || balances[0].Commission != "3.500000" || balances[0].Net != "31.500000" {
 		t.Fatalf("%+v", balances)
+	}
+	// Orders are settled only once their after-sale period is over, so a paid-out sale can no
+	// longer be refunded.
+	if _, err := f.svc.CreateSettlement(f.mer.ID, "", "admin"); err == nil {
+		t.Fatal("settled orders still within their after-sale period")
+	}
+	must(t, f.svc.GrantCommissions(context.Background(), time.Now().AddDate(0, 0, 8)))
+	if _, err := f.svc.ApplyAfterSale(b.UserID, shop.AfterSaleRequest{OrderID: early.ID, Type: shop.AfterSaleRefund, Reason: "再退", Amount: "1"}); err == nil {
+		t.Fatal("after-sale accepted on a finalised order")
 	}
 	st, err := f.svc.CreateSettlement(f.mer.ID, "", "admin")
 	must(t, err)
@@ -192,5 +203,61 @@ func TestShopHomeShowsOnlyActiveBanners(t *testing.T) {
 	must(t, err)
 	if len(h.Banners) != 1 || h.Banners[0].Title != "当前" || len(h.Featured) != 1 || len(h.Promos) != 0 {
 		t.Fatalf("%+v", h)
+	}
+}
+
+func TestPlatformDiscountsAreSettledByBearer(t *testing.T) {
+	f := newShopFixture(t, 10, "physical")
+	b, addr := f.buyer(t, 6111, "200")
+	coupon := func(merchantID uint64) uint64 {
+		c := model.ShopCoupon{Name: "减3", MerchantID: merchantID, Threshold: "0", Discount: "3", ValidDays: 7, PerUserLimit: 1, Claimable: true, Enabled: true}
+		must(t, f.db.Create(&c).Error)
+		must(t, f.svc.Claim(b.UserID, c.ID))
+		var held model.ShopUserCoupon
+		must(t, f.db.Where("user_id = ? AND coupon_id = ?", b.UserID, c.ID).First(&held).Error)
+		return held.ID
+	}
+	bearer := func(v string) {
+		must(t, f.db.Where("`key` = ?", "shop_discount_bearer").Delete(&model.SystemConfig{}).Error)
+		must(t, f.db.Create(&model.SystemConfig{Key: "shop_discount_bearer", Value: v}).Error)
+	}
+	place := func(id string, held uint64) *model.ShopOrder {
+		o, err := f.svc.CreateOrder(b, shop.CheckoutRequest{RequestID: id, Items: []shop.CheckoutItem{{SKUID: f.sku.ID, Quantity: 2}}, DeliveryType: shop.DeliveryExpress, AddressID: addr, UserCouponID: held})
+		must(t, err)
+		must(t, f.svc.Fulfil(o.ID, shop.Scope{}, "顺丰", id, "", "admin"))
+		must(t, f.svc.ConfirmReceipt(b.UserID, o.ID))
+		return o
+	}
+	sale := func(o *model.ShopOrder) string {
+		var e model.ShopMerchantEntry
+		must(t, f.db.Where("entry_key = ?", fmt.Sprintf("sale:%d", o.ID)).First(&e).Error)
+		return e.Amount
+	}
+
+	// Platform bears: a platform coupon is paid to the merchant, the merchant's own is not.
+	bearer("platform")
+	platform := place("platform", coupon(0))
+	if platform.PayAmount != "17.000000" || platform.PlatformSubsidy != "3.000000" || sale(platform) != "20.000000" {
+		t.Fatalf("platform-borne coupon: pay %s subsidy %s sale %s", platform.PayAmount, platform.PlatformSubsidy, sale(platform))
+	}
+	own := place("own", coupon(f.mer.ID))
+	if own.PlatformSubsidy != "0.000000" || sale(own) != "17.000000" {
+		t.Fatalf("merchant coupon: subsidy %s sale %s", own.PlatformSubsidy, sale(own))
+	}
+	// A refund of half the payment takes back half of the booked sale, subsidy included.
+	a, err := f.svc.ApplyAfterSale(b.UserID, shop.AfterSaleRequest{OrderID: platform.ID, Type: shop.AfterSaleRefund, Reason: "少件", Amount: "8.5"})
+	must(t, err)
+	must(t, f.svc.RefundAfterSale(a.ID, shop.Scope{}, "8.5", "", "admin"))
+	var refund model.ShopMerchantEntry
+	must(t, f.db.Where("entry_key = ?", fmt.Sprintf("refund:%d", a.ID)).First(&refund).Error)
+	if refund.Amount != "-10.000000" {
+		t.Fatal("refund entry", refund.Amount)
+	}
+
+	// Merchant bears (the default): settled on what the buyer paid.
+	bearer("merchant")
+	merchant := place("merchant", coupon(0))
+	if merchant.PlatformSubsidy != "0.000000" || sale(merchant) != "17.000000" {
+		t.Fatalf("merchant-borne coupon: subsidy %s sale %s", merchant.PlatformSubsidy, sale(merchant))
 	}
 }

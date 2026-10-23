@@ -48,6 +48,8 @@ type accountStore interface {
 	ByID(ctx context.Context, id uint64) (*model.AdminUser, error)
 	TouchLogin(ctx context.Context, id uint64) error
 	Role(ctx context.Context, id uint64) (*model.AdminRole, error)
+	// MerchantActive reports whether a merchant exists and, with staff, has an enabled owner.
+	MerchantActive(ctx context.Context, merchantID uint64, staff bool) (bool, error)
 }
 
 type dbAccounts struct{ db *gorm.DB }
@@ -66,6 +68,18 @@ func (a dbAccounts) ByID(ctx context.Context, id uint64) (*model.AdminUser, erro
 	}
 	return &u, nil
 }
+func (a dbAccounts) MerchantActive(ctx context.Context, merchantID uint64, staff bool) (bool, error) {
+	var n int64
+	if err := a.db.WithContext(ctx).Model(&model.Merchant{}).Where("id = ?", merchantID).Count(&n).Error; err != nil || n == 0 {
+		return false, err
+	}
+	if !staff {
+		return true, nil
+	}
+	err := a.db.WithContext(ctx).Model(&model.AdminUser{}).Where("role = ? AND merchant_id = ? AND enabled = ?", roleMerchant, merchantID, true).Count(&n).Error
+	return n > 0, err
+}
+
 func (a dbAccounts) TouchLogin(ctx context.Context, id uint64) error {
 	return a.db.WithContext(ctx).Model(&model.AdminUser{}).Where("id=?", id).Update("last_login_at", time.Now()).Error
 }
@@ -201,10 +215,13 @@ func (h *Handler) login(c *gin.Context) {
 	limiter := h.loginLimiter()
 	keys := loginKeys(c.ClientIP(), name)
 	if limiter != nil {
-		// Count failed attempts per username and per IP; reads fail open so Redis trouble never locks everyone out.
-		nUser, _ := ratelimit.Count(c.Request.Context(), limiter, keys[0])
+		// Count failed attempts per username from this IP, per IP, and per username overall (a high
+		// bar, so nobody can lock an account out from one address); reads fail open so Redis
+		// trouble never locks everyone out.
+		nUserIP, _ := ratelimit.Count(c.Request.Context(), limiter, keys[0])
 		nIP, _ := ratelimit.Count(c.Request.Context(), limiter, keys[1])
-		if nUser >= maxLoginFailuresPerUser || nIP >= maxLoginFailuresPerIP {
+		nUser, _ := ratelimit.Count(c.Request.Context(), limiter, keys[2])
+		if nUserIP >= maxLoginFailuresPerUser || nIP >= maxLoginFailuresPerIP || nUser >= maxLoginFailuresPerUserTotal {
 			c.JSON(429, gin.H{"error": "登录失败次数过多，请 15 分钟后再试"})
 			return
 		}
@@ -385,6 +402,10 @@ func (h *Handler) permissionsOf(ctx context.Context, u *model.AdminUser) (map[st
 		if u.MerchantID == 0 {
 			return perms, nil
 		}
+		// A deleted merchant, or (for staff) a disabled or removed owner account, cuts off access.
+		if ok, err := h.accounts().MerchantActive(ctx, u.MerchantID, u.Role == roleStaff); err != nil || !ok {
+			return perms, err
+		}
 		chosen := map[string]bool{}
 		for _, p := range strings.Split(u.Permissions, ",") {
 			chosen[strings.TrimSpace(p)] = true
@@ -456,9 +477,10 @@ func platformOnly(c *gin.Context) {
 }
 
 const (
-	loginWindow             = 15 * time.Minute
-	maxLoginFailuresPerUser = 10
-	maxLoginFailuresPerIP   = 30
+	loginWindow                  = 15 * time.Minute
+	maxLoginFailuresPerUser      = 10  // per username and IP
+	maxLoginFailuresPerIP        = 30  // per IP
+	maxLoginFailuresPerUserTotal = 100 // per username from all addresses
 )
 
 func (h *Handler) loginLimiter() ratelimit.Store {
@@ -471,10 +493,13 @@ func (h *Handler) loginLimiter() ratelimit.Store {
 	return nil
 }
 
-// loginKeys are the failure counters for a username (hashed, case-insensitive) and a client IP.
-func loginKeys(ip, username string) [2]string {
+// loginKeys are the failure counters for a username (hashed, case-insensitive) from a client IP,
+// for the IP, and for the username overall. ClientIP only trusts forwarding headers from the
+// configured proxies (TRUSTED_PROXIES), so a client cannot pick its own address.
+func loginKeys(ip, username string) [3]string {
 	sum := sha256.Sum256([]byte(strings.ToLower(username)))
-	return [2]string{"rl:login:user:" + hex.EncodeToString(sum[:8]), "rl:login:ip:" + ip}
+	user := hex.EncodeToString(sum[:8])
+	return [3]string{"rl:login:user:" + user + ":" + ip, "rl:login:ip:" + ip, "rl:login:user:" + user}
 }
 
 // accessLog records console writes and failed requests with the acting account.

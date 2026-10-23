@@ -6,11 +6,13 @@ services:
     environment:
       MARIADB_DATABASE: telegram_bot
       MARIADB_USER: bot
-      MARIADB_PASSWORD: bot_password
-      MARIADB_ROOT_PASSWORD: root_password
+      # Set DB_PASSWORD / DB_ROOT_PASSWORD in .env (they only take effect on a new, empty volume).
+      MARIADB_PASSWORD: ${DB_PASSWORD:-bot_password}
+      MARIADB_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:-root_password}
       TZ: Asia/Bangkok
+    # Reachable from this host only (for `make dev`); never publish the database to the internet.
     ports:
-      - "3306:3306"
+      - "127.0.0.1:3306:3306"
     volumes:
       - mariadb_data:/var/lib/mysql
     healthcheck:
@@ -23,13 +25,16 @@ services:
     image: redis:7.4-alpine
     container_name: tg-bot-redis
     restart: unless-stopped
-    command: ["redis-server", "--appendonly", "yes"]
+    # REDIS_PASSWORD from .env turns on authentication (the bot reads the same variable).
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+    command: ["sh", "-c", "exec redis-server --appendonly yes $${REDIS_PASSWORD:+--requirepass \"$$REDIS_PASSWORD\"}"]
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     volumes:
       - redis_data:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD-SHELL", "redis-cli --no-auth-warning $${REDIS_PASSWORD:+-a \"$$REDIS_PASSWORD\"} ping | grep -q PONG"]
       interval: 5s
       timeout: 3s
       retries: 30
@@ -38,10 +43,17 @@ services:
     build: .
     container_name: telegram-business-bot
     restart: unless-stopped
+    # Lets in-flight work finish on stop; container logs are rotated (the app also writes ./logs).
+    stop_grace_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
     env_file:
       - .env
     environment:
-      MYSQL_DSN: bot:bot_password@tcp(mariadb:3306)/telegram_bot?charset=utf8mb4&parseTime=True&loc=Local
+      MYSQL_DSN: bot:${DB_PASSWORD:-bot_password}@tcp(mariadb:3306)/telegram_bot?charset=utf8mb4&parseTime=True&loc=Local
       REDIS_ADDR: redis:6379
       UPLOAD_DIR: /app/uploads
       LOG_DIR: /app/logs

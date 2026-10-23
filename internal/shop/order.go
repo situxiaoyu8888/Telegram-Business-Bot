@@ -47,6 +47,9 @@ type CheckoutRequest struct {
 	GroupMode    string          `json:"group_mode"`
 	GroupID      uint64          `json:"group_id"`
 	Groups       []CheckoutGroup `json:"groups"`
+	// ExpectedPay is the total the buyer confirmed (from the preview). When set, a different
+	// total (a promotion ended meanwhile, say) refuses the order instead of charging silently.
+	ExpectedPay string `json:"expected_pay"`
 }
 
 const maxCheckoutGroups = 10
@@ -291,6 +294,19 @@ func (s *Service) CreateOrders(b Buyer, req CheckoutRequest) ([]model.ShopOrder,
 				filledGroups = append(filledGroups, o.GroupID)
 			}
 		}
+		if expected := strings.TrimSpace(req.ExpectedPay); expected != "" {
+			want, err := decimal.NewFromString(expected)
+			if err != nil {
+				return userErr("请求无效，请刷新后重试")
+			}
+			total := decimal.Zero
+			for _, o := range orders {
+				total = total.Add(amount(o.PayAmount))
+			}
+			if !total.Equal(want) {
+				return userErr("价格已变化（限时活动可能刚结束），实付 %s USDT，请确认后重新支付", total.String())
+			}
+		}
 		if req.FromCart {
 			if err := tx.Where("user_id = ? AND sku_id IN ?", b.UserID, cartSKUs).Delete(&model.ShopCartItem{}).Error; err != nil {
 				return err
@@ -374,7 +390,7 @@ func (s *Service) createOrderTx(tx *gorm.DB, b Buyer, requestID string, g Checko
 		order.Address = first.MerchantAddress
 	}
 
-	discount := decimal.Zero
+	discount, platformCoupon := decimal.Zero, false
 	var held model.ShopUserCoupon
 	if g.UserCouponID != 0 {
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND user_id = ?", g.UserCouponID, b.UserID).First(&held).Error; err != nil {
@@ -387,6 +403,7 @@ func (s *Service) createOrderTx(tx *gorm.DB, b Buyer, requestID string, g Checko
 		if discount, err = couponDiscount(held, c, first.MerchantID, goods, now); err != nil {
 			return order, nil, false, err
 		}
+		platformCoupon = c.MerchantID == 0
 		order.UserCouponID = held.ID
 	}
 	// Tier and points discounts come after the coupon. Spending points locks the member row.
@@ -403,6 +420,16 @@ func (s *Service) createOrderTx(tx *gorm.DB, b Buyer, requestID string, g Checko
 	pay := goods.Sub(discount).Sub(member).Sub(pointsDiscount)
 	order.GoodsAmount, order.Discount, order.PayAmount = goods.StringFixed(6), discount.StringFixed(6), pay.StringFixed(6)
 	order.MemberLevel, order.MemberDiscount, order.PointsUsed, order.PointsDiscount = level, member.StringFixed(6), pointsUsed, pointsDiscount.StringFixed(6)
+	// Who bears the platform's discounts is fixed at order time; a merchant's own coupon is
+	// always the merchant's.
+	subsidy := decimal.Zero
+	if s.PlatformBearsDiscounts() {
+		subsidy = member.Add(pointsDiscount)
+		if g.UserCouponID != 0 && platformCoupon {
+			subsidy = subsidy.Add(discount)
+		}
+	}
+	order.PlatformSubsidy = subsidy.StringFixed(6)
 	if g.GroupMode != "" {
 		grp, full, err := s.joinGroup(tx, b, g, items[0].line)
 		if err != nil {
@@ -632,6 +659,11 @@ func (s *Service) cancel(id uint64, scope Scope, reason, operator string) error 
 		}
 		if scope.UserID != 0 && o.Status != StatusPaid && o.Status != StatusGrouping {
 			return userErr("订单已发货或已备货，请联系商家处理")
+		}
+		// Once a group has filled, the group price was earned by all its members: a buyer leaving
+		// afterwards would let the others keep the price with a group that no longer exists.
+		if scope.UserID != 0 && o.Status == StatusPaid && o.GroupID != 0 {
+			return userErr("拼团已成功，订单不能自行取消，请联系商家处理")
 		}
 		if o.Status != StatusPaid && o.Status != StatusShipped && o.Status != StatusReady && o.Status != StatusGrouping {
 			return userErr("当前订单状态不能取消")

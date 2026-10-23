@@ -85,6 +85,8 @@ class H(BaseHTTPRequestHandler):
                 next_message[0] += 1
                 sent.append({"bot": bot_id, "method": method, **data, "mid": next_message[0]})
             return self.reply({"ok": True, "result": []})
+        if method == "getChatMember":
+            return self.reply({"ok": True, "result": {"status": "member", "user": {"id": data.get("user_id")}}})
         if method in ("answerCallbackQuery", "answerInlineQuery", "setMyCommands", "deleteMessage"):
             with lock:
                 sent.append({"bot": bot_id, "method": method, **data})

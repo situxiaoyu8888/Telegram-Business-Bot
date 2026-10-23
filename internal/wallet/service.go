@@ -60,19 +60,53 @@ func (s *Service) SetWithdrawalBot(id, botID uint64) error {
 }
 
 func (s *Service) CreditDeposit(order model.DepositOrder) error {
+	return s.creditDeposit(order, false)
+}
+
+// CreditToHolder credits a deposit the TRON watcher saw on a single-holder address, re-checking
+// under the transfer's lock that the user is still its only holder ever and got it before the
+// transfer; otherwise the deposit is recorded as unclaimed (the address was shared meanwhile).
+func (s *Service) CreditToHolder(order model.DepositOrder) error {
+	return s.creditDeposit(order, true)
+}
+
+func (s *Service) creditDeposit(order model.DepositOrder, checkHolder bool) error {
 	amount, err := decimal.NewFromString(order.Amount)
 	if err != nil || !amount.IsPositive() || !amount.Equal(amount.Truncate(6)) || strings.TrimSpace(order.TxID) == "" {
 		return fmt.Errorf("invalid deposit")
 	}
 
+	order.TxID = strings.ToLower(strings.TrimSpace(order.TxID))
+	if order.EventKey == nil {
+		key := TRC20EventKey(order.TxID, order.Address, amount, 0)
+		order.EventKey = &key
+	}
 	credited := false
 	err = s.st.DB.Transaction(func(tx *gorm.DB) error {
+		// Serialise with claims and assignments of the same transaction (first statement, so the
+		// checks below see what they committed).
+		if err := lockTransfer(tx, "TRC20", order.TxID); err != nil {
+			return err
+		}
 		var n int64
-		if err := tx.Model(&model.DepositOrder{}).Where("tx_id=?", order.TxID).Count(&n).Error; err != nil {
+		if err := tx.Model(&model.DepositOrder{}).Where("event_key = ?", *order.EventKey).Count(&n).Error; err != nil {
 			return err
 		}
 		if n > 0 {
 			return nil
+		}
+		if checkHolder {
+			ok, err := soleHolder(tx, order.Network, order.Address, order.UserID, time.UnixMilli(order.BlockTimestamp))
+			if err != nil {
+				return err
+			}
+			if !ok {
+				order.ID, order.UserID, order.Status, order.Currency = 0, 0, DepositUnclaimed, s.currency
+				if err := tx.Create(&order).Error; err != nil && !store.IsDuplicate(err) {
+					return err
+				}
+				return nil
+			}
 		}
 		var acc model.WalletAccount
 		err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("user_id=? AND currency=?", order.UserID, s.currency).First(&acc).Error
@@ -98,11 +132,17 @@ func (s *Service) CreditDeposit(order model.DepositOrder) error {
 		order.Currency = s.currency
 		order.Status = "credited"
 		if err := tx.Create(&order).Error; err != nil {
+			if store.IsDuplicate(err) {
+				return errSeen // another instance recorded it meanwhile; roll back the credit
+			}
 			return err
 		}
 		credited = true
 		return tx.Create(&model.WalletTransaction{UserID: order.UserID, Currency: s.currency, Type: "deposit", Amount: amt.StringFixed(6), Balance: newBal.StringFixed(6), RefType: "deposit", RefID: order.ID, Remark: "TRC20 deposit"}).Error
 	})
+	if errors.Is(err, errSeen) {
+		return nil
+	}
 	if err == nil && credited && s.onDeposit != nil {
 		s.onDeposit(order, true)
 	}

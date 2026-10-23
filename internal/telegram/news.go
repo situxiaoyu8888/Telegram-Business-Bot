@@ -347,17 +347,36 @@ func DeliverNews(ctx context.Context, svc *news.Service, sender func(context.Con
 func sendNews(ctx context.Context, s Sender, d model.NewsDelivery, a *model.NewsArticle, category string) error {
 	text, photo, kb := NewsMessage(a, category)
 	// A channel post is copied as is (with its media) by the bot that can read the channel.
+	// A fallback (copy → photo → text) is tried only when Telegram refused the content; after a
+	// rate limit, timeout or network error the first attempt may still have been delivered.
 	if a.ChannelChat != 0 && a.ChannelBotID == d.BotID {
 		if c, ok := s.(copier); ok {
-			if err := c.CopyMessage(ctx, d.ChatID, a.ChannelChat, a.ChannelMsgID, kb); err == nil {
-				return nil
+			err := c.CopyMessage(ctx, d.ChatID, a.ChannelChat, a.ChannelMsgID, kb)
+			if err == nil || !contentRefused(err) {
+				return err
 			}
 		}
 	}
 	if photo != "" {
-		if err := s.SendPhoto(ctx, d.ChatID, photo, text, "HTML", kb); err == nil {
-			return nil
+		err := s.SendPhoto(ctx, d.ChatID, photo, text, "HTML", kb)
+		if err == nil || !contentRefused(err) {
+			return err
 		}
 	}
 	return s.SendMessageWithParseMode(ctx, d.ChatID, text, "HTML", kb)
+}
+
+// contentRefused reports a Bot API 400 about the message itself (missing source message, bad
+// photo), where sending it another way is safe.
+func contentRefused(err error) bool {
+	msg := err.Error()
+	if !strings.Contains(msg, "http 400") && !strings.Contains(msg, "error 400") {
+		return false
+	}
+	for _, s := range []string{"message to copy not found", "can't be copied", "MESSAGE_ID_INVALID", "wrong file", "failed to get HTTP URL content", "wrong type of the web page content", "PHOTO_INVALID", "IMAGE_PROCESS_FAILED", "WEBPAGE_MEDIA_EMPTY", "wrong remote file"} {
+		if strings.Contains(msg, s) {
+			return true
+		}
+	}
+	return false
 }

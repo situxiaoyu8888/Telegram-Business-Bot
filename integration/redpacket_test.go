@@ -135,8 +135,12 @@ func TestRedPacketExclusivePasswordAndCurrencies(t *testing.T) {
 	if c, _, matched, err := f.svc.ClaimByPassword(-100777, "发财", claimerOf(bob)); !matched || err != nil || c == nil {
 		t.Fatalf("password claim failed: %v", err)
 	}
-	if _, _, matched, err := f.svc.ClaimByPassword(0, "发财", claimerOf(bob)); !matched || err == nil {
+	if _, _, matched, err := f.svc.ClaimByPassword(-100777, "发财", claimerOf(bob)); !matched || err == nil {
 		t.Fatal("second password claim by the same user accepted")
+	}
+	// Outside the group (the private chat) a password matches nothing, so it cannot be guessed.
+	if _, _, matched, _ := f.svc.ClaimByPassword(0, "发财", claimerOf(alice)); matched {
+		t.Fatal("password matched outside its group")
 	}
 	if _, _, err := f.svc.ClaimCode(pw.Code, "不对", claimerOf(alice)); err == nil {
 		t.Fatal("wrong password accepted by code")

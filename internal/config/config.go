@@ -17,7 +17,11 @@ import (
 )
 
 type Config struct {
-	BusinessBotKey             string
+	BusinessBotKey string
+	// TrustedProxies are the reverse proxies whose X-Forwarded-For is believed (CIDRs).
+	TrustedProxies []string
+	// AllowPrivateFeeds lets RSS feeds be fetched from loopback/private networks (tests only).
+	AllowPrivateFeeds          bool
 	AppEnv                     string
 	HTTPAddr                   string
 	TelegramBotToken           string
@@ -102,6 +106,8 @@ func load(path string) (Config, error) {
 	}
 	cfg := Config{
 		BusinessBotKey:             strings.TrimSpace(os.Getenv("BUSINESS_BOT_KEY")),
+		TrustedProxies:             trustedProxies(os.Getenv("TRUSTED_PROXIES")),
+		AllowPrivateFeeds:          os.Getenv("NEWS_ALLOW_PRIVATE_FEEDS") == "1",
 		AppEnv:                     mustEnv("APP_ENV"),
 		HTTPAddr:                   mustEnv("HTTP_ADDR"),
 		TelegramBotToken:           mustEnv("TELEGRAM_BOT_TOKEN"),
@@ -290,6 +296,26 @@ func (c Config) AllowedOrigins() []string {
 var publicHost = regexp.MustCompile(`^(?i)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z][a-z0-9-]{0,61}[a-z0-9]$`)
 
 func mustEnv(key string) string { return strings.TrimSpace(os.Getenv(key)) }
+
+// trustedProxies parses TRUSTED_PROXIES (comma-separated CIDRs or IPs of the reverse proxies in
+// front of the app). Unset or "none" trusts nobody: the client address is the connection's, so
+// no client can choose its own. "private" trusts loopback and private networks.
+func trustedProxies(v string) []string {
+	v = strings.TrimSpace(v)
+	switch v {
+	case "", "none":
+		return nil
+	case "private":
+		return []string{"127.0.0.0/8", "::1/128", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "fc00::/7"}
+	}
+	var out []string
+	for _, p := range strings.Split(v, ",") {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
 
 func parseIDs(s string) (map[int64]struct{}, error) {
 	out := make(map[int64]struct{})

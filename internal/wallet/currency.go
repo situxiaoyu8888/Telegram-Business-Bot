@@ -328,18 +328,19 @@ func CheckWithdrawAddress(kind, address string) error {
 	return nil
 }
 
-// CreateCurrencyWithdrawal freezes a withdrawal of any withdrawable currency for review. The
-// USDT (TRC20) wallet keeps its environment-configured minimum and fee.
+// CreateCurrencyWithdrawal freezes a withdrawal of any enabled, withdrawable currency for review.
+// The USDT (TRC20) wallet keeps its environment-configured minimum and fee.
 func (s *Service) CreateCurrencyWithdrawal(userID uint64, currency, address, amountText, requestID string) (*model.WithdrawalOrder, error) {
-	if currency == s.currency {
-		return s.CreateWithdrawal(userID, "TRC20", address, amountText, requestID)
-	}
+	// The console's switches apply to every currency, the USDT wallet included.
 	c, err := s.Currency(currency)
 	if err != nil {
 		return nil, err
 	}
 	if !c.Withdrawable {
 		return nil, userErr("%s 暂不支持提现", c.Name)
+	}
+	if currency == s.currency {
+		return s.CreateWithdrawal(userID, "TRC20", address, amountText, requestID)
 	}
 	address = strings.TrimSpace(address)
 	if err := CheckWithdrawAddress(c.Kind, address); err != nil {

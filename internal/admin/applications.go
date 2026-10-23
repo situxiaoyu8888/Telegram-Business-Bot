@@ -101,7 +101,11 @@ func (h *Handler) approveShopApplication(c *gin.Context) {
 		username = fmt.Sprintf("shop%d", m.ID)
 		err := tx.Create(&model.AdminUser{Username: username, PasswordHash: hash, Role: roleMerchant, MerchantID: m.ID, Enabled: true}).Error
 		if store.IsDuplicate(err) {
-			username = fmt.Sprintf("shop%d_%s", m.ID, password[:4])
+			suffix, rerr := secureRandomName(3) // never derived from the password
+			if rerr != nil {
+				return rerr
+			}
+			username = fmt.Sprintf("shop%d_%s", m.ID, suffix)
 			err = tx.Create(&model.AdminUser{Username: username, PasswordHash: hash, Role: roleMerchant, MerchantID: m.ID, Enabled: true}).Error
 		}
 		if err != nil {

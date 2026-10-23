@@ -69,6 +69,9 @@ type Service struct {
 func (s *Service) WithStaff(ids []int64) *Service { s.staff = ids; return s }
 
 func New(st *store.Store, w *wallet.Service, n Notifier, logger *zap.Logger) *Service {
+	if logger == nil {
+		logger = zap.NewNop()
+	}
 	return &Service{st: st, wallet: w, notifier: n, logger: logger}
 }
 
@@ -214,4 +217,10 @@ func firstImage(images string) string {
 		}
 	}
 	return ""
+}
+
+// PlatformBearsDiscounts reports whether the platform pays for its own discounts (platform
+// coupons, member tiers, points) instead of the merchant: system config shop_discount_bearer.
+func (s *Service) PlatformBearsDiscounts() bool {
+	return strings.TrimSpace(s.configString("shop_discount_bearer")) == "platform"
 }

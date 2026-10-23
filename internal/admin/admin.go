@@ -153,6 +153,7 @@ func (h *Handler) RegisterAPI(r *gin.Engine) {
 	can := requirePermission
 
 	api.GET("/dashboard", h.dashboard)
+	api.GET("/overview", can("home"), platformOnly, h.overview)
 	api.GET("/users", can("users"), h.users)
 
 	api.GET("/withdrawals", can("withdrawals"), h.withdrawals)
@@ -161,9 +162,11 @@ func (h *Handler) RegisterAPI(r *gin.Engine) {
 	api.POST("/withdrawals/:id/complete", can("withdrawals"), h.complete)
 
 	api.GET("/deposits", can("deposits"), h.deposits)
-	api.POST("/deposits/:id/assign", can("deposits"), h.assignDeposit)
-	api.POST("/deposits/:id/confirm", can("deposits"), h.confirmDeposit)
-	api.POST("/deposits/:id/reject", can("deposits"), h.rejectDeposit)
+	// Crediting money needs the funds permission on top of seeing the page.
+	api.POST("/deposits/:id/assign", can("deposits"), can("funds"), h.assignDeposit)
+	api.GET("/deposits/:id/review", can("deposits"), h.depositReview)
+	api.POST("/deposits/:id/confirm", can("deposits"), can("funds"), h.confirmDeposit)
+	api.POST("/deposits/:id/reject", can("deposits"), can("funds"), h.rejectDeposit)
 
 	// Currency names label balances, withdrawals and exchanges.
 	api.GET("/currencies", can("currencies", "users", "withdrawals", "exchanges", "redpackets", "deposits"), h.currencies)
@@ -175,7 +178,7 @@ func (h *Handler) RegisterAPI(r *gin.Engine) {
 	api.POST("/redpacket-covers", can("redpacket_covers"), h.saveRedPacketCover)
 	api.DELETE("/redpacket-covers/:id", can("redpacket_covers"), h.deleteRedPacketCover)
 	api.GET("/users/:id/balances", can("users"), h.userBalances)
-	api.POST("/users/:id/adjust", can("users"), h.adjustBalance)
+	api.POST("/users/:id/adjust", can("users"), can("funds"), h.adjustBalance)
 	api.POST("/users/:id/paypass", can("users"), h.resetPayPassword)
 
 	api.GET("/addresses", can("addresses"), h.addresses)
@@ -366,14 +369,17 @@ type depositRow struct {
 	Kind   string `json:"kind"` // chain, admin_credit or admin_debit
 	UserID uint64 `json:"user_id"`
 	walletUser
-	OrderNo   string    `json:"order_no"`
-	Currency  string    `json:"currency"`
-	Network   string    `json:"network"`
-	Amount    string    `json:"amount"`
-	Status    string    `json:"status"`
-	TxID      string    `json:"txid"`
-	Remark    string    `json:"remark"`
-	CreatedAt time.Time `json:"created_at"`
+	OrderNo    string    `json:"order_no"`
+	Currency   string    `json:"currency"`
+	Network    string    `json:"network"`
+	Address    string    `json:"address"`
+	From       string    `json:"from_address"`
+	Amount     string    `json:"amount"`
+	Status     string    `json:"status"`
+	TxID       string    `json:"txid"`
+	Remark     string    `json:"remark"`
+	ReviewedBy string    `json:"reviewed_by"`
+	CreatedAt  time.Time `json:"created_at"`
 }
 
 const adjustmentRowBase = 1_000_000_000_000
@@ -392,7 +398,7 @@ func (h *Handler) deposits(c *gin.Context) {
 	rows := make([]depositRow, 0, len(orders)+len(adjustments))
 	userIDs := []uint64{}
 	for _, o := range orders {
-		rows = append(rows, depositRow{ID: o.ID, Kind: "chain", UserID: o.UserID, OrderNo: wallet.OrderNo("D", o.ID, o.CreatedAt), Currency: o.Currency, Network: o.Network, Amount: o.Amount, Status: o.Status, TxID: o.TxID, CreatedAt: o.CreatedAt})
+		rows = append(rows, depositRow{ID: o.ID, Kind: "chain", UserID: o.UserID, OrderNo: wallet.OrderNo("D", o.ID, o.CreatedAt), Currency: o.Currency, Network: o.Network, Address: o.Address, From: o.FromAddress, Amount: o.Amount, Status: o.Status, TxID: o.TxID, ReviewedBy: o.ReviewedBy, CreatedAt: o.CreatedAt})
 		userIDs = append(userIDs, o.UserID)
 	}
 	for _, t := range adjustments {

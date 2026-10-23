@@ -2,8 +2,10 @@ package admin
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/gin-gonic/gin"
@@ -101,15 +103,24 @@ func (h *Handler) saveCurrency(c *gin.Context) {
 
 type exchangeRow struct {
 	model.WalletExchange
-	TelegramUserID int64 `json:"telegram_user_id"`
+	walletUser
+	OrderNo string `json:"order_no"`
 }
 
 func (h *Handler) exchanges(c *gin.Context) {
-	rows := []exchangeRow{}
-	err := h.st.DB.Table("wallet_exchanges e").Select("e.*, u.telegram_user_id").Joins("LEFT JOIN telegram_users u ON u.id = e.user_id").Order("e.id desc").Limit(500).Scan(&rows).Error
-	if err != nil {
+	var list []model.WalletExchange
+	if err := h.st.DB.Order("id desc").Limit(500).Find(&list).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "换汇记录加载失败"})
 		return
+	}
+	ids := make([]uint64, 0, len(list))
+	for _, e := range list {
+		ids = append(ids, e.UserID)
+	}
+	users := h.walletUsers(ids)
+	rows := make([]exchangeRow, 0, len(list))
+	for _, e := range list {
+		rows = append(rows, exchangeRow{WalletExchange: e, walletUser: users[e.UserID], OrderNo: wallet.OrderNo("X", e.ID, e.CreatedAt)})
 	}
 	c.JSON(http.StatusOK, rows)
 }
@@ -135,20 +146,38 @@ func (h *Handler) adjustBalance(c *gin.Context) {
 		return
 	}
 	var b struct {
-		Currency string `json:"currency"`
-		Amount   string `json:"amount"`
-		Remark   string `json:"remark"`
+		Currency  string `json:"currency"`
+		Amount    string `json:"amount"`
+		Remark    string `json:"remark"`
+		RequestID string `json:"request_id"`
 	}
-	if err := c.ShouldBindJSON(&b); err != nil {
+	if err := c.ShouldBindJSON(&b); err != nil || len(b.RequestID) > 64 {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
 		return
 	}
+	// A repeated submission (double click, retried request) is applied once.
+	dedupe := ""
+	if b.RequestID != "" && h.st.Redis != nil {
+		dedupe = fmt.Sprintf("admin:adjust:%d:%s", id, b.RequestID)
+		first, err := h.st.Redis.SetNX(c.Request.Context(), dedupe, operator(c), 24*time.Hour).Result()
+		if err == nil && !first {
+			c.JSON(http.StatusOK, gin.H{"ok": true, "duplicate": true})
+			return
+		}
+	}
+	release := func() { // a refused adjustment may be retried
+		if dedupe != "" {
+			h.st.Redis.Del(c.Request.Context(), dedupe)
+		}
+	}
 	var u model.TelegramUser
 	if err := h.st.DB.First(&u, id).Error; err != nil {
+		release()
 		c.JSON(http.StatusNotFound, gin.H{"error": "用户不存在"})
 		return
 	}
 	if err := h.wallet.AdminAdjust(u.ID, b.Currency, b.Amount, operator(c), b.Remark); err != nil {
+		release()
 		var ue wallet.UserError
 		if errors.As(err, &ue) {
 			c.JSON(http.StatusBadRequest, gin.H{"error": ue.Msg})

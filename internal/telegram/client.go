@@ -243,6 +243,24 @@ func (c *Client) UploadPhoto(ctx context.Context, chatID int64, png []byte, capt
 	return nil
 }
 
+// IsChatMember reports whether a user is currently in a group (any member, admin or owner).
+func (c *Client) IsChatMember(ctx context.Context, chatID, userID int64) (bool, error) {
+	var resp APIResponse[struct {
+		Status   string `json:"status"`
+		IsMember bool   `json:"is_member"`
+	}]
+	if err := c.call(ctx, "getChatMember", map[string]any{"chat_id": chatID, "user_id": userID}, &resp); err != nil {
+		return false, err
+	}
+	switch resp.Result.Status {
+	case "creator", "administrator", "member":
+		return true, nil
+	case "restricted":
+		return resp.Result.IsMember, nil
+	}
+	return false, nil
+}
+
 // AlbumPhoto is one photo of SendAlbum.
 type AlbumPhoto struct{ Photo, Caption string }
 

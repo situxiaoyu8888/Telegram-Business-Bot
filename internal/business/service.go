@@ -332,6 +332,7 @@ func (s *Service) poll(ctx context.Context, id uint64, token string) error {
 	defer cancelCommands()
 	go router.SyncCommandMenu(commandCtx)
 	offset := row.Offset
+	backoff := time.Second
 	for {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -349,15 +350,30 @@ func (s *Service) poll(ctx context.Context, id uint64, token string) error {
 			}
 			continue
 		}
+		failed := false
 		for _, u := range updates {
 			if err := router.Handle(ctx, u); err != nil {
-				return err
+				// Retried in place with a growing pause; returning would restart the poller (and
+				// re-register its webhook state and commands) every few seconds during an outage.
+				s.st.DB.Model(&row).Update("last_error", "处理消息失败，稍后重试")
+				failed = true
+				break
 			}
 			offset = u.UpdateID + 1
 			if err := s.st.DB.Model(&row).Update("offset", offset).Error; err != nil {
 				return err
 			}
 		}
+		if failed {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(backoff):
+			}
+			backoff = min(backoff*2, 30*time.Second)
+			continue
+		}
+		backoff = time.Second
 		now := time.Now()
 		if err := s.st.DB.Model(&row).Updates(map[string]any{"last_seen_at": &now, "last_error": ""}).Error; err != nil {
 			return err

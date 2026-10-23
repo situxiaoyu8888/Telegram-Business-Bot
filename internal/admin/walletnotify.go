@@ -13,6 +13,7 @@ import (
 	"github.com/shopspring/decimal"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
 	"telegram-business-bot/internal/model"
 	"telegram-business-bot/internal/wallet"
@@ -239,20 +240,64 @@ func (h *Handler) poolAddresses(db *gorm.DB, network string) ([]string, error) {
 	return list, err
 }
 
-// setUserAddress gives a user the address for a network, replacing the one they had (a new
-// address is scanned from its start).
+// setUserAddress gives a user the address for a network, replacing the one they had. The new
+// address is scanned from now on (or from where the watcher left it while nobody held it), so its
+// earlier history is never credited to this user; the replaced one keeps being watched.
 func setUserAddress(tx *gorm.DB, userID uint64, network, address string) error {
+	var pool model.DepositPoolAddress
+	if err := tx.Where("address = ?", address).First(&pool).Error; err != nil {
+		return err
+	}
+	start := pool.ScanTimestamp
+	if start == 0 {
+		start = time.Now().UnixMilli()
+	}
+	if pool.AssignedAt == nil {
+		if err := tx.Model(&pool).Update("assigned_at", time.Now()).Error; err != nil {
+			return err
+		}
+	}
+	// Every holder is remembered: an address that has had several is never credited automatically.
+	if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&model.DepositAddressHolder{Network: network, Address: address, UserID: userID, AssignedAt: time.Now()}).Error; err != nil {
+		return err
+	}
 	var cur model.DepositAddress
 	err := tx.Where("user_id = ? AND network = ?", userID, network).First(&cur).Error
 	switch {
 	case err == nil && cur.Address == address && cur.Status == 1:
 		return nil
 	case err == nil:
-		return tx.Model(&cur).Updates(map[string]any{"address": address, "status": 1, "scan_timestamp": 0}).Error
+		if err := markHeld(tx, cur.Address); err != nil {
+			return err
+		}
+		return tx.Model(&cur).Updates(map[string]any{"address": address, "status": 1, "scan_timestamp": start}).Error
 	case errors.Is(err, gorm.ErrRecordNotFound):
-		return tx.Create(&model.DepositAddress{UserID: userID, Network: network, Address: address, Status: 1}).Error
+		return tx.Create(&model.DepositAddress{UserID: userID, Network: network, Address: address, Status: 1, ScanTimestamp: start}).Error
 	}
 	return err
+}
+
+// markHeld makes sure a replaced address counts as once assigned, so the watcher keeps scanning it
+// (addresses bound before the pool existed are added to it).
+func markHeld(tx *gorm.DB, address string) error {
+	var cur model.DepositAddress
+	if err := tx.Where("address = ?", address).Order("scan_timestamp asc").First(&cur).Error; err != nil {
+		return err
+	}
+	now := time.Now()
+	res := tx.Model(&model.DepositPoolAddress{}).Where("address = ? AND assigned_at IS NULL", address).Update("assigned_at", now)
+	if res.Error != nil {
+		return res.Error
+	}
+	// Once nobody holds it the watcher resumes from the pool row: carry the progress over.
+	if err := tx.Model(&model.DepositPoolAddress{}).Where("address = ? AND scan_timestamp < ?", address, cur.ScanTimestamp).Update("scan_timestamp", cur.ScanTimestamp).Error; err != nil {
+		return err
+	}
+	var n int64
+	if err := tx.Model(&model.DepositPoolAddress{}).Where("address = ?", address).Count(&n).Error; err != nil || n > 0 {
+		return err
+	}
+	return tx.Create(&model.DepositPoolAddress{Network: cur.Network, Address: address, Remark: "换绑前的地址", Status: 0, AssignedAt: &now, ScanTimestamp: cur.ScanTimestamp}).Error
 }
 
 // saveAddress gives one user a pool address of a network: the chosen one (pool_id) or a random
@@ -296,7 +341,7 @@ func (h *Handler) saveAddress(c *gin.Context) {
 		}
 		address = list[rand.IntN(len(list))]
 	}
-	if err := setUserAddress(h.st.DB, b.UserID, b.Network, address); err != nil {
+	if err := h.st.DB.Transaction(func(tx *gorm.DB) error { return setUserAddress(tx, b.UserID, b.Network, address) }); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "分配失败"})
 		return
 	}
@@ -390,8 +435,70 @@ func (h *Handler) assignDeposit(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "用户不存在"})
 		return
 	}
-	_, err := h.wallet.AssignDeposit(id, b.UserID)
+	_, err := h.wallet.AssignDeposit(id, b.UserID, operator(c))
 	walletReply(c, err)
+}
+
+// depositReview helps confirm a claim: what the TRON watcher saw of that transaction (amount,
+// sending and receiving address), and everyone else who claimed the same hash.
+func (h *Handler) depositReview(c *gin.Context) {
+	id, ok := idParam(c)
+	if !ok {
+		return
+	}
+	var o model.DepositOrder
+	if err := h.st.DB.First(&o, id).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "记录不存在"})
+		return
+	}
+	var related []model.DepositOrder
+	h.st.DB.Where("tx_id = ? AND id <> ?", o.TxID, o.ID).Order("id asc").Find(&related)
+	ids := []uint64{}
+	for _, x := range related {
+		ids = append(ids, x.UserID)
+	}
+	users := h.walletUsers(ids)
+	type chain struct {
+		Address string `json:"address"`
+		From    string `json:"from"`
+		Amount  string `json:"amount"`
+		Status  string `json:"status"`
+	}
+	type claim struct {
+		OrderNo string `json:"order_no"`
+		walletUser
+		UserID uint64 `json:"user_id"`
+		Amount string `json:"amount"`
+		Status string `json:"status"`
+	}
+	seen, others := []chain{}, []claim{}
+	for _, x := range related {
+		// The watcher's records (event key trc20:…) describe the chain; the rest are users' claims.
+		if x.EventKey != nil && strings.HasPrefix(*x.EventKey, "trc20:") {
+			seen = append(seen, chain{x.Address, x.FromAddress, x.Amount, x.Status})
+			continue
+		}
+		others = append(others, claim{wallet.OrderNo("D", x.ID, x.CreatedAt), users[x.UserID], x.UserID, x.Amount, x.Status})
+	}
+	// Users who hold or held the receiving address: the only ones it may be assigned to.
+	var holderIDs []uint64
+	h.st.DB.Model(&model.DepositAddressHolder{}).Where("network = ? AND address = ?", o.Network, o.Address).Pluck("user_id", &holderIDs)
+	var current []uint64
+	h.st.DB.Model(&model.DepositAddress{}).Where("network = ? AND address = ?", o.Network, o.Address).Pluck("user_id", &current)
+	holderIDs = append(holderIDs, current...)
+	type holder struct {
+		walletUser
+		UserID uint64 `json:"user_id"`
+	}
+	hu := h.walletUsers(holderIDs)
+	holders, dup := []holder{}, map[uint64]bool{}
+	for _, id := range holderIDs {
+		if !dup[id] {
+			dup[id] = true
+			holders = append(holders, holder{hu[id], id})
+		}
+	}
+	c.JSON(http.StatusOK, gin.H{"chain": seen, "same_hash": others, "holders": holders})
 }
 
 // confirmDeposit credits a user's submitted ERC20 deposit with the verified amount.
@@ -404,7 +511,7 @@ func (h *Handler) confirmDeposit(c *gin.Context) {
 		Amount string `json:"amount"`
 	}
 	_ = c.ShouldBindJSON(&b)
-	_, err := h.wallet.ConfirmDeposit(id, b.Amount)
+	_, err := h.wallet.ConfirmDeposit(id, b.Amount, operator(c))
 	walletReply(c, err)
 }
 
@@ -418,7 +525,7 @@ func (h *Handler) rejectDeposit(c *gin.Context) {
 		Note string `json:"note"`
 	}
 	_ = c.ShouldBindJSON(&b)
-	o, err := h.wallet.RejectDeposit(id)
+	o, err := h.wallet.RejectDeposit(id, operator(c))
 	if err == nil {
 		text := fmt.Sprintf("❌ <b>充值未通过核对</b>\n\n订单编号：<code>%s</code>\n金额：<code>%s</code> %s\n交易哈希：<code>%s</code>",
 			wallet.OrderNo("D", o.ID, o.CreatedAt), plainAmount(o.Amount), htmlEscape(h.currencyName(o.Currency)), htmlEscape(o.TxID))

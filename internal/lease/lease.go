@@ -22,6 +22,12 @@ type Client interface {
 func Run(ctx context.Context, rdb Client, key string, work func(context.Context) error) error {
 	return run(ctx, rdb, key, ttl, work)
 }
+
+// RunFor is Run with a custom lease time, for short work whose stale lease (after a crash) should
+// not block others for long; it is renewed every third of it while the work runs.
+func RunFor(ctx context.Context, rdb Client, key string, d time.Duration, work func(context.Context) error) error {
+	return run(ctx, rdb, key, d, work)
+}
 func run(ctx context.Context, rdb Client, key string, ttl time.Duration, work func(context.Context) error) error {
 	b := make([]byte, 16)
 	if _, err := rand.Read(b); err != nil {

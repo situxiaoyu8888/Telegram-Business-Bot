@@ -2,6 +2,8 @@ package app
 
 import (
 	"context"
+	"crypto/subtle"
+	"errors"
 	"fmt"
 	"net/http"
 	"time"
@@ -11,6 +13,7 @@ import (
 	"telegram-business-bot/internal/business"
 	"telegram-business-bot/internal/config"
 	"telegram-business-bot/internal/cors"
+	"telegram-business-bot/internal/lease"
 	"telegram-business-bot/internal/menu"
 	"telegram-business-bot/internal/model"
 	"telegram-business-bot/internal/news"
@@ -74,7 +77,7 @@ func New(cfg config.Config, logger *zap.Logger) (*App, error) {
 	var adminTGRouter *telegram.Router
 	if cfg.AdminTelegramBotToken != "" {
 		adminTG = telegram.NewClient(cfg.AdminTelegramBotToken)
-		adminTGRouter = telegram.NewRouter(adminTG, st, sessions.WithNamespace("admin"), walletSvc, menuSvc, supportSvc, refSvc, cfg.AdminIDs, cfg.TronFallbackDepositAddress, true, logger)
+		adminTGRouter = telegram.NewRouter(adminTG, st, sessions.WithNamespace("admin"), walletSvc, menuSvc, supportSvc, refSvc, cfg.AdminIDs, cfg.TronFallbackDepositAddress, true, logger).WithPayPassword(payPass)
 	}
 
 	if cfg.AppEnv != "dev" {
@@ -83,6 +86,13 @@ func New(cfg config.Config, logger *zap.Logger) (*App, error) {
 	newEngine := func() *gin.Engine {
 		e := gin.New()
 		e.Use(gin.Recovery())
+		// Client IPs (login limits, audit log) come from X-Forwarded-For only, and only through
+		// trusted proxies (X-Real-IP is ignored: a proxy may pass a client's own copy through).
+		e.RemoteIPHeaders = []string{"X-Forwarded-For"}
+		if err := e.SetTrustedProxies(cfg.TrustedProxies); err != nil {
+			logger.Warn("invalid TRUSTED_PROXIES", zap.Error(err))
+			_ = e.SetTrustedProxies(nil)
+		}
 		return e
 	}
 	engine := newEngine()
@@ -97,8 +107,12 @@ func New(cfg config.Config, logger *zap.Logger) (*App, error) {
 	if err := admin.Bootstrap(st.DB, cfg.AdminWebUser, cfg.AdminWebPassword); err != nil {
 		return nil, fmt.Errorf("bootstrap admin account: %w", err)
 	}
+	if cfg.BusinessBotKey == "" && cfg.AppEnv != "dev" {
+		logger.Warn("BUSINESS_BOT_KEY is empty: business bot tokens are encrypted with a key derived from TELEGRAM_BOT_TOKEN, so changing that token makes every business bot unreadable; set BUSINESS_BOT_KEY")
+	}
 	bots := business.New(st, tg, cfg.BusinessBotKey, cfg.TelegramBotToken, cfg.AdminTelegramBotToken)
 	newsSvc := news.New(st, logger)
+	news.AllowPrivateFeeds = cfg.AllowPrivateFeeds
 	bots.Router = func(bot model.BusinessBot, client *telegram.Client) *telegram.Router {
 		r := telegram.NewRouter(client, st, sessions.WithNamespace(fmt.Sprintf("business:%d", bot.ID)), walletSvc, menuSvc, supportSvc, refSvc, cfg.AdminIDs, "", false, logger).WithBotID(bot.ID)
 		if bot.Purpose == business.PurposeNews {
@@ -209,9 +223,16 @@ func (a *App) registerRoutes() {
 
 func (a *App) registerHealth(e *gin.Engine) {
 	e.GET("/healthz", func(c *gin.Context) {
-		dbOK := a.store.DB.Exec("SELECT 1").Error == nil
-		redisOK := a.store.Redis.Ping(c.Request.Context()).Err() == nil
-		c.JSON(http.StatusOK, gin.H{"ok": dbOK && redisOK, "db": dbOK, "redis": redisOK, "tron_watcher": a.cfg.TronWatchEnabled, "admin_bot": a.adminTG != nil})
+		ctx, cancel := context.WithTimeout(c.Request.Context(), 2*time.Second)
+		defer cancel()
+		dbOK := a.store.DB.WithContext(ctx).Exec("SELECT 1").Error == nil
+		redisOK := a.store.Redis.Ping(ctx).Err() == nil
+		// 503 when a dependency is down, so load balancers and monitors notice.
+		status := http.StatusOK
+		if !dbOK || !redisOK {
+			status = http.StatusServiceUnavailable
+		}
+		c.JSON(status, gin.H{"ok": dbOK && redisOK, "db": dbOK, "redis": redisOK, "tron_watcher": a.cfg.TronWatchEnabled, "admin_bot": a.adminTG != nil})
 	})
 }
 
@@ -231,7 +252,7 @@ func (a *App) webhookHandler(adminBot bool) gin.HandlerFunc {
 			router = a.adminTGRouter
 			secret = a.cfg.AdminTelegramWebhookSecret
 		}
-		if secret == "" || c.GetHeader("X-Telegram-Bot-Api-Secret-Token") != secret {
+		if secret == "" || subtle.ConstantTimeCompare([]byte(c.GetHeader("X-Telegram-Bot-Api-Secret-Token")), []byte(secret)) != 1 {
 			c.JSON(401, gin.H{"error": "invalid secret"})
 			return
 		}
@@ -316,7 +337,41 @@ func (a *App) runBot(ctx context.Context, client *telegram.Client, router *teleg
 	if err := client.DeleteWebhook(ctx, false); err != nil {
 		return fmt.Errorf("delete %s webhook before polling: %w", name, err)
 	}
+	// Only one instance may poll a bot (Telegram answers a second poller with 409 Conflict), so
+	// polling runs under a lease; other instances wait and take over if the poller goes away.
+	for {
+		err := lease.Run(ctx, a.store.Redis, "bot:poll:"+name, func(ctx context.Context) error {
+			return a.poll(ctx, client, router, name)
+		})
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if err != nil && !errors.Is(err, lease.ErrBusy) {
+			a.logger.Warn("polling stopped, retrying", zap.String("kind", name), zap.Error(err))
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(10 * time.Second):
+		}
+	}
+}
+
+// poll receives a bot's updates by long polling until ctx ends.
+func (a *App) poll(ctx context.Context, client *telegram.Client, router *telegram.Router, name string) error {
 	offset := 0
+	// pause waits before polling again after a failure, doubling up to 30s; a failed update is
+	// re-delivered, so retrying at once would only hammer the Bot API and the logs.
+	backoff := time.Second
+	pause := func() error {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(backoff):
+		}
+		backoff = min(backoff*2, 30*time.Second)
+		return nil
+	}
 	for {
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -327,19 +382,30 @@ func (a *App) runBot(ctx context.Context, client *telegram.Client, router *teleg
 				return ctx.Err()
 			}
 			a.logger.Warn("getUpdates failed", zap.String("kind", name), zap.Error(err))
-			time.Sleep(2 * time.Second)
+			if err := pause(); err != nil {
+				return err
+			}
 			continue
 		}
+		failed := false
 		for _, u := range updates {
 			if u.UpdateID >= offset {
 				offset = u.UpdateID + 1
 			}
 			if err := router.Handle(ctx, u); err != nil {
-				a.logger.Warn("process update", zap.Error(err))
+				a.logger.Warn("process update", zap.String("kind", name), zap.Int("update_id", u.UpdateID), zap.Error(err))
 				offset = u.UpdateID
+				failed = true
 				break
 			}
 		}
+		if failed {
+			if err := pause(); err != nil {
+				return err
+			}
+			continue
+		}
+		backoff = time.Second
 	}
 }
 

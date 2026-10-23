@@ -25,6 +25,11 @@ type uploadRule struct {
 }
 
 func (h *Handler) uploadMedia(c *gin.Context) {
+	// Large videos on slow links need longer than the server's read timeout.
+	_ = http.NewResponseController(c.Writer).SetReadDeadline(time.Now().Add(15 * time.Minute))
+	// Refuse oversized bodies while reading, before they are buffered or spilled to disk.
+	limit := max(h.uploadMaxImageMB, h.uploadMaxVideoMB)*1024*1024 + 1<<20
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, limit)
 	file, err := c.FormFile("file")
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "file required"})
@@ -202,7 +207,11 @@ func (h *Handler) uploadAuth(c *gin.Context) {
 		c.AbortWithStatusJSON(401, gin.H{"error": "上传凭证已过期，请重试"})
 		return
 	}
-	_ = h.sessions().Del(c.Request.Context(), key).Err() // single use
+	// Single use: only the request that actually deletes the token may upload with it.
+	if n, err := h.sessions().Del(c.Request.Context(), key).Result(); err != nil || n == 0 {
+		c.AbortWithStatusJSON(401, gin.H{"error": "上传凭证已使用，请重试"})
+		return
+	}
 	id, _ := strconv.ParseUint(idText, 10, 64)
 	u, err := h.accounts().ByID(c.Request.Context(), id)
 	if err != nil || !u.Enabled {

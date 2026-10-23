@@ -432,9 +432,21 @@ func (s *Service) saveProductTx(tx *gorm.DB, p *model.ShopProduct, skus []SKUInp
 			return userErr("请选择有效的分类")
 		}
 	}
+	// Lists are ordered by sort across merchants, so negative values (top places) are the platform's.
+	if merchantScope != 0 && p.Sort < 0 {
+		p.Sort = 0
+	}
 	fields := map[string]any{"merchant_id": p.MerchantID, "category_id": p.CategoryID, "name": p.Name, "description": p.Description, "images": strings.TrimSpace(p.Images), "kind": p.Kind, "allow_express": p.AllowExpress, "allow_pickup": p.AllowPickup, "sort": p.Sort, "enabled": p.Enabled, "featured": p.Featured, "promo_starts_at": p.PromoStartsAt, "promo_ends_at": p.PromoEndsAt, "limit_per_user": p.LimitPerUser, "group_size": p.GroupSize, "group_hours": p.GroupHours, "group_rate": p.GroupRate}
+	// The home page's featured shelf is the platform's to fill, and sales only come from orders.
+	if merchantScope != 0 {
+		delete(fields, "featured")
+	}
 	if p.ID == 0 {
 		p.Images = strings.TrimSpace(p.Images)
+		p.Sales = 0
+		if merchantScope != 0 {
+			p.Featured = false
+		}
 		if err := tx.Create(p).Error; err != nil {
 			return err
 		}

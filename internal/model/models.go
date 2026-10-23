@@ -61,18 +61,35 @@ type DepositPoolAddress struct {
 	UserID     uint64     `gorm:"index;not null;default:0" json:"user_id"`
 	Status     int8       `gorm:"not null;default:1" json:"status"`
 	AssignedAt *time.Time `json:"assigned_at"`
-	CreatedAt  time.Time  `json:"created_at"`
+	// ScanTimestamp is how far the watcher has scanned the address while no user holds it (an
+	// address replaced on every user keeps being watched; its deposits wait for the console).
+	ScanTimestamp int64     `gorm:"not null;default:0" json:"-"`
+	CreatedAt     time.Time `json:"created_at"`
+}
+
+// DepositAddressHolder records every user an address was ever given to. An address that has had
+// more than one holder is never credited automatically: a deposit to it could be anyone's.
+type DepositAddressHolder struct {
+	ID         uint64    `gorm:"primaryKey" json:"id"`
+	Network    string    `gorm:"size:16;not null" json:"network"`
+	Address    string    `gorm:"size:128;not null;uniqueIndex:uk_deposit_holder" json:"address"`
+	UserID     uint64    `gorm:"not null;uniqueIndex:uk_deposit_holder;index" json:"user_id"`
+	AssignedAt time.Time `gorm:"not null" json:"assigned_at"`
 }
 
 type DepositOrder struct {
-	ID             uint64    `gorm:"primaryKey" json:"id"`
-	UserID         uint64    `gorm:"index;not null" json:"user_id"`
-	Network        string    `gorm:"size:16;index;not null" json:"network"`
-	Currency       string    `gorm:"size:16;index;not null" json:"currency"`
-	Address        string    `gorm:"size:128;index;not null" json:"address"`
-	FromAddress    string    `gorm:"size:128" json:"from_address"`
-	Amount         string    `gorm:"type:decimal(24,6);not null" json:"amount"`
-	TxID           string    `gorm:"size:128;uniqueIndex;not null" json:"txid"`
+	ID          uint64 `gorm:"primaryKey" json:"id"`
+	UserID      uint64 `gorm:"index;not null" json:"user_id"`
+	Network     string `gorm:"size:16;index;not null" json:"network"`
+	Currency    string `gorm:"size:16;index;not null" json:"currency"`
+	Address     string `gorm:"size:128;index;not null" json:"address"`
+	FromAddress string `gorm:"size:128" json:"from_address"`
+	Amount      string `gorm:"type:decimal(24,6);not null" json:"amount"`
+	TxID        string `gorm:"size:128;index:idx_deposit_orders_txid;not null" json:"txid"` // one transaction may carry several transfers
+	// EventKey identifies one transfer: "trc20:<tx>:<to>:<amount>:<n>" (n counts identical
+	// transfers in a transaction) or "erc20:<tx>:<user>" for a user's ERC20 submission.
+	EventKey       *string   `gorm:"size:191;uniqueIndex" json:"-"`
+	ReviewedBy     string    `gorm:"size:128;not null;default:''" json:"reviewed_by"` // console account that confirmed or assigned it
 	BlockTimestamp int64     `gorm:"index" json:"block_timestamp"`
 	Status         string    `gorm:"size:24;index;not null" json:"status"`
 	CreatedAt      time.Time `json:"created_at"`
@@ -529,6 +546,11 @@ type NewsDelivery struct {
 	Error     string     `gorm:"size:255;not null;default:''" json:"error"`
 	SentAt    *time.Time `json:"sent_at"`
 	CreatedAt time.Time  `json:"created_at"`
+	// Attempts counts failed sends that were retried; RetryAt holds a retried delivery back, and
+	// ClaimedAt lets an interrupted send (stuck in "sending") be picked up again.
+	Attempts  int        `gorm:"not null;default:0" json:"attempts"`
+	RetryAt   *time.Time `json:"retry_at"`
+	ClaimedAt *time.Time `json:"-"`
 }
 
 // RedPacketMessage is a copy of a packet card sent through inline mode, remembered when someone

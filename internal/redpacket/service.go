@@ -358,7 +358,7 @@ func (s *Service) claim(code string, c Claimer, viaPassword bool) (*model.RedPac
 		case p.Status == StatusExpired || !s.now().Before(p.ExpiresAt):
 			return userErr("红包已过期")
 		case p.Type == TypePassword && !viaPassword:
-			return userErr("这是口令红包，请发送口令「%s」领取", p.Password)
+			return userErr("这是口令红包，请在群里发送口令领取")
 		case p.Type == TypeExclusive && !isTarget(p, c):
 			return userErr("这是专属红包，只有指定的人可以领取")
 		}
@@ -403,19 +403,17 @@ func isTarget(p model.RedPacket, c Claimer) bool {
 	return c.Username != "" && strings.EqualFold(p.TargetUsername, c.Username)
 }
 
-// ClaimByPassword claims the newest claimable password packet whose password is text. chatID
-// limits the search to packets posted in that group; 0 searches every packet (a private chat
-// with the bot, for packets shared through inline mode). matched is false when no active packet
-// has that password, so the caller can treat the text as an ordinary message.
+// ClaimByPassword claims the newest claimable password packet posted in the group chatID whose
+// password is text. Only that group's packets are searched (outsiders must not be able to guess
+// passwords across groups); packets shared through inline mode are claimed with their button.
+// matched is false when no active packet has that password, so the caller can treat the text
+// as an ordinary message.
 func (s *Service) ClaimByPassword(chatID int64, text string, c Claimer) (claim *model.RedPacketClaim, p *model.RedPacket, matched bool, err error) {
 	text = strings.TrimSpace(text)
-	if text == "" || utf8.RuneCountInString(text) > 20 {
+	if chatID == 0 || text == "" || utf8.RuneCountInString(text) > 20 {
 		return nil, nil, false, nil
 	}
-	q := s.st.DB.Where("type = ? AND status = ? AND password = ? AND expires_at > ?", TypePassword, StatusActive, text, s.now())
-	if chatID != 0 {
-		q = q.Where("chat_id = ?", chatID)
-	}
+	q := s.st.DB.Where("type = ? AND status = ? AND password = ? AND expires_at > ? AND chat_id = ?", TypePassword, StatusActive, text, s.now(), chatID)
 	var list []model.RedPacket
 	if err := q.Order("id desc").Limit(20).Find(&list).Error; err != nil {
 		return nil, nil, false, err
@@ -431,6 +429,13 @@ func (s *Service) ClaimByPassword(chatID int64, text string, c Claimer) (claim *
 	}
 	// Every matching packet was already claimed by this user, or was just emptied.
 	return nil, nil, true, err
+}
+
+// HasOpenPasswordPacket reports whether a group has a password packet that can still be claimed.
+func (s *Service) HasOpenPasswordPacket(chatID int64) bool {
+	var n int64
+	s.st.DB.Model(&model.RedPacket{}).Where("chat_id = ? AND type = ? AND status = ? AND expires_at > ?", chatID, TypePassword, StatusActive, s.now()).Limit(1).Count(&n)
+	return n > 0
 }
 
 // ClaimCode claims a password packet chosen by its code, checking the password.

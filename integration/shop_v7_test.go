@@ -2,9 +2,11 @@ package integration
 
 import (
 	"bytes"
+	"context"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"golang.org/x/text/encoding/simplifiedchinese"
 
@@ -108,6 +110,10 @@ func TestShopMerchantPayoutRequest(t *testing.T) {
 	if _, err := f.svc.RequestPayout(f.mer.ID, "not-an-address", "", "shop1"); err == nil {
 		t.Fatal("invalid address accepted")
 	}
+	if _, err := f.svc.RequestPayout(f.mer.ID, tron, "月结", "shop1"); err == nil {
+		t.Fatal("paid out an order still within its after-sale period")
+	}
+	must(t, f.svc.GrantCommissions(context.Background(), time.Now().AddDate(0, 0, 8)))
 	st, err := f.svc.RequestPayout(f.mer.ID, tron, "月结", "shop1")
 	must(t, err)
 	if st.Net != "20.000000" || st.PayoutAddress != tron || st.RequestedBy != "shop1" || st.Status != shop.SettlementPending {
@@ -127,5 +133,26 @@ func TestShopMerchantPayoutRequest(t *testing.T) {
 	must(t, f.svc.MarkSettlementPaid(st.ID, "0xabc", "", "admin"))
 	if err := f.svc.SetPayoutAddress(st.ID, f.mer.ID, tron, "shop1"); err == nil {
 		t.Fatal("address changed after payment")
+	}
+}
+
+func TestOrderRefusedWhenTotalDiffersFromConfirmed(t *testing.T) {
+	f := newShopFixture(t, 5, "physical")
+	b, addr := f.buyer(t, 9311, "100")
+	req := shop.CheckoutRequest{RequestID: "expected", Items: []shop.CheckoutItem{{SKUID: f.sku.ID, Quantity: 1}}, DeliveryType: shop.DeliveryExpress, AddressID: addr, ExpectedPay: "0.01"}
+	if _, err := f.svc.CreateOrder(b, req); err == nil || !strings.Contains(err.Error(), "价格已变化") {
+		t.Fatal("order with a different total accepted:", err)
+	}
+	var n int64
+	must(t, f.db.Model(&model.ShopOrder{}).Where("user_id = ?", b.UserID).Count(&n).Error)
+	if n != 0 {
+		t.Fatal("refused order was kept")
+	}
+	req.ExpectedPay = ""
+	o, err := f.svc.CreateOrder(b, req)
+	must(t, err)
+	req.RequestID, req.ExpectedPay = "expected-2", o.PayAmount
+	if _, err := f.svc.CreateOrder(b, req); err != nil {
+		t.Fatal("order with the confirmed total refused:", err)
 	}
 }

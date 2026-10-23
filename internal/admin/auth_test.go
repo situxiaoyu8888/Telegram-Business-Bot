@@ -70,6 +70,19 @@ func (m memoryAccounts) ByID(_ context.Context, id uint64) (*model.AdminUser, er
 }
 func (m memoryAccounts) TouchLogin(context.Context, uint64) error { return nil }
 
+// MerchantActive treats every merchant as existing; staff need an enabled owner account.
+func (m memoryAccounts) MerchantActive(_ context.Context, merchantID uint64, staff bool) (bool, error) {
+	if !staff {
+		return true, nil
+	}
+	for _, u := range m {
+		if u.Role == roleMerchant && u.MerchantID == merchantID && u.Enabled {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 // testAudit collects audit records written by the fixture's handler.
 var testAudit []model.AdminAuditLog
 
@@ -476,5 +489,23 @@ func TestMerchantStaffGetsChosenPagesOnly(t *testing.T) {
 		if w := authRequest(r, tt.method, tt.path, tt.body, cookie, true); w.Code != 403 {
 			t.Fatal(tt.path, w.Code)
 		}
+	}
+}
+
+func TestMerchantStaffLoseAccessWhenOwnerDisabled(t *testing.T) {
+	h, r, _, accounts := accountFixture(t)
+	h.shop = &shop.Service{}
+	r = gin.New()
+	h.Register(r)
+	owner := testAccount(t, 3, "owner", "owner-password", roleMerchant)
+	owner.MerchantID = 9
+	staff := testAccount(t, 4, "packer", "packer-password", roleStaff)
+	staff.MerchantID, staff.Permissions = 9, "shop_orders"
+	accounts[3], accounts[4] = owner, staff
+	cookie := login(t, r, "packer", "packer-password")
+	owner.Enabled = false
+	h.st = &store.Store{DB: testutil.DB(t, testutil.Step{Contains: "merchants", Columns: []string{"id", "name"}, Rows: [][]driver.Value{{int64(9), "甲"}}})}
+	if w := authRequest(r, "GET", "/admin/api/session", "", cookie, false); !strings.Contains(w.Body.String(), `"permissions":[]`) {
+		t.Fatal("staff kept pages after the owner was disabled:", w.Body.String())
 	}
 }

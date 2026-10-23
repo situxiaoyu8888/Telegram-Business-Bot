@@ -163,3 +163,15 @@ func TestAdminAdjustAndFiatWithdrawal(t *testing.T) {
 		t.Fatalf("admin ledger entries %d", adj)
 	}
 }
+
+func TestUSDTWithdrawalFollowsTheConsoleSwitch(t *testing.T) {
+	db, w, uid := exchangeFixture(t, "0")
+	must(t, db.Model(&model.WalletCurrency{}).Where("code = ?", "USDT").Update("withdrawable", false).Error)
+	if _, err := w.CreateCurrencyWithdrawal(uid, "USDT", "TLa2f6VPqDgRE67v1736s7bJ8Ray5wYjU7", "10", "wd-off"); err == nil {
+		t.Fatal("USDT withdrawal accepted while switched off")
+	}
+	must(t, db.Model(&model.WalletCurrency{}).Where("code = ?", "USDT").Update("withdrawable", true).Error)
+	if _, err := w.CreateCurrencyWithdrawal(uid, "USDT", "TLa2f6VPqDgRE67v1736s7bJ8Ray5wYjU7", "10", "wd-on"); err != nil {
+		t.Fatal(err)
+	}
+}

@@ -7,12 +7,15 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/shopspring/decimal"
 	"go.uber.org/zap"
 
 	"telegram-business-bot/internal/model"
+	"telegram-business-bot/internal/paypass"
+	"telegram-business-bot/internal/ratelimit"
 	"telegram-business-bot/internal/redpacket"
 	"telegram-business-bot/internal/session"
 )
@@ -192,25 +195,28 @@ func (r *Router) handlePacketButton(ctx context.Context, cb *CallbackQuery, u *m
 }
 
 // tryPasswordClaim treats text as a red packet password; it reports whether it was one.
-// chatID is the group, or 0 in the private chat (any packet).
+// chatID is the group; only its packets are matched.
 func (r *Router) tryPasswordClaim(ctx context.Context, chatID int64, m *Message, u *model.TelegramUser) bool {
 	if r.packets == nil || strings.HasPrefix(m.Text, "/") {
 		return false
 	}
-	claim, p, matched, err := r.packets.ClaimByPassword(chatID, m.Text, packetClaimer(u))
+	// Guessing is limited per user and group too (the guesses are deleted, so others don't see them).
+	guessKey := fmt.Sprintf("rp:pw:group:%d:%d", chatID, m.From.ID)
+	if r.store.Redis != nil {
+		if n, _ := ratelimit.Count(ctx, r.store.Redis, guessKey); n >= maxGroupPasswordGuesses {
+			return false
+		}
+	}
+	_, p, matched, err := r.packets.ClaimByPassword(chatID, m.Text, packetClaimer(u))
+	// Only a miss while the group has a password packet open counts as a guess.
+	if !matched && r.store.Redis != nil && utf8.RuneCountInString(strings.TrimSpace(m.Text)) <= 20 && r.packets.HasOpenPasswordPacket(chatID) {
+		_, _ = ratelimit.Hit(ctx, r.store.Redis, guessKey, time.Hour)
+	}
 	if !matched {
 		return false
 	}
-	msg := r.answerClaim(claim, p, err)
 	if err == nil {
-		msg = fmt.Sprintf("🧧 %s 抢到 <code>%s</code> %s，已存入钱包", htmlEscape(displayName(u)), trimZeros(claim.Amount), htmlEscape(r.packetCurrencyName(p.Currency)))
 		r.refreshPacket(ctx, p.Code, "")
-	} else {
-		msg = htmlEscape(msg)
-	}
-	if chatID == 0 {
-		_ = r.client.ReplyMessage(ctx, m.Chat.ID, m.MessageID, msg, nil)
-		return true
 	}
 	// In a group the password message is removed (this needs the bot to be a group admin) and,
 	// like a button claim, the result only shows in the packet card's claim list.
@@ -238,12 +244,39 @@ func (r *Router) askPacketPassword(ctx context.Context, chatID, userID int64, co
 	_ = r.client.SendMessage(ctx, chatID, fmt.Sprintf("🔑 <b>%s 的口令红包</b>\n\n请发送口令领取。发送 /cancel 可取消。", htmlEscape(p.SenderName)), nil)
 }
 
+// maxPasswordTries is how many wrong passwords a user may send for one packet per hour;
+// maxGroupPasswordGuesses how many unmatched short messages in one group per hour are tried as
+// passwords before that user's messages stop being checked.
+const (
+	maxPasswordTries        = 5
+	maxGroupPasswordGuesses = 30
+)
+
 // claimWithPassword claims the packet chosen with the button using the typed password.
 func (r *Router) claimWithPassword(ctx context.Context, m *Message, u *model.TelegramUser, s *session.Session) {
 	code := sessionString(s, "code")
+	// Wrong guesses per user and packet are limited, so a password cannot be brute-forced.
+	triesKey := fmt.Sprintf("rp:pw:%s:%d", code, m.From.ID)
+	if r.store.Redis != nil {
+		if n, _ := ratelimit.Count(ctx, r.store.Redis, triesKey); n >= maxPasswordTries {
+			_ = r.sessions.Clear(ctx, m.From.ID)
+			_ = r.client.SendMessage(ctx, m.Chat.ID, "口令错误次数过多，请 1 小时后再试。", nil)
+			return
+		}
+	}
 	claim, p, err := r.packets.ClaimCode(code, m.Text, packetClaimer(u))
 	if err != nil && redpacket.IsUserError(err) && strings.Contains(err.Error(), "口令不对") {
-		_ = r.client.SendMessage(ctx, m.Chat.ID, "口令不对，请重新发送。发送 /cancel 可取消。", nil)
+		left := maxPasswordTries - 1
+		if r.store.Redis != nil {
+			n, _ := ratelimit.Hit(ctx, r.store.Redis, triesKey, time.Hour)
+			left = maxPasswordTries - int(n)
+		}
+		if left <= 0 {
+			_ = r.sessions.Clear(ctx, m.From.ID)
+			_ = r.client.SendMessage(ctx, m.Chat.ID, "口令错误次数过多，请 1 小时后再试。", nil)
+			return
+		}
+		_ = r.client.SendMessage(ctx, m.Chat.ID, fmt.Sprintf("口令不对，还可以再试 %d 次。发送 /cancel 可取消。", left), nil)
 		return
 	}
 	_ = r.sessions.Clear(ctx, m.From.ID)
@@ -283,8 +316,11 @@ func (r *Router) handleGroupMessage(ctx context.Context, m *Message, u *model.Te
 		_ = r.client.DeleteMessage(ctx, m.Chat.ID, m.MessageID)
 		return
 	case inWizard && isPayStep(s.Step):
-		// The payment password belongs in the private chat; never keep it in the group.
-		_ = r.client.DeleteMessage(ctx, m.Chat.ID, m.MessageID)
+		// The payment password belongs in the private chat; never keep it in the group. Deleting
+		// needs admin rights: when that fails and it looked like a password, warn the user.
+		if err := r.client.DeleteMessage(ctx, m.Chat.ID, m.MessageID); err != nil && paypass.Check(strings.TrimSpace(m.Text)) == nil {
+			_ = r.client.SendMessage(ctx, m.From.ID, "⚠️ 你刚才在群里发送了 6 位数字，机器人没有权限删除它。如果那是你的支付密码，请立即发送 /paypass 修改。\n\n支付密码只能在这里（私聊）输入。", nil)
+		}
 		return
 	case inWizard && m.ReplyToMessage != nil && strconv.Itoa(m.ReplyToMessage.MessageID) == sessionString(s, "msg") && !strings.HasPrefix(m.Text, "/"):
 		r.handlePacketWizardInput(ctx, m, u, s)

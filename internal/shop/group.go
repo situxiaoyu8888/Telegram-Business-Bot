@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/shopspring/decimal"
+	"go.uber.org/zap"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 
@@ -119,6 +120,19 @@ func leaveGroup(tx *gorm.DB, groupID uint64) error {
 
 // ExpireGroups fails open groups past their deadline and refunds every waiting order.
 func (s *Service) ExpireGroups(ctx context.Context, now time.Time) error {
+	// Orders of groups that already failed but were not refunded (an earlier pass stopped on an
+	// error) are refunded first, so no buyer's money stays held.
+	var stuck []uint64
+	if err := s.st.DB.WithContext(ctx).Model(&model.ShopOrder{}).
+		Where("status = ? AND group_id IN (?)", StatusGrouping, s.st.DB.Model(&model.ShopGroup{}).Select("id").Where("status = ?", GroupFailed)).
+		Limit(200).Pluck("id", &stuck).Error; err != nil {
+		return err
+	}
+	for _, oid := range stuck {
+		if err := s.cancel(oid, Scope{}, "拼团未成团，已自动退款", autoOperator); err != nil && !IsUserError(err) {
+			s.logger.Error("refund failed group order", zap.Uint64("order_id", oid), zap.Error(err))
+		}
+	}
 	var ids []uint64
 	if err := s.st.DB.WithContext(ctx).Model(&model.ShopGroup{}).Where("status = ? AND expires_at <= ?", GroupOpen, now).Limit(200).Pluck("id", &ids).Error; err != nil {
 		return err
@@ -145,8 +159,9 @@ func (s *Service) ExpireGroups(ctx context.Context, now time.Time) error {
 			return err
 		}
 		for _, oid := range orderIDs {
+			// One failing refund does not hold up the rest; the sweep above retries it next pass.
 			if err := s.cancel(oid, Scope{}, "拼团未成团，已自动退款", autoOperator); err != nil && !IsUserError(err) {
-				return err
+				s.logger.Error("refund failed group order", zap.Uint64("order_id", oid), zap.Error(err))
 			}
 		}
 	}

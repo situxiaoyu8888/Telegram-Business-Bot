@@ -414,9 +414,9 @@ async function checkoutPage(v){
   const pin=await payAuth(`使用钱包余额支付 ${money(total.toFixed(6))} USDT`);if(pin==null)return;
   $('pay').disabled=true;
   const groups=checkout.groups.map(g=>({items:g.items,delivery_type:g.delivery_type,user_coupon_id:g.user_coupon_id||0,use_points:!!g.use_points,group_mode:g.group_mode||'',group_id:g.group_id||0,remark:g.remark||''}));
-  const body=multi?{request_id:checkout.request_id,address_id:checkout.address_id,from_cart:checkout.from_cart,groups}:{request_id:checkout.request_id,address_id:checkout.address_id,from_cart:checkout.from_cart,...groups[0]};
+  const body=multi?{request_id:checkout.request_id,address_id:checkout.address_id,from_cart:checkout.from_cart,expected_pay:total.toFixed(6),groups}:{request_id:checkout.request_id,address_id:checkout.address_id,from_cart:checkout.from_cart,expected_pay:total.toFixed(6),...groups[0]};
   try{const r=await post('orders',body,{'X-Pay-Password':pin});haptic('success');checkout=null;refreshCartCount();location.replace(multi?'#/orders':r.group_id?'#/group/'+r.group_id:'#/order/'+r.id)}
-  catch(e){haptic('error');toast(e.message);$('pay').disabled=false}}}
+  catch(e){haptic('error');toast(e.message);if(/价格已变化/.test(e.message))route();else $('pay').disabled=false}}}
 
 // ---- Orders ----
 const orderTabs=[['all','全部'],['grouping','拼团中'],['paid','待处理'],['shipped','已发货'],['ready','待自提'],['completed','已完成'],['canceled','已取消']];
@@ -439,7 +439,8 @@ async function orderDetail(v,id){
  if(sales.length||Number(o.refunded_amount)>0)$('app').insertAdjacentHTML('beforeend',`<div class="card"><h3>售后</h3>${Number(o.refunded_amount)>0&&o.status!=='canceled'?`<div class="kv"><span>已退款</span><span>${money(o.refunded_amount)} USDT</span></div>`:''}${sales.map(a=>afterSaleBlock(a)).join('')}</div>`);
  document.querySelectorAll('[data-as-cancel]').forEach(b=>b.onclick=async()=>{if(!(await confirmBox('撤销该售后申请？')))return;try{await post(`aftersales/${b.dataset.asCancel}/cancel`);toast('已撤销');route()}catch(e){toast(e.message)}});
  document.querySelectorAll('[data-as-return]').forEach(b=>b.onclick=async()=>{const id=b.dataset.asReturn;try{await post(`aftersales/${id}/return`,{carrier:$('rc'+id).value,tracking_no:$('rt'+id).value});toast('已提交');route()}catch(e){toast(e.message)}});
- const actions=[`<button class="btn ghost sm" style="height:42px" onclick="location.hash='#/chat/${o.merchant_id}?order=${o.id}'">💬</button>`];if(o.status==='paid')actions.push('<button class="btn danger grow" id="cancelOrder">取消订单</button>');if(o.can_review)actions.push(`<button class="btn grow" onclick="location.hash='#/review/${o.id}'">评价</button>`);if(o.can_apply_after_sale)actions.push(`<button class="btn ghost grow" onclick="location.hash='#/aftersale/${o.id}'">申请售后</button>`);if(o.status==='shipped'||o.status==='ready')actions.push(`<button class="btn grow" id="confirmOrder">${o.status==='ready'?'我已取货':'确认收货'}</button>`);
+ const actions=[`<button class="btn ghost sm" style="height:42px" onclick="location.hash='#/chat/${o.merchant_id}?order=${o.id}'">💬</button>`];// A paid order of a filled group cannot be cancelled by the buyer; one still waiting for its group can (it leaves the group).
+ if((o.status==='paid'&&!o.group_id)||o.status==='grouping')actions.push(`<button class="btn danger grow" id="cancelOrder">${o.status==='grouping'?'退出拼团':'取消订单'}</button>`);if(o.can_review)actions.push(`<button class="btn grow" onclick="location.hash='#/review/${o.id}'">评价</button>`);if(o.can_apply_after_sale)actions.push(`<button class="btn ghost grow" onclick="location.hash='#/aftersale/${o.id}'">申请售后</button>`);if(o.status==='shipped'||o.status==='ready')actions.push(`<button class="btn grow" id="confirmOrder">${o.status==='ready'?'我已取货':'确认收货'}</button>`);
  if(actions.length)bottomBar(actions.join(''));
  if($('cancelOrder'))$('cancelOrder').onclick=async()=>{if(!(await confirmBox('确定取消订单？款项将退回钱包余额。')))return;try{await post(`orders/${o.id}/cancel`);toast('订单已取消');route()}catch(e){toast(e.message)}};
  if($('confirmOrder'))$('confirmOrder').onclick=async()=>{if(!(await confirmBox('确认已收到商品？')))return;try{await post(`orders/${o.id}/confirm`);toast('已确认');route()}catch(e){toast(e.message)}}}
@@ -562,16 +563,16 @@ const copyText=(text,okMsg)=>navigator.clipboard?.writeText(text).then(()=>toast
 const depStatus={credited:['已入账','green'],pending:['待核对',''],unclaimed:['待认领',''],rejected:['未通过','red']};
 async function depositPage(v){
  const d=await api('wallet/deposit');if(stale(v))return;
- const how=a=>a.network==='TRC20'?(a.claim?'此地址多人共用：转账后请在下方提交交易哈希认领，核对无误立即入账。':'链上到账后自动存入钱包，无需提交任何信息。'):'转账后请在下方提交交易哈希和金额，客服核对后入账。';
+ const how=a=>a.network==='TRC20'?(a.claim?'此地址多人共用：转账后请在下方提交交易哈希，客服核对后入账。':'链上到账后自动存入钱包，无需提交任何信息。'):'转账后请在下方提交交易哈希和金额，客服核对后入账。';
  const box=a=>`<div class="card"><h3>💰 USDT-${esc(a.network)} 充值</h3>${a.qr?`<img class="dep-qr" src="${a.qr}" alt="充值地址二维码">`:''}<div class="muted small">平台为你分配的收款地址（扫码或复制）</div><div class="code" style="margin:6px 0 12px">${esc(a.address)}</div><button class="btn block" data-copy="${esc(a.address)}">复制地址</button><div class="muted small" style="margin-top:12px">⚠️ ${esc(a.notice)}<br>${how(a)}</div></div>`;
- const claim=d.addresses.some(a=>a.claim)?`<div class="card"><h3>🧾 提交交易哈希</h3><div class="field"><input id="depTx" placeholder="交易哈希（TxID）" autocomplete="off" spellcheck="false"></div><div class="field" id="depAmtBox" hidden><input id="depAmt" inputmode="decimal" placeholder="转账的 USDT 数量" autocomplete="off"></div><button class="btn block" id="depClaim">提交</button><div class="muted small" style="margin-top:8px">TRC20 为 64 位字符；ERC20 为 0x 开头的 66 位字符，需要同时填写数量。</div></div>`:'';
+ const claim=d.addresses.some(a=>a.claim)?`<div class="card"><h3>🧾 提交交易哈希</h3><div class="field"><input id="depTx" placeholder="交易哈希（TxID）" autocomplete="off" spellcheck="false"></div><div class="field" id="depAmtBox" hidden><input id="depAmt" inputmode="decimal" placeholder="转账的 USDT 数量" autocomplete="off"></div><button class="btn block" id="depClaim">提交</button><div class="muted small" style="margin-top:8px">TRC20 交易哈希为 64 位字符；ERC20 为 0x 开头的 66 位字符，需要同时填写数量。提交后由客服核对，入账后会通知你。</div></div>`:'';
  const recs=d.records.length?`<div class="sec-head"><span class="bold">我的充值记录</span></div><div class="card" style="padding:4px 16px">${d.records.map(r=>{const [l,c]=depStatus[r.status]||[r.status,''];return `<div class="asset"><div style="min-width:0"><div class="mono small">${esc(r.order_no)}</div><div class="muted small">${dateText(r.created_at)} · ${esc(r.network)}</div></div><div style="text-align:right;flex:none"><div class="bold">+${fmtAmt(r.amount,6)}</div><span class="tag ${c}">${esc(l)}</span></div></div>`}).join('')}</div>`:'';
  $('app').innerHTML=(d.addresses.length?d.addresses.map(box).join(''):'<div class="card"><h3>💰 USDT 充值</h3><div class="muted">尚未为你的账号分配充值地址，请联系客服。</div></div>')+claim+recs+'<div class="card small muted">人民币、泰铢等其他币种请联系客服充值，到账后显示在钱包余额中。</div>';
  document.querySelectorAll('[data-copy]').forEach(b=>b.onclick=()=>copyText(b.dataset.copy,'地址已复制'));
  if(!claim)return;
  $('depTx').oninput=()=>{$('depAmtBox').hidden=!$('depTx').value.trim().toLowerCase().startsWith('0x')};
  $('depClaim').onclick=async()=>{const txid=$('depTx').value.trim();if(!txid){toast('请填写交易哈希');return}$('depClaim').disabled=true;
-  try{const r=await post('wallet/deposit/claim',{txid,amount:$('depAmt').value.trim()});haptic('success');toast(r.credited?`认领成功，${r.amount} USDT 已入账`:'已提交，客服核对后入账');route()}
+  try{const r=await post('wallet/deposit/claim',{txid,amount:$('depAmt').value.trim()});haptic('success');toast('已提交，客服核对后入账');route()}
   catch(e){toast(e.message);$('depClaim').disabled=false}}}
 let wdState={cur:'',rid:''};
 const wdStatus={pending:'待审核',approved:'已审核，待打款',completed:'已完成',rejected:'已拒绝'};

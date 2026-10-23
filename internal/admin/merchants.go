@@ -81,9 +81,11 @@ func (h *Handler) saveMerchant(c *gin.Context) {
 			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&old, b.ID).Error; err != nil {
 				return err
 			}
-			b.CreatedAt = old.CreatedAt
-			return tx.Save(&b).Error
+			// The payout address is the merchant's own (set when it requests a payout); the console
+			// form never carries it, so it is not overwritten here.
+			return tx.Model(&old).Select("pinned", "menu_id", "name", "description", "address", "hours", "phone", "contact_url", "notify_chat_id", "commission_rate", "sort", "enabled").Updates(&b).Error
 		}
+		b.PayoutAddress = ""
 		b.CreatedAt = model.Merchant{}.CreatedAt
 		b.UpdatedAt = b.CreatedAt
 		return tx.Create(&b).Error

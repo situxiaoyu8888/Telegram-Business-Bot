@@ -152,13 +152,20 @@ test('shop categories follow the shop products permission and are not a grantabl
  assert.ok(!html.includes('data-nav="shop_orders"'));
  assert.equal(h.run("apiPath('shop_products')"),'shop-products');
 });
-test('merchant accounts see their shop pages but not categories or platform stats',()=>{
+test('merchant accounts see their shop pages but not categories or the platform home page',()=>{
  const h=harness();
- h.run("me={id:3,role:'merchant',merchant_name:'甲',permissions:['shop_products','shop_orders','shop_aftersales']};nav();renderStats()");
+ h.run("me={id:3,role:'merchant',merchant_name:'甲',permissions:['shop_products','shop_orders','shop_aftersales']};nav()");
  const html=h.elements.get('navigation').innerHTML;
  for(const page of ['shop_products','shop_orders','shop_aftersales'])assert.ok(html.includes(`data-nav="${page}"`),page);
  assert.ok(!html.includes('data-nav="shop_categories"'));
- assert.equal(h.elements.get('stats').innerHTML,'');
+ assert.ok(!html.includes('data-nav="home"'));
+});
+test('home page shows to-dos, platform figures and per-currency money flows',()=>{
+ const h=harness();
+ h.run(`me={id:1,role:'super'};current='home';overview={range:'7d',since:'2026-10-17',todo:{pending_withdrawals:2,pending_deposits:1},platform:{users:30,new_users:4,merchants:3,enabled_merchants:2},shop:{orders:5,by_status:{paid:2,completed:3},paid:'100.5',refunded:'10',net:'90.5'},currencies:[{code:'USDT',name:'USDT-TRC20',deposit_count:3,deposit_amount:'500',withdraw_count:1,withdraw_amount:'620',net_flow:'-120',packet_count:2,packet_amount:'20',balance_available:'1234.5'},{code:'CNY',name:'人民币<b>',credit_amount:'88'}]};nav();render()`);
+ const html=h.elements.get('content').innerHTML;
+ assert.ok(h.elements.get('navigation').innerHTML.includes('data-nav="home"'));
+ for(const text of ['待审提现','data-go="withdrawals"','近 7 天','2026-10-17 至今','90.5','待处理 2 · 已完成 3','充提差额','class="negative">-120','1,234.5','红包个数','人民币&lt;b&gt;'])assert.ok(html.includes(text),text);
 });
 test('merchant accounts get reports, settlements and reviews but not marketing',()=>{
  const h=harness();
@@ -203,4 +210,15 @@ test('every console page loads from an API route that exists',()=>{
  const h=harness();
  const missing=h.run('Object.keys(pages)').filter(k=>!routes.has(h.run(`apiPath(${JSON.stringify(k)})`)));
  assert.equal(missing.join(','),'');
+});
+test('navigation groups collapse and expand, keeping the open page visible',()=>{
+ const h=harness();
+ h.run("me={id:1,role:'super'};current='home';nav()");
+ let html=h.elements.get('navigation').innerHTML;
+ for(const g of ['运营工作台','业务管理','商城管理','商城经营','新闻资讯','系统设置'])assert.ok(html.includes(`data-group="${g}"`),g);
+ assert.ok(!html.includes('data-group="概览"'));
+ h.run("toggleGroup('业务管理')");html=h.elements.get('navigation').innerHTML;
+ assert.ok(!html.includes('data-nav="withdrawals"'));assert.ok(html.includes('aria-expanded="false"'));
+ h.run("current='withdrawals';nav()");assert.ok(h.elements.get('navigation').innerHTML.includes('data-nav="withdrawals"'));
+ h.run("current='home';toggleGroup('业务管理')");assert.ok(h.elements.get('navigation').innerHTML.includes('data-nav="withdrawals"'));
 });

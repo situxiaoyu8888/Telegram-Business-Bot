@@ -84,7 +84,11 @@ func TestRawAmountValidation(t *testing.T) {
 
 func TestWatcherResumesFromPersistedCursorAfterLongDowntime(t *testing.T) {
 	cursor := time.Now().Add(-10 * 24 * time.Hour).UnixMilli()
-	db := testutil.DB(t, testutil.Step{Contains: "deposit_addresses", Columns: []string{"id", "user_id", "address", "network", "scan_timestamp"}, Rows: [][]driver.Value{{int64(1), int64(2), "address", "TRC20", cursor}}})
+	db := testutil.DB(t,
+		testutil.Step{Contains: "deposit_addresses", Columns: []string{"user_id", "address", "users", "scan_timestamp"}, Rows: [][]driver.Value{{int64(2), "address", int64(1), cursor}}},
+		testutil.Step{Contains: "deposit_address_holders", Columns: []string{"id"}},
+		testutil.Step{Contains: "deposit_pool_addresses", Columns: []string{"id"}},
+	)
 	c := New("https://example.invalid", "")
 	called := false
 	c.http = &http.Client{Transport: transportFunc(func(r *http.Request) (*http.Response, error) {
@@ -104,8 +108,10 @@ func TestWatcherResumesFromPersistedCursorAfterLongDowntime(t *testing.T) {
 
 func TestFailedCreditDoesNotAdvanceScanCursor(t *testing.T) {
 	db := testutil.DB(t,
-		testutil.Step{Contains: "deposit_addresses", Columns: []string{"id", "user_id", "address", "network", "scan_timestamp"}, Rows: [][]driver.Value{{int64(1), int64(2), "address", "TRC20", int64(123)}}},
+		testutil.Step{Contains: "deposit_addresses", Columns: []string{"user_id", "address", "users", "scan_timestamp"}, Rows: [][]driver.Value{{int64(2), "address", int64(1), int64(123)}}},
+		testutil.Step{Contains: "deposit_address_holders", Columns: []string{"id"}},
 		testutil.Step{Contains: "deposit_orders", Err: fmt.Errorf("database unavailable")},
+		testutil.Step{Contains: "deposit_pool_addresses", Columns: []string{"id"}},
 	)
 	st := &store.Store{DB: db}
 	c := New("https://example.invalid", "")

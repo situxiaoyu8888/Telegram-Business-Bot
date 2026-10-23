@@ -11,9 +11,10 @@ import (
 )
 
 // Deposits to an address shared by several users, and all ERC20 deposits, are claimed by
-// transaction hash (session scene "deposit_claim": hash → amount for ERC20).
+// transaction hash and confirmed in the console (session scene "deposit_claim": hash → amount
+// for ERC20).
 
-const depositClaimPrompt = "🧾 请发送这笔充值的<b>交易哈希</b>（TxID）：\n• USDT-TRC20：64 位字符\n• USDT-ERC20：0x 开头的 66 位字符\n\n发送 /cancel 可取消。"
+const depositClaimPrompt = "🧾 请发送这笔充值的<b>交易哈希</b>（TxID）：\n• USDT-TRC20：64 位字符\n• USDT-ERC20：0x 开头的 66 位字符\n\n提交后由客服核对，入账后会通知你。发送 /cancel 可取消。"
 
 // depositNeedsClaim reports whether the user has an address whose deposits must be claimed:
 // an ERC20 one, or a TRC20 one shared with other users.
@@ -46,16 +47,23 @@ func (r *Router) handleDepositClaimInput(ctx context.Context, m *Message, u *mod
 		_ = r.sessions.Clear(ctx, m.From.ID)
 		_ = r.client.SendMessage(ctx, m.Chat.ID, t, ptrKB(BackHomeKeyboard()))
 	}
+	submitted := func(o *model.DepositOrder) {
+		amount := "\n金额：以链上到账为准"
+		if o.Network == "ERC20" || o.Amount != "0" {
+			amount = "\n金额：<code>" + trimZeros(o.Amount) + "</code> USDT-" + o.Network
+		}
+		done("📨 <b>已提交，等待客服核对</b>\n\n订单编号：<code>" + wallet.OrderNo("D", o.ID, o.CreatedAt) + "</code>" + amount + "\n\n核对后入账，届时会通知你。")
+	}
 	switch s.Step {
 	case "hash":
 		switch wallet.DepositHashNetwork(text) {
 		case "TRC20":
-			o, err := r.wallet.ClaimTRC20(u.ID, text)
+			o, err := r.wallet.SubmitClaim(u.ID, text, "")
 			if err != nil {
 				done("⚠️ " + htmlEscape(userText(err)))
 				return
 			}
-			done("✅ <b>认领成功</b>\n\n<code>" + trimZeros(o.Amount) + "</code> USDT-TRC20 已存入你的钱包。\n订单编号：<code>" + wallet.OrderNo("D", o.ID, o.CreatedAt) + "</code>")
+			submitted(o)
 		case "ERC20":
 			s.Data["hash"], s.Step = strings.ToLower(text), "amount"
 			_ = r.sessions.Set(ctx, m.From.ID, *s)
@@ -64,7 +72,7 @@ func (r *Router) handleDepositClaimInput(ctx context.Context, m *Message, u *mod
 			say("⚠️ 交易哈希格式不正确。\n\n" + depositClaimPrompt)
 		}
 	case "amount":
-		o, err := r.wallet.SubmitERC20(u.ID, sessionString(s, "hash"), text)
+		o, err := r.wallet.SubmitClaim(u.ID, sessionString(s, "hash"), text)
 		if err != nil {
 			if strings.Contains(err.Error(), "金额") {
 				say("⚠️ " + htmlEscape(err.Error()))
@@ -73,7 +81,7 @@ func (r *Router) handleDepositClaimInput(ctx context.Context, m *Message, u *mod
 			done("⚠️ " + htmlEscape(userText(err)))
 			return
 		}
-		done("📨 <b>已提交</b>\n\n订单编号：<code>" + wallet.OrderNo("D", o.ID, o.CreatedAt) + "</code>\n金额：<code>" + trimZeros(o.Amount) + "</code> USDT-ERC20\n\n客服核对链上到账后入账，届时会通知你。")
+		submitted(o)
 	}
 }
 
