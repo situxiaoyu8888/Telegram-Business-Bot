@@ -113,6 +113,7 @@ type CreateInput struct {
 	Greeting         string
 	ChatID           int64
 	RequestID        string
+	CoverID          uint64 // a console cover (0 = none)
 }
 
 var usernamePattern = regexp.MustCompile(`^@?([A-Za-z][A-Za-z0-9_]{3,31})$`)
@@ -220,6 +221,13 @@ func (s *Service) Create(in CreateInput) (*model.RedPacket, error) {
 	}
 	if utf8.RuneCountInString(p.Greeting) > 40 {
 		return nil, userErr("祝福语最多 40 个字")
+	}
+	if in.CoverID != 0 {
+		// A cover withdrawn in the meantime just leaves the packet without one.
+		var c model.RedPacketCover
+		if err := s.st.DB.Where("id = ? AND enabled = ?", in.CoverID, true).First(&c).Error; err == nil {
+			p.CoverID, p.Cover = c.ID, c.ImageURL
+		}
 	}
 	p.Code, err = newCode()
 	if err != nil {
@@ -441,6 +449,18 @@ func (s *Service) ClaimCode(code, password string, c Claimer) (*model.RedPacketC
 func (s *Service) Active(senderUserID uint64, botID uint64, limit int) ([]model.RedPacket, error) {
 	out := []model.RedPacket{}
 	return out, s.st.DB.Where("sender_user_id = ? AND bot_id = ? AND status = ? AND expires_at > ?", senderUserID, botID, StatusActive, s.now()).Order("id desc").Limit(limit).Find(&out).Error
+}
+
+// Covers lists the enabled covers, the default one first.
+func (s *Service) Covers() ([]model.RedPacketCover, error) {
+	var list []model.RedPacketCover
+	err := s.st.DB.Where("enabled = ?", true).Order("is_default desc, sort asc, id asc").Find(&list).Error
+	return list, err
+}
+
+// SetCoverFile remembers the Telegram file ID of a packet's cover, so later copies reuse it.
+func (s *Service) SetCoverFile(id uint64, fileID string) error {
+	return s.st.DB.Model(&model.RedPacket{}).Where("id = ?", id).Update("cover_file_id", fileID).Error
 }
 
 // SetMessage records the group message showing the packet so later claims can update it.

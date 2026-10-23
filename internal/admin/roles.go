@@ -18,7 +18,7 @@ import (
 var permissionKeys = []struct{ Key, Label string }{
 	{"pushes", "消息推送"}, {"bots", "业务机器人"}, {"routes", "消息路由"},
 	{"merchants", "商家管理"}, {"users", "用户管理"}, {"withdrawals", "提现审核"}, {"deposits", "充值记录"},
-	{"currencies", "币种汇率"}, {"exchanges", "换汇记录"}, {"redpackets", "红包记录"},
+	{"currencies", "币种汇率"}, {"exchanges", "换汇记录"}, {"redpackets", "红包记录"}, {"redpacket_covers", "红包封面"},
 	{"news", "新闻管理"}, {"news_categories", "新闻分类"}, {"news_feeds", "RSS 订阅源"}, {"news_chats", "群和频道"},
 	{"addresses", "充值地址"}, {"tickets", "客服工单"}, {"menus", "动态菜单"}, {"configs", "系统配置"},
 	{"shop_products", "商城商品"}, {"shop_orders", "商城订单"}, {"shop_aftersales", "商城售后"}, {"shop_coupons", "商城优惠券"},

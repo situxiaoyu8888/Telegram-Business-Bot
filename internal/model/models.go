@@ -383,7 +383,10 @@ type RedPacket struct {
 	TargetTelegramID int64      `gorm:"not null;default:0" json:"target_telegram_id"`
 	Password         string     `gorm:"size:64;not null;default:'';index" json:"password"`
 	Greeting         string     `gorm:"size:128;not null;default:''" json:"greeting"`
-	ChatID           int64      `gorm:"not null;default:0;index" json:"chat_id"` // group the bot posted it in (0 = shared via inline mode)
+	CoverID          uint64     `gorm:"not null;default:0" json:"cover_id"`
+	Cover            string     `gorm:"size:512;not null;default:''" json:"cover"` // image URL at creation; the card is a photo when set
+	CoverFileID      string     `gorm:"size:255;not null;default:''" json:"-"`     // Telegram file ID of the cover, once the owning bot has sent it
+	ChatID           int64      `gorm:"not null;default:0;index" json:"chat_id"`   // group the bot posted it in (0 = shared via inline mode)
 	MessageID        int        `gorm:"not null;default:0" json:"message_id"`
 	Status           string     `gorm:"size:16;not null;index" json:"status"` // active, finished or expired
 	RefundAmount     string     `gorm:"type:decimal(24,6);not null;default:0" json:"refund_amount"`
@@ -400,6 +403,17 @@ type RedPacketClaim struct {
 	Name           string    `gorm:"size:128;not null" json:"name"`
 	Amount         string    `gorm:"type:decimal(24,6);not null" json:"amount"`
 	CreatedAt      time.Time `json:"created_at"`
+}
+
+// RedPacketCover is a cover image the console offers for red packets; senders pick one in the wizard.
+type RedPacketCover struct {
+	ID        uint64    `gorm:"primaryKey" json:"id"`
+	Name      string    `gorm:"size:32;not null" json:"name"`
+	ImageURL  string    `gorm:"size:512;not null" json:"image_url"`
+	Sort      int       `gorm:"not null" json:"sort"`
+	Enabled   bool      `gorm:"not null" json:"enabled"`
+	IsDefault bool      `gorm:"not null" json:"is_default"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
 // NewsCategory groups news articles; users subscribe per category.

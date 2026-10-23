@@ -466,7 +466,12 @@ async function toastText(page) { return page.$eval('#toast', e => e.hidden ? '' 
     await say(xm, '/start hb_-100555'); await wait(900);
     await tap(xm, 'hbw:t:' + type, { message_id: 1, chat: pchat }); await wait(700);
     await tap(xm, 'hbw:c:USDT', { message_id: 1, chat: pchat }); await wait(700);
-    for (const st of steps) { if (st === 'default-greeting') await tap(xm, 'hbw:g', { message_id: 1, chat: pchat }); else await say(xm, st); await wait(700); }
+    for (const st of steps) {
+      if (st === 'default-greeting') await tap(xm, 'hbw:g', { message_id: 1, chat: pchat });
+      else if (st.startsWith('cover:')) await tap(xm, 'hbw:cv:' + st.slice(6), { message_id: 1, chat: pchat });
+      else await say(xm, st);
+      await wait(700);
+    }
     const confirm = (await sentNow()).filter(m => m.chat_id === 9001 && JSON.stringify(m.reply_markup || {}).includes('hbw:send:')).pop();
     const data = confirm && JSON.stringify(confirm.reply_markup).match(/hbw:send:[0-9a-f]+/)[0];
     if (!data) { problems.push('red packet confirmation not shown for ' + type); return null; }
@@ -556,6 +561,34 @@ async function toastText(page) { return page.$eval('#toast', e => e.hidden ? '' 
   }
   const xmBal = sql(`select available from wallet_accounts where user_id=${uid} and currency='USDT'`);
   if (xmBal !== '95.000000') problems.push('sender not charged 5 USDT for two packets: ' + xmBal);
+  // Covers: added in the console, offered after the greeting (an album preview in the private
+  // chat), and the card becomes a photo whose caption is edited on claims.
+  await nav(admin, 'redpacket_covers'); await admin.click('#create'); await admin.waitForTimeout(400);
+  await admin.fill('#rcName', '新年快乐'); await admin.fill('#rcImage', 'https://example.com/cover-newyear.jpg');
+  await admin.check('#rcDefault'); await submitModal(admin); await admin.waitForTimeout(500);
+  await admin.click('#create'); await admin.waitForTimeout(400);
+  await admin.fill('#rcName', '生日快乐'); await admin.fill('#rcImage', 'https://example.com/cover-birthday.png'); await submitModal(admin); await admin.waitForTimeout(500);
+  await shot(admin, '55c-admin-redpacket-covers');
+  const coverId = sql("select id from red_packet_covers where name='新年快乐' and is_default=1");
+  if (!coverId) problems.push('red packet cover not saved as default');
+  else {
+    const covered = await sendPacket('equal', ['1', '2', 'default-greeting', 'cover:' + coverId]);
+    const now = await sentNow();
+    const album = now.filter(m => m.method === 'sendMediaGroup' && m.chat_id === 9001).pop();
+    if (!album || album.media.length !== 2 || album.media[0].media !== 'https://example.com/cover-newyear.jpg') problems.push('cover choices not previewed as an album');
+    if (!now.some(m => m.chat_id === 9001 && /封面：新年快乐/.test(m.text || ''))) problems.push('confirmation does not name the cover');
+    if (covered) {
+      const posted = now.find(m => m.method === 'sendPhoto' && m.chat_id === -100555 && m.mid === Number(covered[5]));
+      if (!posted || posted.photo !== 'https://example.com/cover-newyear.jpg' || !/小明 发了一个普通红包/.test(posted.caption || '')) problems.push('covered packet not posted as a photo');
+      const own = now.filter(m => m.method === 'sendPhoto' && m.chat_id === 9001).pop();
+      if (!own || own.photo !== 'fid-' + covered[5]) problems.push('private card did not reuse the cover file ID');
+      await tap(xh, 'hb:' + covered[0], { message_id: Number(covered[5]), chat: group }); await wait(1200);
+      if (!(await sentNow()).some(m => m.method === 'editMessageCaption' && m.chat_id === -100555 && m.message_id === Number(covered[5]) && /小红/.test(m.caption || ''))) problems.push('covered card caption not updated after a claim');
+      await inject({ inline_query: { id: 'iq' + seq++, from: xm, query: 'hb ' + covered[0], offset: '' } }); await wait(1200);
+      const iq = (await sentNow()).filter(m => m.method === 'answerInlineQuery').pop();
+      if (!iq || iq.results[0]?.type !== 'photo' || iq.results[0].photo_file_id !== 'fid-' + covered[5]) problems.push('inline share of a covered packet is not a photo');
+    }
+  }
   await nav(admin, 'redpackets'); await shot(admin, '55-admin-redpackets');
   if (lucky) {
     await admin.click(`[data-action="claims"][data-id="${sql(`select id from red_packets where code='${lucky[0]}'`)}"]`); await admin.waitForTimeout(600);

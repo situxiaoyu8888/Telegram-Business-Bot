@@ -174,6 +174,61 @@ func (c *Client) EditInlineMessage(ctx context.Context, inlineMessageID, text st
 	return c.call(ctx, "editMessageText", payload, nil)
 }
 
+// SendPhotoID sends an HTML-captioned photo (URL or file ID) and returns the message ID and the
+// photo's file ID, which this bot can reuse.
+func (c *Client) SendPhotoID(ctx context.Context, chatID int64, photo, caption string, kb *InlineKeyboardMarkup) (int, string, error) {
+	payload := map[string]any{"chat_id": chatID, "photo": photo, "caption": caption, "parse_mode": "HTML"}
+	if kb != nil {
+		payload["reply_markup"] = kb
+	}
+	var resp APIResponse[Message]
+	if err := c.call(ctx, "sendPhoto", payload, &resp); err != nil {
+		return 0, "", err
+	}
+	if !resp.OK {
+		return 0, "", fmt.Errorf("sendPhoto: %s", resp.Description)
+	}
+	fileID := ""
+	if n := len(resp.Result.Photo); n > 0 {
+		fileID = resp.Result.Photo[n-1].FileID
+	}
+	return resp.Result.MessageID, fileID, nil
+}
+
+// AlbumPhoto is one photo of SendAlbum.
+type AlbumPhoto struct{ Photo, Caption string }
+
+// SendAlbum sends 2–10 photos as one album (a single photo is sent on its own).
+func (c *Client) SendAlbum(ctx context.Context, chatID int64, photos []AlbumPhoto) error {
+	if len(photos) == 1 {
+		_, _, err := c.SendPhotoID(ctx, chatID, photos[0].Photo, photos[0].Caption, nil)
+		return err
+	}
+	media := make([]map[string]any, 0, len(photos))
+	for _, p := range photos {
+		media = append(media, map[string]any{"type": "photo", "media": p.Photo, "caption": p.Caption, "parse_mode": "HTML"})
+	}
+	return c.call(ctx, "sendMediaGroup", map[string]any{"chat_id": chatID, "media": media}, nil)
+}
+
+// EditMessageCaption edits the caption of a photo message.
+func (c *Client) EditMessageCaption(ctx context.Context, chatID int64, messageID int, caption string, kb *InlineKeyboardMarkup) error {
+	payload := map[string]any{"chat_id": chatID, "message_id": messageID, "caption": caption, "parse_mode": "HTML"}
+	if kb != nil {
+		payload["reply_markup"] = kb
+	}
+	return c.call(ctx, "editMessageCaption", payload, nil)
+}
+
+// EditInlineCaption edits the caption of a photo sent through inline mode.
+func (c *Client) EditInlineCaption(ctx context.Context, inlineMessageID, caption string, kb *InlineKeyboardMarkup) error {
+	payload := map[string]any{"inline_message_id": inlineMessageID, "caption": caption, "parse_mode": "HTML"}
+	if kb != nil {
+		payload["reply_markup"] = kb
+	}
+	return c.call(ctx, "editMessageCaption", payload, nil)
+}
+
 // AnswerCallbackURL answers a button press by opening a t.me/<bot>?start=... link.
 func (c *Client) AnswerCallbackURL(ctx context.Context, callbackID, url string) error {
 	return c.call(ctx, "answerCallbackQuery", map[string]any{"callback_query_id": callbackID, "url": url}, nil)
@@ -184,13 +239,16 @@ func (c *Client) AnswerCallbackAlert(ctx context.Context, callbackID, text strin
 	return c.call(ctx, "answerCallbackQuery", map[string]any{"callback_query_id": callbackID, "text": text, "show_alert": alert}, nil)
 }
 
-// InlineArticle is one result of an inline query: a ready-made message the user can send.
+// InlineArticle is one result of an inline query: a ready-made message the user can send. With
+// PhotoFileID (a photo this bot has sent) or PhotoURL (a JPEG) it is a photo captioned with Text.
 type InlineArticle struct {
 	ID          string
 	Title       string
 	Description string
 	Text        string
 	Keyboard    *InlineKeyboardMarkup
+	PhotoFileID string
+	PhotoURL    string
 }
 
 // AnswerInlineQuery answers with personal, uncached results. startText and startParam add a
@@ -200,6 +258,12 @@ func (c *Client) AnswerInlineQuery(ctx context.Context, queryID string, results 
 	for _, r := range results {
 		item := map[string]any{"type": "article", "id": r.ID, "title": r.Title, "description": r.Description,
 			"input_message_content": map[string]any{"message_text": r.Text, "parse_mode": "HTML"}}
+		switch {
+		case r.PhotoFileID != "":
+			item = map[string]any{"type": "photo", "id": r.ID, "photo_file_id": r.PhotoFileID, "title": r.Title, "description": r.Description, "caption": r.Text, "parse_mode": "HTML"}
+		case r.PhotoURL != "":
+			item = map[string]any{"type": "photo", "id": r.ID, "photo_url": r.PhotoURL, "thumbnail_url": r.PhotoURL, "title": r.Title, "description": r.Description, "caption": r.Text, "parse_mode": "HTML"}
+		}
 		if r.Keyboard != nil {
 			item["reply_markup"] = r.Keyboard
 		}

@@ -28,15 +28,21 @@ type InlineQuery struct {
 }
 
 type Message struct {
-	MessageID int    `json:"message_id"`
-	From      *User  `json:"from,omitempty"`
-	Chat      Chat   `json:"chat"`
-	Text      string `json:"text,omitempty"`
-	Caption   string `json:"caption,omitempty"`
+	MessageID int         `json:"message_id"`
+	From      *User       `json:"from,omitempty"`
+	Chat      Chat        `json:"chat"`
+	Text      string      `json:"text,omitempty"`
+	Caption   string      `json:"caption,omitempty"`
+	Photo     []PhotoSize `json:"photo,omitempty"`
 	// ReplyToMessage is the message this one answers (only its ID is used).
 	ReplyToMessage *struct {
 		MessageID int `json:"message_id"`
 	} `json:"reply_to_message,omitempty"`
+}
+
+// PhotoSize is one size of a photo; the last one in a message is the largest.
+type PhotoSize struct {
+	FileID string `json:"file_id"`
 }
 
 type User struct {

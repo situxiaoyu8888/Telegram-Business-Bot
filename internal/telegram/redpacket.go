@@ -74,6 +74,8 @@ type usernamer interface {
 type packetEditor interface {
 	EditMessage(context.Context, int64, int, string, *InlineKeyboardMarkup) error
 	EditInlineMessage(context.Context, string, string, *InlineKeyboardMarkup) error
+	EditMessageCaption(context.Context, int64, int, string, *InlineKeyboardMarkup) error
+	EditInlineCaption(context.Context, string, string, *InlineKeyboardMarkup) error
 }
 
 // packetKeyboardFor is the claim button (only while the packet can be claimed) and a link to
@@ -115,18 +117,29 @@ func RefreshPacketMessages(ctx context.Context, s Sender, svc *redpacket.Service
 		inline, _ = svc.InlineMessages(p.ID)
 		group = true
 	}
-	edit := func(err error) {
-		if err != nil && !strings.Contains(err.Error(), "message is not modified") && logger != nil {
+	notModified := func(err error) bool { return err == nil || strings.Contains(err.Error(), "message is not modified") }
+	// A card with a cover is a photo, so its caption is edited; a copy that went out as text
+	// (the photo could not be sent) is edited as text.
+	edit := func(caption, plain func() error) {
+		var err error
+		if p.Cover != "" {
+			if err = caption(); !notModified(err) {
+				err = plain()
+			}
+		} else {
+			err = plain()
+		}
+		if !notModified(err) && logger != nil {
 			logger.Debug("red packet card update failed", zap.String("code", code), zap.Error(err))
 		}
 	}
 	for _, id := range inline {
 		if id != "" {
-			edit(editor.EditInlineMessage(ctx, id, text, kb))
+			edit(func() error { return editor.EditInlineCaption(ctx, id, text, kb) }, func() error { return editor.EditInlineMessage(ctx, id, text, kb) })
 		}
 	}
 	if group && p.ChatID != 0 && p.MessageID != 0 {
-		edit(editor.EditMessage(ctx, p.ChatID, p.MessageID, text, kb))
+		edit(func() error { return editor.EditMessageCaption(ctx, p.ChatID, p.MessageID, text, kb) }, func() error { return editor.EditMessage(ctx, p.ChatID, p.MessageID, text, kb) })
 	}
 }
 
@@ -303,10 +316,17 @@ func (r *Router) handleInlineQuery(ctx context.Context, q *InlineQuery) {
 		if err != nil {
 			continue
 		}
-		results = append(results, InlineArticle{ID: p.Code,
+		item := InlineArticle{ID: p.Code,
 			Title:       fmt.Sprintf("🧧 %s红包 · %s %s", redpacket.TypeNames[p.Type], trimZeros(p.Total), r.packetCurrencyName(p.Currency)),
 			Description: fmt.Sprintf("%s · 已领 %d/%d", p.Greeting, p.ClaimedCount, p.Count),
-			Text:        r.packets.Card(p, claims), Keyboard: r.packetKeyboard(ctx, p)})
+			Text:        r.packets.Card(p, claims), Keyboard: r.packetKeyboard(ctx, p)}
+		// Inline photos by URL must be JPEG; otherwise the photo the bot already sent is reused.
+		if p.CoverFileID != "" {
+			item.PhotoFileID = p.CoverFileID
+		} else if lower := strings.ToLower(p.Cover); strings.HasSuffix(lower, ".jpg") || strings.HasSuffix(lower, ".jpeg") {
+			item.PhotoURL = p.Cover
+		}
+		results = append(results, item)
 	}
 	if err := r.client.AnswerInlineQuery(ctx, q.ID, results, "🧧 发一个新红包", "hb"); err != nil {
 		r.logger.Warn("answer inline query failed", zap.Error(err))
@@ -511,6 +531,20 @@ func (r *Router) handlePacketWizardCallback(ctx context.Context, cb *CallbackQue
 		r.wizardSay(ctx, s, chatID, text, cancelKeyboard(), true)
 	case cb.Data == "hbw:g" && s.Step == "greeting":
 		s.Data["greeting"] = ""
+		r.askCover(ctx, chatID, userID, s)
+	case strings.HasPrefix(cb.Data, "hbw:cv:") && s.Step == "cover":
+		s.Data["cover"], s.Data["cover_name"] = "", ""
+		if id := strings.TrimPrefix(cb.Data, "hbw:cv:"); id != "0" {
+			covers, _ := r.packets.Covers()
+			for _, c := range covers {
+				if strconv.FormatUint(c.ID, 10) == id {
+					s.Data["cover"], s.Data["cover_name"] = id, c.Name
+				}
+			}
+			if sessionString(s, "cover") == "" {
+				return // withdrawn meanwhile; the list stays for another choice
+			}
+		}
 		r.confirmPacket(ctx, chatID, userID, s)
 	case strings.HasPrefix(cb.Data, "hbw:send:") && s.Step == "confirm" && strings.TrimPrefix(cb.Data, "hbw:send:") == sessionString(s, "request_id"):
 		if r.pay != nil {
@@ -578,7 +612,7 @@ func (r *Router) handlePacketWizardInput(ctx context.Context, m *Message, u *mod
 			return
 		}
 		s.Data["greeting"] = text
-		r.confirmPacket(ctx, m.Chat.ID, m.From.ID, s)
+		r.askCover(ctx, m.Chat.ID, m.From.ID, s)
 		return
 	default:
 		return
@@ -589,6 +623,42 @@ func (r *Router) handlePacketWizardInput(ctx context.Context, m *Message, u *mod
 func (r *Router) askGreeting(ctx context.Context, s *session.Session, chatID int64) {
 	kb := &InlineKeyboardMarkup{InlineKeyboard: [][]InlineKeyboardButton{{btn("使用「"+redpacket.DefaultGreeting+"」", "hbw:g")}, {btn("取消", "hbw:x")}}}
 	r.wizardSay(ctx, s, chatID, "请输入祝福语（最多 40 字），或使用默认祝福语：", kb, true)
+}
+
+// askCover offers the console's covers (shown as an album in a private chat); without any it goes
+// straight to the confirmation.
+func (r *Router) askCover(ctx context.Context, chatID, userID int64, s *session.Session) {
+	covers, err := r.packets.Covers()
+	if err != nil || len(covers) == 0 {
+		r.confirmPacket(ctx, chatID, userID, s)
+		return
+	}
+	s.Step = "cover"
+	if err := r.sessions.Set(ctx, userID, *s); err != nil {
+		return
+	}
+	var rows [][]InlineKeyboardButton
+	var album []AlbumPhoto
+	for i, c := range covers {
+		label := "🖼 " + c.Name
+		if c.IsDefault {
+			label += "（默认）"
+		}
+		rows = append(rows, []InlineKeyboardButton{btn(label, "hbw:cv:"+strconv.FormatUint(c.ID, 10))})
+		if i < 10 {
+			album = append(album, AlbumPhoto{Photo: c.ImageURL, Caption: htmlEscape(c.Name)})
+		}
+	}
+	rows = append(rows, []InlineKeyboardButton{btn("不使用封面", "hbw:cv:0")}, []InlineKeyboardButton{btn("取消", "hbw:x")})
+	text := "请选择红包<b>封面</b>："
+	if !inGroupWizard(s) {
+		if err := r.client.SendAlbum(ctx, chatID, album); err != nil {
+			r.logger.Debug("send red packet covers failed", zap.Error(err))
+		} else {
+			text = "请选择红包<b>封面</b>（预览见上方图片）："
+		}
+	}
+	r.wizardSay(ctx, s, chatID, text, &InlineKeyboardMarkup{InlineKeyboard: rows}, false)
 }
 
 func (r *Router) confirmPacket(ctx context.Context, chatID, userID int64, s *session.Session) {
@@ -619,6 +689,9 @@ func (r *Router) confirmPacket(ctx context.Context, chatID, userID int64, s *ses
 	if v := sessionString(s, "password"); v != "" {
 		fmt.Fprintf(&b, "\n口令：<code>%s</code>", htmlEscape(v))
 	}
+	if v := sessionString(s, "cover_name"); v != "" {
+		fmt.Fprintf(&b, "\n封面：%s", htmlEscape(v))
+	}
 	fmt.Fprintf(&b, "\n祝福语：%s\n有效期：%d 小时，未领完自动退回", htmlEscape(greeting), r.packets.ExpireHours())
 	switch {
 	case inGroupWizard(s):
@@ -635,9 +708,10 @@ func (r *Router) confirmPacket(ctx context.Context, chatID, userID int64, s *ses
 func (r *Router) sendPacket(ctx context.Context, chatID int64, msgID int, u *model.TelegramUser, s *session.Session) {
 	count, _ := strconv.Atoi(sessionString(s, "count"))
 	group, _ := strconv.ParseInt(sessionString(s, "group"), 10, 64)
+	cover, _ := strconv.ParseUint(sessionString(s, "cover"), 10, 64)
 	p, err := r.packets.Create(redpacket.CreateInput{BotID: r.botID, SenderUserID: u.ID, SenderTelegramID: u.TelegramUserID, SenderName: displayName(u),
 		Type: sessionString(s, "type"), Currency: sessionString(s, "currency"), Amount: sessionString(s, "amount"), Count: count,
-		Target: sessionString(s, "target"), Password: sessionString(s, "password"), Greeting: sessionString(s, "greeting"), ChatID: group, RequestID: sessionString(s, "request_id")})
+		Target: sessionString(s, "target"), Password: sessionString(s, "password"), Greeting: sessionString(s, "greeting"), ChatID: group, RequestID: sessionString(s, "request_id"), CoverID: cover})
 	_ = r.sessions.Clear(ctx, u.TelegramUserID)
 	if err != nil {
 		msg := "发红包失败，请稍后再试。"
@@ -660,7 +734,14 @@ func (r *Router) sendPacket(ctx context.Context, chatID int64, msgID int, u *mod
 		return
 	}
 	if inGroupWizard(s) {
-		// The wizard message becomes the packet card.
+		// The wizard message becomes the packet card; a card with a cover is a new photo message.
+		if p.Cover != "" {
+			if id, err := r.postCard(ctx, chatID, p, r.packetKeyboard(ctx, p)); err == nil {
+				_ = r.client.DeleteMessage(ctx, chatID, msgID)
+				_ = r.packets.SetMessage(p.ID, chatID, id)
+				return
+			}
+		}
 		_ = r.packets.SetMessage(p.ID, chatID, msgID)
 		p.ChatID, p.MessageID = chatID, msgID
 		_ = r.client.EditMessage(ctx, chatID, msgID, r.packets.Card(p, nil), r.packetKeyboard(ctx, p))
@@ -668,7 +749,7 @@ func (r *Router) sendPacket(ctx context.Context, chatID int64, msgID int, u *mod
 	}
 	note := "✅ 红包已创建。点击「发送到群聊/好友」选择聊天即可发出。"
 	if group != 0 {
-		id, err := r.client.SendMessageID(ctx, group, r.packets.Card(p, nil), r.packetKeyboard(ctx, p))
+		id, err := r.postCard(ctx, group, p, r.packetKeyboard(ctx, p))
 		if err == nil {
 			_ = r.packets.SetMessage(p.ID, group, id)
 			p.ChatID, p.MessageID = group, id
@@ -680,5 +761,27 @@ func (r *Router) sendPacket(ctx context.Context, chatID int64, msgID int, u *mod
 	}
 	r.editOrSend(ctx, chatID, msgID, note, nil)
 	kb := &InlineKeyboardMarkup{InlineKeyboard: [][]InlineKeyboardButton{{{Text: "📤 发送到群聊/好友", SwitchInlineQuery: "hb " + p.Code}}, {btn("🧧 再发一个", "hbw:new")}}}
-	_ = r.client.SendMessage(ctx, chatID, r.packets.Card(p, nil), kb)
+	_, _ = r.postCard(ctx, chatID, p, kb)
+}
+
+// postCard sends a new packet card: the cover photo captioned with the card, or text when there
+// is no cover or the photo cannot be sent. The first photo sent records the cover's file ID.
+func (r *Router) postCard(ctx context.Context, chatID int64, p *model.RedPacket, kb *InlineKeyboardMarkup) (int, error) {
+	text := r.packets.Card(p, nil)
+	if p.Cover != "" {
+		photo := p.CoverFileID
+		if photo == "" {
+			photo = p.Cover
+		}
+		id, fileID, err := r.client.SendPhotoID(ctx, chatID, photo, text, kb)
+		if err == nil {
+			if p.CoverFileID == "" && fileID != "" {
+				p.CoverFileID = fileID
+				_ = r.packets.SetCoverFile(p.ID, fileID)
+			}
+			return id, nil
+		}
+		r.logger.Warn("send red packet cover failed", zap.Int64("chat_id", chatID), zap.Error(err))
+	}
+	return r.client.SendMessageID(ctx, chatID, text, kb)
 }

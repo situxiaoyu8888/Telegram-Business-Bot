@@ -2,7 +2,10 @@ package redpacket
 
 import (
 	"fmt"
+	"html"
+	"regexp"
 	"strings"
+	"unicode/utf16"
 
 	"github.com/shopspring/decimal"
 
@@ -25,8 +28,31 @@ func (s *Service) Open(p *model.RedPacket) bool {
 	return p.Status == StatusActive && p.ClaimedCount < p.Count && s.now().Before(p.ExpiresAt)
 }
 
-// Card is the HTML message showing a packet and its latest claims.
+// captionLimit is Telegram's caption length (visible characters, in UTF-16 units).
+const captionLimit = 1024
+
+var tags = regexp.MustCompile(`<[^>]*>`)
+
+func visibleLen(h string) int {
+	return len(utf16.Encode([]rune(html.UnescapeString(tags.ReplaceAllString(h, "")))))
+}
+
+// Card is the HTML message showing a packet and its latest claims. A packet with a cover is a
+// photo whose caption is the card, so fewer claims are listed when the caption would be too long.
 func (s *Service) Card(p *model.RedPacket, claims []model.RedPacketClaim) string {
+	if p.Cover == "" {
+		return s.card(p, claims, 15)
+	}
+	var text string
+	for _, n := range []int{15, 10, 5, 0} {
+		if text = s.card(p, claims, n); visibleLen(text) <= captionLimit {
+			break
+		}
+	}
+	return text
+}
+
+func (s *Service) card(p *model.RedPacket, claims []model.RedPacketClaim, show int) string {
 	cur, unit := p.Currency, p.Currency
 	if c, err := s.wallet.Currency(p.Currency); err == nil {
 		cur, unit = c.Name, c.Name
@@ -69,8 +95,8 @@ func (s *Service) Card(p *model.RedPacket, claims []model.RedPacketClaim) string
 		b.WriteString("\n")
 		// The latest claims are listed; long packets would exceed the message size otherwise.
 		start := 0
-		if len(claims) > 15 {
-			start = len(claims) - 15
+		if len(claims) > show {
+			start = len(claims) - show
 			fmt.Fprintf(&b, "\n…… 另有 %d 人", start)
 		}
 		for i := start; i < len(claims); i++ {

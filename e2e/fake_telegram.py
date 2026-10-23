@@ -60,7 +60,15 @@ class H(BaseHTTPRequestHandler):
                 next_message[0] += 1
                 sent.append({"bot": bot_id, "method": method, **data, "mid": next_message[0]})
                 mid = next_message[0]
-            return self.reply({"ok": True, "result": {"message_id": mid, "chat": {"id": data.get("chat_id")}, "date": int(time.time())}})
+            result = {"message_id": mid, "chat": {"id": data.get("chat_id")}, "date": int(time.time())}
+            if method == "sendPhoto":
+                result["photo"] = [{"file_id": f"fid-small-{mid}"}, {"file_id": f"fid-{mid}"}]
+            return self.reply({"ok": True, "result": result})
+        if method == "sendMediaGroup":
+            with lock:
+                next_message[0] += 1
+                sent.append({"bot": bot_id, "method": method, **data, "mid": next_message[0]})
+            return self.reply({"ok": True, "result": []})
         if method in ("answerCallbackQuery", "answerInlineQuery", "setMyCommands", "deleteMessage"):
             with lock:
                 sent.append({"bot": bot_id, "method": method, **data})
