@@ -224,15 +224,23 @@ async function route(){
  const hash=pageHash();const version=++renderVersion;
  $('bottom').innerHTML='';window.scrollTo(0,0);
  const root=['#/','#/exchange','#/cart','#/orders','#/me'].includes(hash)||/^#\/orders\/\w+$/.test(hash);
- $('tabbar').hidden=!root;document.body.style.paddingBottom=root?'':'0';
+ // The tab bar stays on every page; a page's own bottom bar (bottomBar) takes its place.
+ $('tabbar').hidden=false;document.body.style.paddingBottom='';
  renderTabs(hash);
  if(tg?.BackButton){root?tg.BackButton.hide():tg.BackButton.show()}
  for(const [re,fn] of routes){const m=hash.match(re);if(m){$('app').innerHTML='<div class="loading">加载中…</div>';try{await fn(version,...m.slice(1))}catch(e){if(version===renderVersion)$('app').innerHTML=`<div class="empty">${esc(e.message)}<br><br><button class="btn ghost sm" onclick="route()">重试</button></div>`}return}}
  location.hash='#/'}
 function stale(v){return v!==renderVersion}
-function renderTabs(hash){$('tabbar').innerHTML=tabs.map(([h,label,ic])=>{const on=hash===h||(h==='#/orders'&&hash.startsWith('#/orders'));return `<button class="${on?'on':''}" onclick="location.hash='${h}'">${svg(ic)}<span>${label}</span>${h==='#/cart'&&cartCount?`<span class="badge">${cartCount>99?'99+':cartCount}</span>`:''}</button>`}).join('')}
+// tabOf is the tab a page belongs to, which stays highlighted on its sub-pages.
+function tabOf(hash){
+ if(hash==='#/'||/^#\/(merchant|product|group)\//.test(hash))return '#/';
+ if(/^#\/(exchange|cart|orders)/.test(hash))return '#/'+hash.slice(2).match(/^\w+/)[0];
+ if(/^#\/(checkout)/.test(hash))return '#/cart';
+ if(/^#\/(order|aftersale|review)\//.test(hash))return '#/orders';
+ return '#/me'}
+function renderTabs(hash){const cur=tabOf(hash);$('tabbar').innerHTML=tabs.map(([h,label,ic])=>{const on=cur===h;return `<button class="${on?'on':''}" onclick="location.hash='${h}'">${svg(ic)}<span>${label}</span>${h==='#/cart'&&cartCount?`<span class="badge">${cartCount>99?'99+':cartCount}</span>`:''}</button>`}).join('')}
 async function refreshCartCount(){try{const c=await api('cart');cartCount=c.reduce((n,x)=>n+x.quantity,0);renderTabs(location.hash||'#/')}catch(e){}}
-function bottomBar(html){$('bottom').innerHTML=`<div class="bar">${html}</div>`;document.body.style.paddingBottom='calc(64px + env(safe-area-inset-bottom))'}
+function bottomBar(html){$('bottom').innerHTML=`<div class="bar">${html}</div>`;$('tabbar').hidden=true;document.body.style.paddingBottom='calc(64px + env(safe-area-inset-bottom))'}
 const imgOr=(src,cls='')=>src?`<img src="${esc(src)}" alt="" loading="lazy" class="${cls}">`:svg('img');
 
 // ---- Home ----

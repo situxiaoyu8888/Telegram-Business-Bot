@@ -174,6 +174,13 @@ async function toastText(page) { return page.$eval('#toast', e => e.hidden ? '' 
   await shopPage.click('.chip:has-text("中餐")'); await shopPage.waitForTimeout(900);
   if (!(await shopPage.locator('#grid', { hasText: '宫保鸡丁' }).count())) problems.push('console category tab does not list its products');
   await setCategoriesFromMenu(admin, true);
+  // Products then take their merchant's menu category; the form shows it instead of a choice.
+  await nav(admin, 'shop_products');
+  if (!(await admin.textContent('#content')).includes('美食 · 餐厅')) problems.push('products do not show their menu category');
+  await admin.click(`[data-action="edit"][data-id="${meal.id}"]`); await admin.waitForTimeout(500); await shot(admin, '04b-product-menu-category');
+  if ((await admin.inputValue('#spCatInfo').catch(() => '')) !== '美食 · 餐厅' || await admin.$('#spCategoryTrigger')) problems.push('product form does not follow the menu category');
+  await submitModal(admin);
+  if (sql(`select category_id from shop_products where id=${meal.id}`) === '0') problems.push('saving in menu mode dropped the hand-kept category');
 
   step('shop home');
   await shopPage.goto(SHOP_BASE + '/shop/#/'); await shopPage.reload(); // reopened after the switch
@@ -257,6 +264,7 @@ async function toastText(page) { return page.$eval('#toast', e => e.hidden ? '' 
 
   step('virtual product buy now');
   await shopPage.goto(SHOP_BASE + '/shop/#/product/' + card.id); await shopPage.waitForTimeout(800);
+  if (await shopPage.isVisible('#tabbar')) problems.push('tab bar shown under the product page bar');
   await shopPage.click('#buyNow'); await shopPage.waitForTimeout(1200);
   await shopPage.click('#pay'); await enterPin(shopPage); await shopPage.waitForTimeout(1500); await shot(shopPage, '19-virtual-delivered');
   const note = await shopPage.textContent('.code').catch(() => '');
@@ -625,6 +633,8 @@ async function toastText(page) { return page.$eval('#toast', e => e.hidden ? '' 
   if (actions.join(',') !== '💰充值,💸提现,🔁转账,🧧发红包') problems.push('我的 wallet actions wrong: ' + actions.join(','));
   await shot(shopPage, '56-shop-me-wallet');
   await shopPage.click('.wact button:nth-child(1)'); await shopPage.waitForTimeout(800); await shot(shopPage, '56a-shop-deposit');
+  // Sub-pages keep the tab bar, with their section's tab highlighted.
+  if (!(await shopPage.isVisible('#tabbar')) || (await shopPage.textContent('#tabbar .on')).trim() !== '我的') problems.push('tab bar missing or wrong tab on a 我的 sub-page');
   if (!/充值/.test(await shopPage.textContent('#app'))) problems.push('deposit page not shown');
   // Transfer 1.5 USDT to 小红 by Telegram ID.
   await shopPage.goto(SHOP_BASE + '/shop/#/transfer'); await shopPage.waitForTimeout(800);
