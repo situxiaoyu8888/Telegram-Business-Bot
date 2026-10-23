@@ -131,6 +131,7 @@ img{display:block;max-width:100%}
 .menu-grid button:nth-child(odd){border-right:1px solid var(--line)}
 .menu-grid button span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .field .row input{flex:1;min-width:0}
+.dep-qr{display:block;width:200px;height:200px;margin:4px auto 14px;border-radius:12px;background:#fff;padding:8px;image-rendering:pixelated}
 .wact{display:grid;grid-template-columns:repeat(4,1fr);padding:14px 4px}
 .wact button{display:flex;flex-direction:column;align-items:center;gap:6px;font-size:13px;min-width:0}
 .wact i{font-style:normal;width:44px;height:44px;border-radius:14px;display:grid;place-items:center;font-size:22px;background:color-mix(in srgb,var(--brand) 12%,transparent)}
@@ -560,8 +561,9 @@ const dateText=v=>new Date(v).toLocaleString('zh-CN');
 const copyText=(text,okMsg)=>navigator.clipboard?.writeText(text).then(()=>toast(okMsg||'已复制'),()=>toast('请长按内容复制'));
 async function depositPage(v){
  const d=await api('wallet/deposit');if(stale(v))return;
- $('app').innerHTML=`<div class="card"><h3>💰 USDT ${esc(d.network)} 充值</h3>${d.address?`<div class="muted small">你的专属充值地址</div><div class="code" id="depAddr" style="margin:6px 0 12px">${esc(d.address)}</div><button class="btn block" id="depCopy">复制地址</button><div class="muted small" style="margin-top:12px">⚠️ ${esc(d.notice)}<br>链上到账后自动存入钱包，无需提交任何信息。</div>`:'<div class="muted">尚未为你的账号分配充值地址，请联系客服。</div>'}</div><div class="card small muted">人民币、泰铢等其他币种请联系客服充值，到账后显示在钱包余额中。</div>`;
- if(d.address)$('depCopy').onclick=()=>copyText(d.address,'地址已复制')}
+ const box=a=>`<div class="card"><h3>💰 USDT-${esc(a.network)} 充值</h3>${a.qr?`<img class="dep-qr" src="${a.qr}" alt="充值地址二维码">`:''}<div class="muted small">平台为你分配的收款地址（扫码或复制）</div><div class="code" style="margin:6px 0 12px">${esc(a.address)}</div><button class="btn block" data-copy="${esc(a.address)}">复制地址</button><div class="muted small" style="margin-top:12px">⚠️ ${esc(a.notice)}<br>${a.auto?'链上到账后自动存入钱包，无需提交任何信息。':'到账后由客服确认并存入钱包，如有疑问请联系客服。'}</div></div>`;
+ $('app').innerHTML=(d.addresses.length?d.addresses.map(box).join(''):'<div class="card"><h3>💰 USDT 充值</h3><div class="muted">尚未为你的账号分配充值地址，请联系客服。</div></div>')+'<div class="card small muted">人民币、泰铢等其他币种请联系客服充值，到账后显示在钱包余额中。</div>';
+ document.querySelectorAll('[data-copy]').forEach(b=>b.onclick=()=>copyText(b.dataset.copy,'地址已复制'))}
 let wdState={cur:'',rid:''};
 const wdStatus={pending:'待审核',approved:'已审核，待打款',completed:'已完成',rejected:'已拒绝'};
 async function withdrawPage(v){

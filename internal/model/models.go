@@ -50,6 +50,20 @@ type DepositAddress struct {
 	UpdatedAt     time.Time `json:"updated_at"`
 }
 
+// DepositPoolAddress is a receiving address owned by the operator. The console assigns it to a
+// user as their deposit address (UserID, 0 while free); an address replaced later is retired
+// (Status 0) and never handed to anyone else, so late deposits to it stay attributable.
+type DepositPoolAddress struct {
+	ID         uint64     `gorm:"primaryKey" json:"id"`
+	Network    string     `gorm:"size:16;index;not null" json:"network"`
+	Address    string     `gorm:"size:128;uniqueIndex;not null" json:"address"`
+	Remark     string     `gorm:"size:64;not null;default:''" json:"remark"`
+	UserID     uint64     `gorm:"index;not null;default:0" json:"user_id"`
+	Status     int8       `gorm:"not null;default:1" json:"status"`
+	AssignedAt *time.Time `json:"assigned_at"`
+	CreatedAt  time.Time  `json:"created_at"`
+}
+
 type DepositOrder struct {
 	ID             uint64    `gorm:"primaryKey" json:"id"`
 	UserID         uint64    `gorm:"index;not null" json:"user_id"`
@@ -80,6 +94,7 @@ type WithdrawalOrder struct {
 	ReviewNote string     `gorm:"size:255" json:"review_note"`
 	ReviewedBy string     `gorm:"size:128" json:"reviewed_by"`
 	ReviewedAt *time.Time `json:"reviewed_at"`
+	BotID      uint64     `gorm:"not null;default:0" json:"bot_id"` // the bot (0 = primary) the user asked through; it sends the review notices
 	CreatedAt  time.Time  `json:"created_at"`
 	UpdatedAt  time.Time  `json:"updated_at"`
 }

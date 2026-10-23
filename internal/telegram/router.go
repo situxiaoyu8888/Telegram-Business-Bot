@@ -15,6 +15,7 @@ import (
 	"telegram-business-bot/internal/model"
 	"telegram-business-bot/internal/news"
 	"telegram-business-bot/internal/paypass"
+	"telegram-business-bot/internal/qrcode"
 	"telegram-business-bot/internal/redpacket"
 	"telegram-business-bot/internal/referral"
 	"telegram-business-bot/internal/session"
@@ -422,7 +423,8 @@ func (r *Router) submitWithdrawal(ctx context.Context, chatID int64, msgID int, 
 		r.editOrSend(ctx, chatID, msgID, "提现提交失败："+htmlEscape(err.Error()), ptrKB(BackHomeKeyboard()))
 		return
 	}
-	r.editOrSend(ctx, chatID, msgID, fmt.Sprintf("<b>✅ 提现申请已提交</b>\n\n订单：<code>#%d</code>\n状态：待审核\n金额：<code>%s %s</code>\n\n%s", order.ID, trimZeros(order.Amount), htmlEscape(withdrawName(s)), map[bool]string{true: "审核通过后由财务人工打款。", false: "审核通过后由独立钱包/签名服务执行链上转账。"}[order.Network == "BANK"]), ptrKB(BackHomeKeyboard()))
+	_ = r.wallet.SetWithdrawalBot(order.ID, r.botID)
+	r.editOrSend(ctx, chatID, msgID, fmt.Sprintf("<b>✅ 提现申请已提交</b>\n\n订单编号：<code>%s</code>\n状态：待审核\n金额：<code>%s %s</code>\n\n%s", wallet.OrderNo("W", order.ID, order.CreatedAt), trimZeros(order.Amount), htmlEscape(withdrawName(s)), map[bool]string{true: "审核通过后由财务人工打款。", false: "审核通过后由独立钱包/签名服务执行链上转账。"}[order.Network == "BANK"]), ptrKB(BackHomeKeyboard()))
 }
 
 func (r *Router) dispatchMenu(ctx context.Context, cb *CallbackQuery, u *model.TelegramUser, item model.MenuItem) {
@@ -500,18 +502,34 @@ func (r *Router) dispatchMenu(ctx context.Context, cb *CallbackQuery, u *model.T
 		}
 		_ = r.menuResponse(ctx, chatID, msgID, text, r.walletKeyboard())
 	case "deposit":
-		var a model.DepositAddress
-		err := r.store.DB.Where("user_id=? AND network='TRC20' AND status=1", u.ID).First(&a).Error
-		addr := a.Address
-		if err != nil {
-			addr = ""
-		}
-		notice := r.menus.Config("deposit_notice", "仅支持 USDT TRC20")
-		if addr == "" {
-			_ = r.menuResponse(ctx, chatID, msgID, "<b>💵 USDT TRC20 充值</b>\n\n尚未为你的账号分配充值地址，请联系管理员在后台绑定。", ptrKB(BackHomeKeyboard()))
+		var list []model.DepositAddress
+		_ = r.store.DB.Where("user_id=? AND status=1 AND network IN ?", u.ID, []string{"TRC20", "ERC20"}).Order("network desc").Find(&list).Error
+		if len(list) == 0 {
+			_ = r.menuResponse(ctx, chatID, msgID, "<b>💵 USDT 充值</b>\n\n尚未为你的账号分配充值地址，请联系管理员在后台绑定。", ptrKB(BackHomeKeyboard()))
 			return
 		}
-		_ = r.menuResponse(ctx, chatID, msgID, "<b>💵 USDT TRC20 充值</b>\n\n地址：\n<code>"+htmlEscape(addr)+"</code>\n\n⚠️ "+htmlEscape(notice), ptrKB(BackHomeKeyboard()))
+		var b strings.Builder
+		b.WriteString("<b>💵 USDT 充值</b>\n\n以下是平台为你分配的收款地址，转账成功后会通知你。")
+		captions := make([]string, len(list))
+		for i, a := range list {
+			if a.Network == "TRC20" {
+				captions[i] = "<b>USDT-TRC20</b>（到账后自动入账）\n<code>" + htmlEscape(a.Address) + "</code>\n⚠️ " + htmlEscape(r.menus.Config("deposit_notice", "仅支持 USDT TRC20"))
+			} else {
+				captions[i] = "<b>USDT-ERC20</b>（到账后由客服确认入账）\n<code>" + htmlEscape(a.Address) + "</code>\n⚠️ 仅支持以太坊网络的 USDT（ERC20）"
+			}
+			b.WriteString("\n\n" + captions[i])
+		}
+		_ = r.menuResponse(ctx, chatID, msgID, b.String(), ptrKB(BackHomeKeyboard()))
+		// A QR code per address, for scanning with a wallet app.
+		for i, a := range list {
+			png, err := qrcode.PNG(a.Address)
+			if err == nil {
+				err = r.client.UploadPhoto(ctx, chatID, png, "📷 扫码充值 · "+captions[i], nil)
+			}
+			if err != nil {
+				r.logger.Warn("send deposit QR code failed", zap.Error(err))
+			}
+		}
 	case "withdraw":
 		_ = r.sessions.Set(ctx, u.TelegramUserID, session.Session{Scene: "withdraw", Step: "select_network", Data: map[string]any{}})
 		list, err := r.wallet.Currencies(true)

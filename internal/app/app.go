@@ -156,6 +156,8 @@ func New(cfg config.Config, logger *zap.Logger) (*App, error) {
 		cfg.UploadMaxImageMB,
 		cfg.UploadMaxVideoMB,
 	).WithBots(bots).WithShop(shopSvc).WithNews(newsSvc).WithPayPassword(payPass).WithLogger(logger).WithPublicURL(cfg.AdminPublicURL)
+	// New on-chain deposits are announced to the user through a bot that reaches them.
+	walletSvc.WithDepositHook(a.admin.NotifyDeposit)
 	a.listeners = []Listener{{Addr: cfg.HTTPAddr, Handler: engine, Serves: "webhooks, uploads"}}
 	if !cfg.Split() {
 		shopHandler.Register(engine)

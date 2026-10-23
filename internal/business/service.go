@@ -152,6 +152,35 @@ func (s *Service) Sender(ctx context.Context, id uint64) (telegram.Sender, error
 	return telegram.NewClient(token), nil
 }
 
+// NotifyUser sends an HTML message to a user through the first bot that reaches them: prefer
+// (the bot they used for the operation), then the primary bot, then the other enabled business
+// bots except news bots. A bot can only message users who have started it.
+func (s *Service) NotifyUser(ctx context.Context, prefer uint64, telegramUserID int64, html string) error {
+	ids := []uint64{prefer}
+	if prefer != 0 {
+		ids = append(ids, 0)
+	}
+	var rows []model.BusinessBot
+	if err := s.st.DB.WithContext(ctx).Where("enabled = ? AND purpose <> ?", true, "news").Order("id asc").Find(&rows).Error; err == nil {
+		for _, b := range rows {
+			if b.ID != prefer {
+				ids = append(ids, b.ID)
+			}
+		}
+	}
+	var last error
+	for _, id := range ids {
+		sender, err := s.Sender(ctx, id)
+		if err == nil {
+			if err = sender.SendMessageWithParseMode(ctx, telegramUserID, html, "HTML", nil); err == nil {
+				return nil
+			}
+		}
+		last = err
+	}
+	return last
+}
+
 // BotToken pairs a bot ID (0 = primary bot) with its token.
 type BotToken struct {
 	ID    uint64

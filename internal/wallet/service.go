@@ -17,6 +17,7 @@ import (
 type Service struct {
 	st                                 *store.Store
 	currency, minWithdraw, withdrawFee string
+	onDeposit                          func(model.DepositOrder)
 }
 
 func New(st *store.Store, currency, minWithdraw, withdrawFee string) *Service {
@@ -39,13 +40,29 @@ func (s *Service) Balance(userID uint64) (decimal.Decimal, decimal.Decimal, erro
 	return av, fr, e
 }
 
+// OrderNo is how a wallet record is numbered for people: a kind letter (W withdrawal, D on-chain
+// deposit, A console adjustment), the creation date and the record ID, e.g. W20261023000042.
+func OrderNo(kind string, id uint64, created time.Time) string {
+	return fmt.Sprintf("%s%s%06d", kind, created.Format("20060102"), id)
+}
+
+// WithDepositHook sets what runs after a new on-chain deposit is credited (telling the user).
+func (s *Service) WithDepositHook(f func(model.DepositOrder)) *Service { s.onDeposit = f; return s }
+
+// SetWithdrawalBot records which bot a withdrawal was requested through; its review notices go
+// out through that bot.
+func (s *Service) SetWithdrawalBot(id, botID uint64) error {
+	return s.st.DB.Model(&model.WithdrawalOrder{}).Where("id = ?", id).Update("bot_id", botID).Error
+}
+
 func (s *Service) CreditDeposit(order model.DepositOrder) error {
 	amount, err := decimal.NewFromString(order.Amount)
 	if err != nil || !amount.IsPositive() || !amount.Equal(amount.Truncate(6)) || strings.TrimSpace(order.TxID) == "" {
 		return fmt.Errorf("invalid deposit")
 	}
 
-	return s.st.DB.Transaction(func(tx *gorm.DB) error {
+	credited := false
+	err = s.st.DB.Transaction(func(tx *gorm.DB) error {
 		var n int64
 		if err := tx.Model(&model.DepositOrder{}).Where("tx_id=?", order.TxID).Count(&n).Error; err != nil {
 			return err
@@ -79,8 +96,13 @@ func (s *Service) CreditDeposit(order model.DepositOrder) error {
 		if err := tx.Create(&order).Error; err != nil {
 			return err
 		}
+		credited = true
 		return tx.Create(&model.WalletTransaction{UserID: order.UserID, Currency: s.currency, Type: "deposit", Amount: amt.StringFixed(6), Balance: newBal.StringFixed(6), RefType: "deposit", RefID: order.ID, Remark: "TRC20 deposit"}).Error
 	})
+	if err == nil && credited && s.onDeposit != nil {
+		s.onDeposit(order)
+	}
+	return err
 }
 
 func (s *Service) CreateWithdrawal(userID uint64, network, address, amountText, requestID string) (*model.WithdrawalOrder, error) {

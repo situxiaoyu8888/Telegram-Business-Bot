@@ -2,7 +2,7 @@ package shop
 
 import (
 	"context"
-	"errors"
+	"encoding/base64"
 	"fmt"
 	"html"
 	"strings"
@@ -10,9 +10,9 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/shopspring/decimal"
 	"go.uber.org/zap"
-	"gorm.io/gorm"
 
 	"telegram-business-bot/internal/model"
+	"telegram-business-bot/internal/qrcode"
 	"telegram-business-bot/internal/redpacket"
 	"telegram-business-bot/internal/telegram"
 	"telegram-business-bot/internal/wallet"
@@ -63,10 +63,12 @@ func (h *Handler) notify(ctx context.Context, botID uint64, telegramUserID int64
 	}
 }
 
+// depositInfo returns the buyer's deposit addresses: TRC20 (credited automatically) first, then
+// ERC20 (credited from the console once the deposit is confirmed).
 func (h *Handler) depositInfo(c *gin.Context) {
-	var a model.DepositAddress
-	err := h.st.DB.Where("user_id = ? AND network = 'TRC20' AND status = 1", buyer(c).UserID).First(&a).Error
-	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+	list := []model.DepositAddress{}
+	err := h.st.DB.Where("user_id = ? AND status = 1 AND network IN ?", buyer(c).UserID, []string{"TRC20", "ERC20"}).Order("network desc").Find(&list).Error
+	if err != nil {
 		h.fail(c, err)
 		return
 	}
@@ -74,7 +76,25 @@ func (h *Handler) depositInfo(c *gin.Context) {
 	if notice == "" {
 		notice = "仅支持 USDT TRC20"
 	}
-	h.reply(c, gin.H{"address": a.Address, "network": "TRC20", "notice": notice}, nil)
+	type address struct {
+		Network string `json:"network"`
+		Address string `json:"address"`
+		Auto    bool   `json:"auto"`
+		Notice  string `json:"notice"`
+		QR      string `json:"qr"` // PNG data URI
+	}
+	out := []address{}
+	for _, a := range list {
+		row := address{a.Network, a.Address, true, notice, ""}
+		if a.Network != "TRC20" {
+			row.Auto, row.Notice = false, "仅支持以太坊网络的 USDT（ERC20）"
+		}
+		if png, err := qrcode.PNG(a.Address); err == nil {
+			row.QR = "data:image/png;base64," + base64.StdEncoding.EncodeToString(png)
+		}
+		out = append(out, row)
+	}
+	h.reply(c, gin.H{"addresses": out}, nil)
 }
 
 func (h *Handler) withdrawInfo(c *gin.Context) {
@@ -115,6 +135,9 @@ func (h *Handler) withdraw(c *gin.Context) {
 		return
 	}
 	order, err := h.svc.wallet.CreateCurrencyWithdrawal(buyer(c).UserID, in.Currency, strings.TrimSpace(in.Address), amount.StringFixed(6), "h5:"+in.RequestID)
+	if err == nil {
+		_ = h.svc.wallet.SetWithdrawalBot(order.ID, buyer(c).BotID)
+	}
 	h.reply(c, order, err)
 }
 

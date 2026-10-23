@@ -632,7 +632,39 @@ async function toastText(page) { return page.$eval('#toast', e => e.hidden ? '' 
   const actions = await shopPage.$$eval('.wact button', bs => bs.map(b => b.textContent.trim()));
   if (actions.join(',') !== '💰充值,💸提现,🔁转账,🧧发红包') problems.push('我的 wallet actions wrong: ' + actions.join(','));
   await shot(shopPage, '56-shop-me-wallet');
+  // Deposit addresses: the operator's addresses go into the pool, then each user gets one per
+  // network from it (picked from a searchable user list); the shop and the bot show both with a
+  // QR code.
+  const TRC = 'TA4Y62o6YC2Zsck9rZVGTvqW1AQ7X9zTnj', ERC = '0x' + 'ab'.repeat(20);
+  for (const [net, addr] of [['TRC20', TRC], ['ERC20', ERC]]) {
+    await nav(admin, 'address_pool'); await admin.click('#create'); await admin.waitForTimeout(400);
+    if (net === 'ERC20') await pick(admin, 'poolNet', 'ERC20');
+    await admin.fill('#poolAddrs', addr); await submitModal(admin);
+  }
+  await admin.waitForTimeout(400); await shot(admin, '57-admin-address-pool');
+  for (const net of ['TRC20', 'ERC20']) {
+    await nav(admin, 'addresses'); await admin.click('#create'); await admin.waitForTimeout(400);
+    await admin.click('#uidTrigger'); await admin.fill('#uidSearch', 'xiaoming'); await admin.waitForTimeout(200);
+    await admin.click(`[data-owner="uid"][data-value="${uid}"]`);
+    if (net === 'ERC20') { await pick(admin, 'network', 'ERC20'); await shot(admin, '57a-admin-address-form'); }
+    await submitModal(admin);
+  }
+  await admin.waitForTimeout(500); await shot(admin, '57b-admin-addresses');
+  if (sql(`select group_concat(concat(network,'=',address) order by network) from deposit_addresses where user_id=${uid}`) !== `ERC20=${ERC},TRC20=${TRC}`) problems.push('pool addresses not assigned');
+  if (sql(`select count(*) from deposit_pool_addresses where user_id=${uid}`) !== '2') problems.push('pool addresses not marked as assigned');
+  if ((await admin.$$('[data-action="rescan"]')).length !== 1) problems.push('rescan offered for a non-TRC20 address');
+  await tap(xm, 'menu:deposit', { message_id: 1, chat: pchat }); await wait(1500);
+  const depositMsg = (await sentNow()).filter(m => m.chat_id === 9001 && /USDT 充值/.test(m.text || '')).pop();
+  if (!depositMsg || !depositMsg.text.includes(TRC) || !depositMsg.text.includes(ERC)) problems.push('bot deposit menu does not show both addresses');
+  const qrs = (await sentNow()).filter(m => m.method === 'sendPhoto' && m.chat_id === 9001 && m.photo?.upload && /扫码充值/.test(m.caption || ''));
+  if (qrs.length !== 2 || qrs.some(q => q.photo.bytes < 200)) problems.push('bot deposit menu did not send both QR codes: ' + qrs.length);
   await shopPage.click('.wact button:nth-child(1)'); await shopPage.waitForTimeout(800); await shot(shopPage, '56a-shop-deposit');
+  const depText = await shopPage.textContent('#app');
+  if (!depText.includes(TRC) || !depText.includes(ERC) || !depText.includes('USDT-ERC20')) problems.push('shop deposit page does not show both addresses');
+  if ((await shopPage.$$('img.dep-qr')).length !== 2) problems.push('shop deposit page has no QR codes');
+  // A console credit (e.g. a confirmed ERC20 deposit) is announced to the user.
+  await adminApi(admin, `users/${uid}/adjust`, 'POST', { currency: 'USDT_ERC20', amount: '5', remark: 'ERC20 充值' }); await wait(1500);
+  if (!(await sentNow()).some(m => m.chat_id === 9001 && /充值到账/.test(m.text || '') && /USDT-ERC20/.test(m.text || ''))) problems.push('console credit not announced to the user');
   // Sub-pages keep the tab bar, with their section's tab highlighted.
   if (!(await shopPage.isVisible('#tabbar')) || (await shopPage.textContent('#tabbar .on')).trim() !== '我的') problems.push('tab bar missing or wrong tab on a 我的 sub-page');
   if (!/充值/.test(await shopPage.textContent('#app'))) problems.push('deposit page not shown');
@@ -656,6 +688,26 @@ async function toastText(page) { return page.$eval('#toast', e => e.hidden ? '' 
   await shot(shopPage, '56d-shop-withdraw');
   await shopPage.click('#wdSubmit'); await enterPin(shopPage); await shopPage.waitForTimeout(1500); await shot(shopPage, '56e-shop-withdrawn');
   if (sql(`select concat(status,' ',amount,' ',actual) from withdrawal_orders where user_id=${uid} and request_id like 'h5:%'`) !== 'pending 10.000000 9.000000') problems.push('shop withdrawal not created');
+  // Approving and paying it out notify the user; the console's detail dialog reads in Chinese.
+  const wdId = sql(`select id from withdrawal_orders where user_id=${uid} and request_id like 'h5:%'`);
+  await adminApi(admin, `withdrawals/${wdId}/approve`, 'POST', { note: '' }); await wait(1200);
+  await adminApi(admin, `withdrawals/${wdId}/complete`, 'POST', { txid: 'e2e-payout-hash' }); await wait(1500);
+  const toXmNow = (await sentNow()).filter(m => m.chat_id === 9001).map(m => m.text || '');
+  if (!toXmNow.some(t => /提现审核已通过/.test(t)) || !toXmNow.some(t => /提现已到账/.test(t) && t.includes('e2e-payout-hash') && /W\d{14}/.test(t))) problems.push('withdrawal review not announced to the user');
+  await nav(admin, 'withdrawals'); await shot(admin, '57e-admin-withdrawals');
+  const wdList = await admin.textContent('#content');
+  if (!/W\d{14}/.test(wdList) || !wdList.includes('@xiaoming') || !wdList.includes('9001')) problems.push('withdrawal list lacks order number or Telegram user');
+  await admin.click(`[data-action="detail"][data-id="${wdId}"]`); await admin.waitForTimeout(500); await shot(admin, '57c-admin-withdrawal-detail');
+  const wdDetail = await admin.textContent('#modalBody');
+  if (!wdDetail.includes('已完成') || !wdDetail.includes('波场 TRC20') || !wdDetail.includes('实际到账') || /completed|TRC20,/.test(wdDetail)) problems.push('withdrawal detail not in Chinese: ' + wdDetail.slice(0, 120));
+  await admin.click('#closeModal').catch(() => admin.keyboard.press('Escape')); await admin.waitForTimeout(300);
+  await nav(admin, 'deposits'); await shot(admin, '57f-admin-deposits');
+  const depList = await admin.textContent('#content');
+  if (!/A\d{14}/.test(depList) || !depList.includes('@xiaoming') || !depList.includes('9001')) problems.push('deposit list lacks order number or Telegram user');
+  await admin.click('[data-action="detail"]'); await admin.waitForTimeout(500); await shot(admin, '57d-admin-deposit-detail');
+  const depDetail = await admin.textContent('#modalBody');
+  if (!/后台加款|链上充值/.test(depDetail) || /admin_credit|chain/.test(depDetail)) problems.push('deposit detail not in Chinese: ' + depDetail.slice(0, 120));
+  await admin.click('#closeModal').catch(() => admin.keyboard.press('Escape')); await admin.waitForTimeout(300);
   // A lucky packet of 2 USDT in 2 shares with the 生日快乐 cover; its card goes to the private chat.
   await shopPage.goto(SHOP_BASE + '/shop/#/redpacket'); await shopPage.waitForTimeout(800);
   await shopPage.selectOption('#rpCur', 'USDT'); await shopPage.fill('#rpAmount', '2'); await shopPage.fill('#rpCount', '2'); await shopPage.fill('#rpGreeting', '周末快乐');

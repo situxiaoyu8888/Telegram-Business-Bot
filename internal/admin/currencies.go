@@ -157,6 +157,9 @@ func (h *Handler) adjustBalance(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "调整失败"})
 		return
 	}
+	if d, err := decimal.NewFromString(strings.TrimSpace(b.Amount)); err == nil && d.IsPositive() {
+		h.notifyCredit(u.ID, b.Currency, d.String(), b.Remark)
+	}
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 

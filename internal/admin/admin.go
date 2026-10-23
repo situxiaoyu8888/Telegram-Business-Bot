@@ -176,7 +176,11 @@ func (h *Handler) RegisterAPI(r *gin.Engine) {
 	api.POST("/users/:id/paypass", can("users"), h.resetPayPassword)
 
 	api.GET("/addresses", can("addresses"), h.addresses)
+	api.GET("/addresses/users", can("addresses"), h.addressUsers)
 	api.POST("/addresses", can("addresses"), h.saveAddress)
+	api.GET("/address-pool", can("addresses"), h.addressPool)
+	api.POST("/address-pool", can("addresses"), h.addPoolAddresses)
+	api.DELETE("/address-pool/:id", can("addresses"), h.deletePoolAddress)
 	api.POST("/addresses/:id/rescan", can("addresses"), func(c *gin.Context) {
 		id, ok := idParam(c)
 		if !ok {
@@ -185,6 +189,10 @@ func (h *Handler) RegisterAPI(r *gin.Engine) {
 		var a model.DepositAddress
 		if err := h.st.DB.First(&a, id).Error; err != nil {
 			c.JSON(404, gin.H{"error": "address not found"})
+			return
+		}
+		if a.Network != "TRC20" {
+			c.JSON(400, gin.H{"error": "只有 TRC20 地址会自动扫描入账；ERC20 到账请在「用户管理」中手动加款"})
 			return
 		}
 		if err := h.st.DB.Model(&a).Update("scan_timestamp", 0).Error; err != nil {
@@ -304,26 +312,63 @@ func (h *Handler) users(c *gin.Context) {
 	c.JSON(http.StatusOK, rows)
 }
 
+// walletUser is who a withdrawal or deposit belongs to, as the console lists it.
+type walletUser struct {
+	TelegramUserID int64  `json:"telegram_user_id"`
+	Username       string `json:"username"`
+	UserName       string `json:"user_name"`
+}
+
+// walletUsers looks up the Telegram identity of the given users.
+func (h *Handler) walletUsers(ids []uint64) map[uint64]walletUser {
+	out := map[uint64]walletUser{}
+	if len(ids) == 0 {
+		return out
+	}
+	var users []model.TelegramUser
+	h.st.DB.Select("id", "telegram_user_id", "username", "first_name", "last_name").Where("id IN ?", ids).Find(&users)
+	for _, u := range users {
+		out[u.ID] = walletUser{TelegramUserID: u.TelegramUserID, Username: u.Username, UserName: strings.TrimSpace(u.FirstName + " " + u.LastName)}
+	}
+	return out
+}
+
+type withdrawalRow struct {
+	model.WithdrawalOrder
+	walletUser
+	OrderNo string `json:"order_no"`
+}
+
 func (h *Handler) withdrawals(c *gin.Context) {
-	var rows []model.WithdrawalOrder
-	h.st.DB.Order("id desc").Limit(200).Find(&rows)
+	var orders []model.WithdrawalOrder
+	h.st.DB.Order("id desc").Limit(200).Find(&orders)
+	ids := make([]uint64, 0, len(orders))
+	for _, o := range orders {
+		ids = append(ids, o.UserID)
+	}
+	users := h.walletUsers(ids)
+	rows := make([]withdrawalRow, 0, len(orders))
+	for _, o := range orders {
+		rows = append(rows, withdrawalRow{WithdrawalOrder: o, walletUser: users[o.UserID], OrderNo: wallet.OrderNo("W", o.ID, o.CreatedAt)})
+	}
 	c.JSON(http.StatusOK, rows)
 }
 
 // depositRow is one line of the deposit page: an on-chain deposit, or a balance adjustment made
 // in the console (credits and debits, any currency).
 type depositRow struct {
-	ID             uint64    `json:"id"`   // adjustments are offset by adjustmentRowBase so IDs never collide
-	Kind           string    `json:"kind"` // chain, admin_credit or admin_debit
-	UserID         uint64    `json:"user_id"`
-	TelegramUserID int64     `json:"telegram_user_id"`
-	Currency       string    `json:"currency"`
-	Network        string    `json:"network"`
-	Amount         string    `json:"amount"`
-	Status         string    `json:"status"`
-	TxID           string    `json:"txid"`
-	Remark         string    `json:"remark"`
-	CreatedAt      time.Time `json:"created_at"`
+	ID     uint64 `json:"id"`   // adjustments are offset by adjustmentRowBase so IDs never collide
+	Kind   string `json:"kind"` // chain, admin_credit or admin_debit
+	UserID uint64 `json:"user_id"`
+	walletUser
+	OrderNo   string    `json:"order_no"`
+	Currency  string    `json:"currency"`
+	Network   string    `json:"network"`
+	Amount    string    `json:"amount"`
+	Status    string    `json:"status"`
+	TxID      string    `json:"txid"`
+	Remark    string    `json:"remark"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
 const adjustmentRowBase = 1_000_000_000_000
@@ -342,23 +387,16 @@ func (h *Handler) deposits(c *gin.Context) {
 	rows := make([]depositRow, 0, len(orders)+len(adjustments))
 	userIDs := []uint64{}
 	for _, o := range orders {
-		rows = append(rows, depositRow{ID: o.ID, Kind: "chain", UserID: o.UserID, Currency: o.Currency, Network: o.Network, Amount: o.Amount, Status: o.Status, TxID: o.TxID, CreatedAt: o.CreatedAt})
+		rows = append(rows, depositRow{ID: o.ID, Kind: "chain", UserID: o.UserID, OrderNo: wallet.OrderNo("D", o.ID, o.CreatedAt), Currency: o.Currency, Network: o.Network, Amount: o.Amount, Status: o.Status, TxID: o.TxID, CreatedAt: o.CreatedAt})
 		userIDs = append(userIDs, o.UserID)
 	}
 	for _, t := range adjustments {
-		rows = append(rows, depositRow{ID: adjustmentRowBase + t.ID, Kind: t.Type, UserID: t.UserID, Currency: t.Currency, Amount: t.Amount, Status: "completed", Remark: t.Remark, CreatedAt: t.CreatedAt})
+		rows = append(rows, depositRow{ID: adjustmentRowBase + t.ID, Kind: t.Type, UserID: t.UserID, OrderNo: wallet.OrderNo("A", t.ID, t.CreatedAt), Currency: t.Currency, Amount: t.Amount, Status: "completed", Remark: t.Remark, CreatedAt: t.CreatedAt})
 		userIDs = append(userIDs, t.UserID)
 	}
-	var users []model.TelegramUser
-	if len(userIDs) > 0 {
-		h.st.DB.Select("id", "telegram_user_id").Where("id IN ?", userIDs).Find(&users)
-	}
-	tg := map[uint64]int64{}
-	for _, u := range users {
-		tg[u.ID] = u.TelegramUserID
-	}
+	users := h.walletUsers(userIDs)
 	for i := range rows {
-		rows[i].TelegramUserID = tg[rows[i].UserID]
+		rows[i].walletUser = users[rows[i].UserID]
 	}
 	sort.SliceStable(rows, func(i, j int) bool { return rows[i].CreatedAt.After(rows[j].CreatedAt) })
 	if len(rows) > 300 {
@@ -413,6 +451,7 @@ func (h *Handler) approve(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	h.notifyWithdrawal(id, "approved", b.Note)
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
@@ -429,6 +468,7 @@ func (h *Handler) reject(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	h.notifyWithdrawal(id, "rejected", b.Note)
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
@@ -448,6 +488,7 @@ func (h *Handler) complete(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	h.notifyWithdrawal(id, "completed", strings.TrimSpace(b.TxID))
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
@@ -495,47 +536,21 @@ func htmlEscape(s string) string {
 	).Replace(s)
 }
 
-func (h *Handler) saveAddress(c *gin.Context) {
-	var b model.DepositAddress
-	if err := c.ShouldBindJSON(&b); err != nil || b.UserID == 0 || strings.TrimSpace(b.Address) == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "user_id/address required"})
+// addressUsers lists users for the address form's searchable picker.
+func (h *Handler) addressUsers(c *gin.Context) {
+	type row struct {
+		ID             uint64 `json:"id"`
+		TelegramUserID int64  `json:"telegram_user_id"`
+		Username       string `json:"username"`
+		FirstName      string `json:"first_name"`
+		LastName       string `json:"last_name"`
+	}
+	rows := []row{}
+	if err := h.st.DB.Model(&model.TelegramUser{}).Select("id, telegram_user_id, username, first_name, last_name").Order("id desc").Limit(5000).Scan(&rows).Error; err != nil {
+		c.JSON(500, gin.H{"error": "用户加载失败"})
 		return
 	}
-	b.Address = strings.TrimSpace(b.Address)
-	if b.Network == "" {
-		b.Network = "TRC20"
-	}
-	if b.Network != "TRC20" || !wallet.ValidTRONAddress(b.Address) {
-		c.JSON(400, gin.H{"error": "valid TRC20 address required"})
-		return
-	}
-	var user model.TelegramUser
-	if err := h.st.DB.First(&user, b.UserID).Error; err != nil {
-		c.JSON(400, gin.H{"error": "user not found"})
-		return
-	}
-	b.Status = 1
-
-	var old model.DepositAddress
-	err := h.st.DB.Where("user_id=? AND network=?", b.UserID, b.Network).First(&old).Error
-	if err == nil {
-		if old.Address != b.Address {
-			old.ScanTimestamp = 0
-		}
-		old.Address = b.Address
-		old.Status = b.Status
-		err = h.st.DB.Save(&old).Error
-	} else if errors.Is(err, gorm.ErrRecordNotFound) {
-		b.ID = 0
-		b.ScanTimestamp = 0
-		err = h.st.DB.Create(&b).Error
-	}
-
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-	c.JSON(http.StatusOK, gin.H{"ok": true})
+	c.JSON(http.StatusOK, rows)
 }
 
 func (h *Handler) saveMenu(c *gin.Context) {

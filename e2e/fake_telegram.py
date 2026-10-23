@@ -4,6 +4,8 @@ POST /inject {update}  queues an update for getUpdates
 GET  /sent             returns every message the bot sent
 """
 import json, sys, threading, time
+from email.parser import BytesParser
+from email import policy
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 
 lock = threading.Lock()
@@ -19,6 +21,20 @@ class H(BaseHTTPRequestHandler):
     def body(self):
         n = int(self.headers.get("Content-Length") or 0)
         raw = self.rfile.read(n) if n else b"{}"
+        ctype = self.headers.get("Content-Type") or ""
+        if ctype.startswith("multipart/form-data"):
+            # An uploaded file (e.g. a QR code): keep the text fields, note the file's size.
+            msg = BytesParser(policy=policy.default).parsebytes(b"Content-Type: " + ctype.encode() + b"\r\n\r\n" + raw)
+            out = {}
+            for part in msg.iter_parts():
+                name = part.get_param("name", header="content-disposition")
+                data = part.get_payload(decode=True) or b""
+                if part.get_filename():
+                    out[name] = {"upload": part.get_filename(), "bytes": len(data)}
+                else:
+                    value = data.decode()
+                    out[name] = int(value) if name == "chat_id" and value.lstrip("-").isdigit() else value
+            return out
         try: return json.loads(raw or b"{}")
         except Exception: return {}
     def do_GET(self):
