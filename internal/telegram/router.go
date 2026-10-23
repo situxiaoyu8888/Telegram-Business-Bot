@@ -527,8 +527,19 @@ func (r *Router) dispatchMenu(ctx context.Context, cb *CallbackQuery, u *model.T
 		_ = r.store.DB.Where("user_id=?", u.ID).Order("id desc").Limit(10).Find(&rows).Error
 		var b strings.Builder
 		b.WriteString("<b>📜 最近资金记录</b>\n\n")
+		names := map[string]string{}
 		for _, x := range rows {
-			b.WriteString(fmt.Sprintf("#%d  %s  <code>%s</code>\n", x.ID, htmlEscape(x.Type), x.Amount))
+			if _, ok := names[x.Currency]; !ok {
+				names[x.Currency] = x.Currency
+				if c, err := r.wallet.Currency(x.Currency); err == nil {
+					names[x.Currency] = c.Name
+				}
+			}
+			amount := trimZeros(x.Amount)
+			if !strings.HasPrefix(amount, "-") {
+				amount = "+" + amount
+			}
+			b.WriteString(fmt.Sprintf("%s  %s  <code>%s</code> %s\n", x.CreatedAt.Format("01-02 15:04"), htmlEscape(wallet.TxTypeName(x.Type)), amount, htmlEscape(names[x.Currency])))
 		}
 		if len(rows) == 0 {
 			b.WriteString("暂无记录")

@@ -767,21 +767,45 @@ func (r *Router) sendPacket(ctx context.Context, chatID int64, msgID int, u *mod
 // postCard sends a new packet card: the cover photo captioned with the card, or text when there
 // is no cover or the photo cannot be sent. The first photo sent records the cover's file ID.
 func (r *Router) postCard(ctx context.Context, chatID int64, p *model.RedPacket, kb *InlineKeyboardMarkup) (int, error) {
-	text := r.packets.Card(p, nil)
+	return postPacketCard(ctx, r.client, r.packets, chatID, p, kb, r.logger)
+}
+
+// cardPoster is the part of Client that sends packet cards.
+type cardPoster interface {
+	SendPhotoID(context.Context, int64, string, string, *InlineKeyboardMarkup) (int, string, error)
+	SendMessageID(context.Context, int64, string, *InlineKeyboardMarkup) (int, error)
+}
+
+func postPacketCard(ctx context.Context, c cardPoster, svc *redpacket.Service, chatID int64, p *model.RedPacket, kb *InlineKeyboardMarkup, logger *zap.Logger) (int, error) {
+	text := svc.Card(p, nil)
 	if p.Cover != "" {
 		photo := p.CoverFileID
 		if photo == "" {
 			photo = p.Cover
 		}
-		id, fileID, err := r.client.SendPhotoID(ctx, chatID, photo, text, kb)
+		id, fileID, err := c.SendPhotoID(ctx, chatID, photo, text, kb)
 		if err == nil {
 			if p.CoverFileID == "" && fileID != "" {
 				p.CoverFileID = fileID
-				_ = r.packets.SetCoverFile(p.ID, fileID)
+				_ = svc.SetCoverFile(p.ID, fileID)
 			}
 			return id, nil
 		}
-		r.logger.Warn("send red packet cover failed", zap.Int64("chat_id", chatID), zap.Error(err))
+		if logger != nil {
+			logger.Warn("send red packet cover failed", zap.Int64("chat_id", chatID), zap.Error(err))
+		}
 	}
-	return r.client.SendMessageID(ctx, chatID, text, kb)
+	return c.SendMessageID(ctx, chatID, text, kb)
+}
+
+// SharePacketToSender sends a new packet's card to its sender's private chat with the bot that
+// owns it, with the button that shares it through inline mode (packets made in the H5 shop).
+func SharePacketToSender(ctx context.Context, s Sender, svc *redpacket.Service, p *model.RedPacket, logger *zap.Logger) error {
+	c, ok := s.(cardPoster)
+	if !ok {
+		return fmt.Errorf("sender cannot post red packet cards")
+	}
+	kb := &InlineKeyboardMarkup{InlineKeyboard: [][]InlineKeyboardButton{{{Text: "📤 发送到群聊/好友", SwitchInlineQuery: "hb " + p.Code}}}}
+	_, err := postPacketCard(ctx, c, svc, p.SenderTelegramID, p, kb, logger)
+	return err
 }

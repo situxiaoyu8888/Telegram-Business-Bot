@@ -296,3 +296,20 @@ func (s *Service) Credit(tx *gorm.DB, userID uint64, amount decimal.Decimal, txT
 	}
 	return s.adjust(tx, userID, amount, txType, refType, refID, remark)
 }
+
+// TxTypeNames are the Chinese names of wallet transaction types, shown to users.
+var TxTypeNames = map[string]string{
+	"deposit": "充值", "withdraw_freeze": "提现", "withdraw_unfreeze": "提现退回",
+	"shop_pay": "商城付款", "shop_refund": "商城退款", "referral_commission": "推广佣金",
+	"exchange_out": "换汇兑出", "exchange_in": "换汇兑入", "admin_credit": "后台加款", "admin_debit": "后台扣款",
+	"redpacket_send": "发红包", "redpacket_claim": "领取红包", "redpacket_refund": "红包退回",
+	"transfer_out": "转账转出", "transfer_in": "转账转入",
+}
+
+// TxTypeName returns a transaction type's Chinese name, or the type itself when unknown.
+func TxTypeName(t string) string {
+	if n, ok := TxTypeNames[t]; ok {
+		return n
+	}
+	return t
+}

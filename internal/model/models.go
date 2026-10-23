@@ -347,6 +347,18 @@ type WalletCurrency struct {
 	UpdatedAt    time.Time `json:"updated_at"`
 }
 
+// WalletTransfer is one completed transfer between two users' balances of one currency.
+type WalletTransfer struct {
+	ID         uint64    `gorm:"primaryKey" json:"id"`
+	RequestID  string    `gorm:"size:64;uniqueIndex;not null" json:"-"`
+	FromUserID uint64    `gorm:"index;not null" json:"from_user_id"`
+	ToUserID   uint64    `gorm:"index;not null" json:"to_user_id"`
+	Currency   string    `gorm:"size:16;not null" json:"currency"`
+	Amount     string    `gorm:"type:decimal(24,6);not null" json:"amount"`
+	Remark     string    `gorm:"size:128;not null;default:''" json:"remark"`
+	CreatedAt  time.Time `gorm:"index" json:"created_at"`
+}
+
 // WalletExchange is one completed exchange between two of a user's balances.
 type WalletExchange struct {
 	ID           uint64    `gorm:"primaryKey" json:"id"`

@@ -189,7 +189,9 @@ async function toastText(page) { return page.$eval('#toast', e => e.hidden ? '' 
   await nav(admin, 'deposits'); await shot(admin, '11c2-admin-deposits');
   const depositText = await admin.textContent('#content');
   if (!depositText.includes('后台加款') || !depositText.includes('现金充值') || !depositText.includes('人民币')) problems.push('console credit missing from the deposit page');
-  await shopPage.goto(SHOP_BASE + '/shop/#/exchange'); await shopPage.waitForTimeout(900);
+  // Telegram opens a button's page with its launch parameters appended to the hash.
+  await shopPage.goto(SHOP_BASE + '/shop/#/exchange?tgWebAppData=x%3D1&tgWebAppVersion=8.0&tgWebAppPlatform=ios'); await shopPage.waitForTimeout(900);
+  if (!(await shopPage.$('#exFrom'))) problems.push('exchange button with Telegram launch parameters did not open the exchange page');
   await shopPage.selectOption('#exFrom', 'CNY'); await shopPage.selectOption('#exTo', 'USDT');
   await shopPage.fill('#exAmount', '72'); await shopPage.waitForTimeout(200); await shot(shopPage, '11d-shop-exchange');
   if ((await shopPage.textContent('#exGet')).trim() !== '10.00') problems.push('exchange preview wrong: ' + await shopPage.textContent('#exGet'));
@@ -561,6 +563,9 @@ async function toastText(page) { return page.$eval('#toast', e => e.hidden ? '' 
   }
   const xmBal = sql(`select available from wallet_accounts where user_id=${uid} and currency='USDT'`);
   if (xmBal !== '95.000000') problems.push('sender not charged 5 USDT for two packets: ' + xmBal);
+  await tap(xm, 'menu:records', { message_id: 1, chat: pchat }); await wait(900);
+  const records = (await sentNow()).filter(m => m.chat_id === 9001 && /最近资金记录/.test(m.text || '')).pop();
+  if (!records || !/发红包/.test(records.text) || /redpacket_/.test(records.text) || !/USDT-TRC20/.test(records.text)) problems.push('wallet records not shown in Chinese: ' + (records && records.text));
   // Covers: added in the console, offered after the greeting (an album preview in the private
   // chat), and the card becomes a photo whose caption is edited on claims.
   await nav(admin, 'redpacket_covers'); await admin.click('#create'); await admin.waitForTimeout(400);
@@ -589,6 +594,49 @@ async function toastText(page) { return page.$eval('#toast', e => e.hidden ? '' 
       if (!iq || iq.results[0]?.type !== 'photo' || iq.results[0].photo_file_id !== 'fid-' + covered[5]) problems.push('inline share of a covered packet is not a photo');
     }
   }
+  step('shop: wallet functions on 我的 (deposit, withdraw, transfer, red packet)');
+  const usdtOf = id => sql(`select available from wallet_accounts where user_id=${id} and currency='USDT'`);
+  const before = Number(usdtOf(uid));
+  await shopPage.goto(SHOP_BASE + '/shop/#/me'); await shopPage.waitForTimeout(900);
+  const actions = await shopPage.$$eval('.wact button', bs => bs.map(b => b.textContent.trim()));
+  if (actions.join(',') !== '💰充值,💸提现,🔁转账,🧧发红包') problems.push('我的 wallet actions wrong: ' + actions.join(','));
+  await shot(shopPage, '56-shop-me-wallet');
+  await shopPage.click('.wact button:nth-child(1)'); await shopPage.waitForTimeout(800); await shot(shopPage, '56a-shop-deposit');
+  if (!/充值/.test(await shopPage.textContent('#app'))) problems.push('deposit page not shown');
+  // Transfer 1.5 USDT to 小红 by Telegram ID.
+  await shopPage.goto(SHOP_BASE + '/shop/#/transfer'); await shopPage.waitForTimeout(800);
+  await shopPage.fill('#tfTo', 'nobody_here'); await shopPage.press('#tfTo', 'Tab'); await shopPage.waitForTimeout(600);
+  if (!/找不到该用户/.test(await shopPage.textContent('#tfWho'))) problems.push('unknown transfer recipient not reported');
+  await shopPage.fill('#tfTo', '9002'); await shopPage.press('#tfTo', 'Tab'); await shopPage.waitForTimeout(600);
+  if (!/小红/.test(await shopPage.textContent('#tfWho'))) problems.push('transfer recipient not looked up');
+  await shopPage.selectOption('#tfCur', 'USDT'); await shopPage.fill('#tfAmount', '1.5'); await shopPage.fill('#tfRemark', '午饭钱');
+  await shot(shopPage, '56b-shop-transfer');
+  const xhBefore = Number(usdtOf(sql("select id from telegram_users where telegram_user_id=9002")) || 0);
+  await shopPage.click('#tfSubmit'); await enterPin(shopPage); await shopPage.waitForTimeout(1500); await shot(shopPage, '56c-shop-transferred');
+  const xhAfter = Number(usdtOf(sql("select id from telegram_users where telegram_user_id=9002")));
+  if (Math.abs(xhAfter - xhBefore - 1.5) > 1e-9) problems.push(`transfer not credited: ${xhBefore} -> ${xhAfter}`);
+  if (sql(`select count(*) from wallet_transfers where from_user_id=${uid} and remark='午饭钱'`) !== '1') problems.push('transfer not recorded');
+  if (!(await sentNow()).some(m => m.chat_id === 9002 && /收到转账/.test(m.text || '') && /1\.5/.test(m.text || ''))) problems.push('transfer recipient not notified');
+  // Withdraw 10 USDT (fee 1) to a TRON address.
+  await shopPage.goto(SHOP_BASE + '/shop/#/withdraw'); await shopPage.waitForTimeout(800);
+  await shopPage.selectOption('#wdCur', 'USDT'); await shopPage.fill('#wdAddr', 'TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t'); await shopPage.fill('#wdAmount', '10');
+  await shot(shopPage, '56d-shop-withdraw');
+  await shopPage.click('#wdSubmit'); await enterPin(shopPage); await shopPage.waitForTimeout(1500); await shot(shopPage, '56e-shop-withdrawn');
+  if (sql(`select concat(status,' ',amount,' ',actual) from withdrawal_orders where user_id=${uid} and request_id like 'h5:%'`) !== 'pending 10.000000 9.000000') problems.push('shop withdrawal not created');
+  // A lucky packet of 2 USDT in 2 shares with the 生日快乐 cover; its card goes to the private chat.
+  await shopPage.goto(SHOP_BASE + '/shop/#/redpacket'); await shopPage.waitForTimeout(800);
+  await shopPage.selectOption('#rpCur', 'USDT'); await shopPage.fill('#rpAmount', '2'); await shopPage.fill('#rpCount', '2'); await shopPage.fill('#rpGreeting', '周末快乐');
+  const birthday = sql("select id from red_packet_covers where name='生日快乐'");
+  await shopPage.click(`[data-cover="${birthday}"]`); await shot(shopPage, '56f-shop-redpacket');
+  await shopPage.click('#rpSubmit'); await enterPin(shopPage); await shopPage.waitForTimeout(1500); await shot(shopPage, '56g-shop-redpacket-sent');
+  const h5Packet = sql(`select concat(code,' ',type,' ',total,' ',count,' ',cover_id) from red_packets where request_id like 'h5:%'`).split(' ');
+  if (h5Packet[1] !== 'lucky' || h5Packet[2] !== '2.000000' || h5Packet[3] !== '2' || h5Packet[4] !== birthday) problems.push('shop red packet wrong: ' + h5Packet.join(' '));
+  const h5Card = (await sentNow()).filter(m => m.method === 'sendPhoto' && m.chat_id === 9001).pop();
+  if (!h5Card || !/周末快乐/.test(h5Card.caption || '') || !JSON.stringify(h5Card.reply_markup || {}).includes('hb ' + h5Packet[0])) problems.push('shop red packet card not sent to the private chat');
+  if (!(await shopPage.$('#rpShare'))) problems.push('shop red packet share button missing');
+  const after = Number(usdtOf(uid));
+  if (Math.abs(before - after - 13.5) > 1e-9) problems.push(`wallet functions charged ${before - after}, expected 13.5`);
+
   await nav(admin, 'redpackets'); await shot(admin, '55-admin-redpackets');
   if (lucky) {
     await admin.click(`[data-action="claims"][data-id="${sql(`select id from red_packets where code='${lucky[0]}'`)}"]`); await admin.waitForTimeout(600);

@@ -10,6 +10,7 @@
 <style>
 :root{--bg:var(--tg-theme-secondary-bg-color,#f2f3f7);--card:var(--tg-theme-bg-color,#fff);--ink:var(--tg-theme-text-color,#17212b);--muted:var(--tg-theme-hint-color,#8a94a6);--brand:var(--tg-theme-button-color,#2f80ed);--brand-ink:var(--tg-theme-button-text-color,#fff);--link:var(--tg-theme-link-color,#2f80ed);--danger:var(--tg-theme-destructive-text-color,#e5484d);--line:color-mix(in srgb,var(--muted) 22%,transparent);--price:#f2554c;--radius:14px;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+[hidden]{display:none!important}
 html,body{margin:0;background:var(--bg);color:var(--ink);font-size:14px;line-height:1.5}
 body{padding-bottom:calc(64px + env(safe-area-inset-bottom))}
 button,input,textarea,select{font:inherit;color:inherit}
@@ -129,6 +130,19 @@ img{display:block;max-width:100%}
 .menu-grid button{display:flex;align-items:center;gap:6px;padding:14px 12px;border-bottom:1px solid var(--line);text-align:left;min-width:0}
 .menu-grid button:nth-child(odd){border-right:1px solid var(--line)}
 .menu-grid button span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.field .row input{flex:1;min-width:0}
+.wact{display:grid;grid-template-columns:repeat(4,1fr);padding:14px 4px}
+.wact button{display:flex;flex-direction:column;align-items:center;gap:6px;font-size:13px;min-width:0}
+.wact i{font-style:normal;width:44px;height:44px;border-radius:14px;display:grid;place-items:center;font-size:22px;background:color-mix(in srgb,var(--brand) 12%,transparent)}
+.seg{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-bottom:12px}
+.seg button{padding:8px 0;border-radius:10px;background:var(--bg);font-size:13px;white-space:nowrap}
+.seg button.on{background:var(--brand);color:var(--brand-ink);font-weight:600}
+.covers{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:12px}
+.covers button{border:2px solid transparent;border-radius:10px;overflow:hidden;background:var(--bg);display:flex;flex-direction:column;min-width:0}
+.covers button.on{border-color:var(--brand)}
+.covers img,.covers .none{width:100%;aspect-ratio:16/10;object-fit:cover}
+.covers .none{display:grid;place-items:center;color:var(--muted);font-size:12px}
+.covers span{font-size:12px;padding:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .ex-box{position:relative}
 .ex-side{display:flex;flex-direction:column;gap:8px}
 .ex-side select{border:1px solid var(--line);border-radius:10px;background:var(--card);padding:8px 10px;outline:0;font-weight:600;max-width:60%}
@@ -200,11 +214,14 @@ async function payAuth(hint){
 function newRequestID(){return crypto.randomUUID?crypto.randomUUID():Date.now().toString(36)+Math.random().toString(36).slice(2)}
 
 // ---- Routing ----
-const routes=[[/^#?\/?$/,home],[/^#\/merchant\/(\d+)$/,merchantPage],[/^#\/product\/(\d+)(?:\?group=(\d+))?$/,product],[/^#\/group\/(\d+)$/,groupPage],[/^#\/cart$/,cart],[/^#\/checkout$/,checkoutPage],[/^#\/orders(?:\/(\w+))?$/,orders],[/^#\/order\/(\d+)$/,orderDetail],[/^#\/me$/,mine],[/^#\/exchange$/,exchangePage],[/^#\/coupons(?:\/(\w+))?$/,coupons],[/^#\/addresses(?:\/(pick))?$/,addresses],[/^#\/address\/(new|\d+)(?:\/(pick))?$/,addressForm],[/^#\/aftersale\/(\d+)$/,afterSaleForm],[/^#\/review\/(\d+)$/,reviewForm],[/^#\/(favorites|history)$/,productList],[/^#\/chat\/(\d+)(?:\?(product|order)=(\d+))?$/,chatPage],[/^#\/messages$/,messageList],[/^#\/apply$/,applyPage],[/^#\/aftersales$/,afterSales]];
+const routes=[[/^#?\/?$/,home],[/^#\/merchant\/(\d+)$/,merchantPage],[/^#\/product\/(\d+)(?:\?group=(\d+))?$/,product],[/^#\/group\/(\d+)$/,groupPage],[/^#\/cart$/,cart],[/^#\/checkout$/,checkoutPage],[/^#\/orders(?:\/(\w+))?$/,orders],[/^#\/order\/(\d+)$/,orderDetail],[/^#\/me$/,mine],[/^#\/exchange$/,exchangePage],[/^#\/deposit$/,depositPage],[/^#\/withdraw$/,withdrawPage],[/^#\/transfer$/,transferPage],[/^#\/redpacket$/,redPacketPage],[/^#\/coupons(?:\/(\w+))?$/,coupons],[/^#\/addresses(?:\/(pick))?$/,addresses],[/^#\/address\/(new|\d+)(?:\/(pick))?$/,addressForm],[/^#\/aftersale\/(\d+)$/,afterSaleForm],[/^#\/review\/(\d+)$/,reviewForm],[/^#\/(favorites|history)$/,productList],[/^#\/chat\/(\d+)(?:\?(product|order)=(\d+))?$/,chatPage],[/^#\/messages$/,messageList],[/^#\/apply$/,applyPage],[/^#\/aftersales$/,afterSales]];
 const tabs=[['#/','首页','home'],['#/exchange','换汇','swap'],['#/cart','购物车','cart'],['#/orders','订单','order'],['#/me','我的','me']];
 let renderVersion=0;
+// Telegram appends its launch parameters to the page's hash ("#/exchange?tgWebAppData=…", or
+// "#tgWebAppData=…" without one); they are dropped so buttons can open a given page.
+function pageHash(){const h=location.hash||'';const i=h.search(/[?&#]tgWebApp|^#tgWebApp/);if(i<0)return h||'#/';const clean=h.slice(0,i)||'#/';history.replaceState(null,'',location.pathname+location.search+clean);return clean}
 async function route(){
- const hash=location.hash||'#/';const version=++renderVersion;
+ const hash=pageHash();const version=++renderVersion;
  $('bottom').innerHTML='';window.scrollTo(0,0);
  const root=['#/','#/exchange','#/cart','#/orders','#/me'].includes(hash)||/^#\/orders\/\w+$/.test(hash);
  $('tabbar').hidden=!root;document.body.style.paddingBottom=root?'':'0';
@@ -525,6 +542,116 @@ async function exchangePage(v){
   catch(e){toast(e.message);if(/汇率已更新/.test(e.message)){exState.rid='';route()}else $('exSubmit').disabled=false}};
  refresh()}
 
+// ---- Wallet: deposit, withdraw, transfer, red packets (each spend asks for the payment password) ----
+const dateText=v=>new Date(v).toLocaleString('zh-CN');
+const copyText=(text,okMsg)=>navigator.clipboard?.writeText(text).then(()=>toast(okMsg||'已复制'),()=>toast('请长按内容复制'));
+async function depositPage(v){
+ const d=await api('wallet/deposit');if(stale(v))return;
+ $('app').innerHTML=`<div class="card"><h3>💰 USDT ${esc(d.network)} 充值</h3>${d.address?`<div class="muted small">你的专属充值地址</div><div class="code" id="depAddr" style="margin:6px 0 12px">${esc(d.address)}</div><button class="btn block" id="depCopy">复制地址</button><div class="muted small" style="margin-top:12px">⚠️ ${esc(d.notice)}<br>链上到账后自动存入钱包，无需提交任何信息。</div>`:'<div class="muted">尚未为你的账号分配充值地址，请联系客服。</div>'}</div><div class="card small muted">人民币、泰铢等其他币种请联系客服充值，到账后显示在钱包余额中。</div>`;
+ if(d.address)$('depCopy').onclick=()=>copyText(d.address,'地址已复制')}
+let wdState={cur:'',rid:''};
+const wdStatus={pending:'待审核',approved:'已审核，待打款',completed:'已完成',rejected:'已拒绝'};
+async function withdrawPage(v){
+ const d=await api('wallet/withdraw');if(stale(v))return;
+ const bal=Object.fromEntries(d.balances.map(b=>[b.code,b]));
+ const recs=d.records.length?`<div class="sec-head"><span class="bold">提现记录</span></div><div class="card" style="padding:4px 16px">${d.records.map(r=>{const c=bal[r.currency];return `<div class="asset"><div><div>${esc(c?c.name:r.currency)} · ${esc(wdStatus[r.status]||r.status)}</div><div class="muted small">${dateText(r.created_at)}</div></div><div style="text-align:right"><div class="bold">-${fmtAmt(r.amount,c?.decimals??6)}</div><div class="muted small">到账 ${fmtAmt(r.actual,c?.decimals??6)}</div></div></div>`}).join('')}</div>`:'';
+ if(!d.rules.length){$('app').innerHTML='<div class="empty">暂未开放提现</div>'+recs;return}
+ if(!d.rules.some(r=>r.currency===wdState.cur))wdState.cur=d.rules[0].currency;
+ if(!wdState.rid)wdState.rid=newRequestID();
+ $('app').innerHTML=`<div class="card"><div class="field"><label class="muted small" for="wdCur">提现币种</label><select id="wdCur">${d.rules.map(r=>`<option value="${esc(r.currency)}" ${r.currency===wdState.cur?'selected':''}>${esc(curLabel(r))}</option>`).join('')}</select></div>
+ <div class="field"><label class="muted small" for="wdAddr" id="wdTarget"></label><textarea id="wdAddr" rows="2" autocomplete="off" spellcheck="false"></textarea></div>
+ <div class="field"><label class="muted small" for="wdAmount">提现金额</label><div class="row"><input id="wdAmount" inputmode="decimal" placeholder="0" autocomplete="off"><button class="btn ghost sm" id="wdAll">全部</button></div></div>
+ <div class="muted small" id="wdInfo"></div><button class="btn block" id="wdSubmit" style="margin-top:14px">提交提现</button></div>`+recs;
+ const rule=()=>d.rules.find(r=>r.currency===$('wdCur').value);
+ const refresh=()=>{const r=rule(),b=bal[r.currency],amt=Number($('wdAmount').value)||0,fee=Number(r.withdraw_fee)||0;
+  $('wdTarget').textContent=r.target;$('wdAddr').placeholder=r.kind==='fiat'?'例如：银行名称 / 开户名 / 账号':'请输入'+r.target;
+  $('wdInfo').innerHTML=`可用 ${fmtAmt(b?.available||0,r.decimals)} ${esc(r.name)} · 最低 ${fmtAmt(r.min_withdraw,r.decimals)} · 手续费 ${fmtAmt(r.withdraw_fee,r.decimals)}${amt>0?`<br>预计到账 <b>${fmtAmt(Math.max(0,truncTo(amt-fee,r.decimals)),r.decimals)}</b> ${esc(r.name)}`:''}<br>提交后金额先冻结，审核通过后打款`};
+ const changed=()=>{wdState.cur=$('wdCur').value;wdState.rid=newRequestID();refresh()};
+ $('wdCur').onchange=changed;$('wdAmount').oninput=changed;$('wdAddr').oninput=()=>{wdState.rid=newRequestID()};
+ $('wdAll').onclick=()=>{const r=rule(),b=bal[r.currency];$('wdAmount').value=Number(b?.available)>0?String(+Number(b.available).toFixed(r.decimals)):'';changed()};
+ $('wdSubmit').onclick=async()=>{const r=rule(),amount=$('wdAmount').value.trim(),address=$('wdAddr').value.trim();
+  if(!address){toast('请填写'+r.target);return}
+  if(!(Number(amount)>0)){toast('请输入提现金额');return}
+  const pin=await payAuth(`提现 ${amount} ${r.name}`);if(pin==null)return;
+  $('wdSubmit').disabled=true;
+  try{await post('wallet/withdraw',{currency:r.currency,address,amount,request_id:wdState.rid},{'X-Pay-Password':pin});wdState.rid='';haptic('success');toast('提现申请已提交，等待审核');route()}
+  catch(e){toast(e.message);$('wdSubmit').disabled=false}};
+ refresh()}
+let tfState={cur:'',rid:''};
+async function transferPage(v){
+ const d=await api('wallet/transfer');if(stale(v))return;
+ const list=d.balances,byCode=Object.fromEntries(list.map(c=>[c.code,c]));
+ if(!list.some(c=>c.code===tfState.cur))tfState.cur=list[0]?.code||'';
+ if(!tfState.rid)tfState.rid=newRequestID();
+ const recs=d.records.length?`<div class="sec-head"><span class="bold">转账记录</span></div><div class="card" style="padding:4px 16px">${d.records.map(r=>{const c=byCode[r.currency];return `<div class="asset"><div style="min-width:0"><div>${r.out?'转给':'来自'} ${esc(r.peer||'')}</div><div class="muted small">${dateText(r.created_at)}${r.remark?' · '+esc(r.remark):''}</div></div><div class="bold" style="text-align:right;flex:none;${r.out?'':'color:var(--brand)'}">${r.out?'-':'+'}${fmtAmt(r.amount,c?.decimals??6)} ${esc(c?c.name:r.currency)}</div></div>`}).join('')}</div>`:'';
+ $('app').innerHTML=`<div class="card"><div class="field"><label class="muted small" for="tfTo">收款人</label><input id="tfTo" placeholder="@用户名 或 数字 Telegram ID" autocomplete="off"><div class="small" id="tfWho"></div></div>
+ <div class="field"><label class="muted small" for="tfCur">币种</label><select id="tfCur">${list.map(c=>`<option value="${esc(c.code)}" ${c.code===tfState.cur?'selected':''}>${esc(curLabel(c))}</option>`).join('')}</select></div>
+ <div class="field"><label class="muted small" for="tfAmount">金额</label><div class="row"><input id="tfAmount" inputmode="decimal" placeholder="0" autocomplete="off"><button class="btn ghost sm" id="tfAll">全部</button></div><div class="muted small" id="tfAvail"></div></div>
+ <div class="field"><label class="muted small" for="tfRemark">备注（选填）</label><input id="tfRemark" maxlength="40" autocomplete="off"></div>
+ <div class="muted small">即时到账、不收手续费；转出后无法撤回，请核对收款人。</div><button class="btn block" id="tfSubmit" style="margin-top:14px">确认转账</button></div>`+recs;
+ let who=null;
+ const lookup=async()=>{const to=$('tfTo').value.trim();who=null;$('tfWho').textContent='';if(!to)return null;
+  try{const r=await api('wallet/recipient?to='+encodeURIComponent(to));if(r.found){who=r;$('tfWho').innerHTML=`<span style="color:var(--brand)">✓ ${esc(r.name)}${r.username?' · @'+esc(r.username):''}</span>`}else $('tfWho').innerHTML=`<span style="color:var(--danger)">${esc(r.error)}</span>`}
+  catch(e){$('tfWho').innerHTML=`<span style="color:var(--danger)">${esc(e.message)}</span>`}return who};
+ const refresh=()=>{const c=byCode[$('tfCur').value];$('tfAvail').textContent=c?`可用 ${fmtAmt(c.available,c.decimals)} ${c.name}`:''};
+ const changed=()=>{tfState.cur=$('tfCur').value;tfState.rid=newRequestID();refresh()};
+ $('tfTo').onchange=lookup;$('tfTo').oninput=()=>{tfState.rid=newRequestID();who=null;$('tfWho').textContent=''};
+ $('tfCur').onchange=changed;$('tfAmount').oninput=changed;
+ $('tfAll').onclick=()=>{const c=byCode[$('tfCur').value];$('tfAmount').value=Number(c?.available)>0?String(+Number(c.available).toFixed(c.decimals)):'';changed()};
+ $('tfSubmit').onclick=async()=>{const c=byCode[$('tfCur').value],amount=$('tfAmount').value.trim();
+  const w=who||await lookup();if(!w){if(!$('tfTo').value.trim())toast('请填写收款人');return}
+  if(!(Number(amount)>0)){toast('请输入转账金额');return}
+  if(Number(amount)>Number(c.available)){toast(c.name+' 可用余额不足');return}
+  const pin=await payAuth(`向 ${w.name} 转账 ${amount} ${c.name}`);if(pin==null)return;
+  $('tfSubmit').disabled=true;
+  try{const r=await post('wallet/transfer',{to:$('tfTo').value.trim(),currency:c.code,amount,remark:$('tfRemark').value.trim(),request_id:tfState.rid},{'X-Pay-Password':pin});tfState.rid='';haptic('success');toast(`已转账给 ${r.to}`);route()}
+  catch(e){toast(e.message);$('tfSubmit').disabled=false}};
+ refresh()}
+let rpState={type:'lucky',cur:'',cover:null,rid:''};
+const rpTypes=[['lucky','🎲 拼手气'],['equal','💌 普通'],['exclusive','🎯 专属'],['password','🔑 口令']];
+async function redPacketPage(v){
+ const d=await api('redpackets/options');if(stale(v))return;
+ const list=d.balances,byCode=Object.fromEntries(list.map(c=>[c.code,c]));
+ if(!list.some(c=>c.code===rpState.cur))rpState.cur=list[0]?.code||'';
+ if(rpState.cover===null||(rpState.cover&&!d.covers.some(c=>c.id===rpState.cover)))rpState.cover=d.covers.find(c=>c.is_default)?.id||0;
+ if(!rpState.rid)rpState.rid=newRequestID();
+ const covers=d.covers.length?`<div class="muted small" style="margin-bottom:6px">封面</div><div class="covers" id="rpCovers">${[{id:0,name:'不使用封面'},...d.covers].map(c=>`<button data-cover="${c.id}" class="${c.id===rpState.cover?'on':''}">${c.image_url?`<img src="${esc(c.image_url)}" alt="" loading="lazy">`:'<div class="none">无封面</div>'}<span>${esc(c.name)}</span></button>`).join('')}</div>`:'';
+ $('app').innerHTML=`<div class="card"><div class="seg" id="rpTypes">${rpTypes.map(([k,l])=>`<button data-rptype="${k}" class="${k===rpState.type?'on':''}">${l}</button>`).join('')}</div>
+ <div class="field"><label class="muted small" for="rpCur">币种</label><select id="rpCur">${list.map(c=>`<option value="${esc(c.code)}" ${c.code===rpState.cur?'selected':''}>${esc(curLabel(c))}</option>`).join('')}</select></div>
+ <div class="field"><label class="muted small" for="rpAmount" id="rpAmountLabel"></label><input id="rpAmount" inputmode="decimal" placeholder="0" autocomplete="off"></div>
+ <div class="field" id="rpCountBox"><label class="muted small" for="rpCount">红包个数（1–${d.max_count}）</label><input id="rpCount" inputmode="numeric" placeholder="1" autocomplete="off"></div>
+ <div class="field" id="rpTargetBox"><label class="muted small" for="rpTarget">领取人</label><input id="rpTarget" placeholder="@用户名 或 数字 Telegram ID" autocomplete="off"></div>
+ <div class="field" id="rpPasswordBox"><label class="muted small" for="rpPassword">口令（1–20 字，群友发送口令即可领取）</label><input id="rpPassword" maxlength="20" autocomplete="off"></div>
+ <div class="field"><label class="muted small" for="rpGreeting">祝福语（选填）</label><input id="rpGreeting" maxlength="40" placeholder="${esc(d.default_greeting)}" autocomplete="off"></div>
+ ${covers}<div class="muted small" id="rpInfo"></div><button class="btn block" id="rpSubmit" style="margin-top:14px">塞钱进红包</button></div>`;
+ const total=()=>{const amt=Number($('rpAmount').value)||0,n=rpState.type==='exclusive'?1:(parseInt($('rpCount').value)||0);return ['equal','exclusive'].includes(rpState.type)?amt*n:amt};
+ const refresh=()=>{const t=rpState.type,c=byCode[$('rpCur').value];
+  $('rpAmountLabel').textContent=t==='equal'?'每个红包金额':t==='exclusive'?'红包金额':'总金额（随机分给领取的人）';
+  $('rpCountBox').hidden=t==='exclusive';$('rpTargetBox').hidden=t!=='exclusive';$('rpPasswordBox').hidden=t!=='password';
+  const sum=total();$('rpInfo').innerHTML=`可用 ${fmtAmt(c.available,c.decimals)} ${esc(c.name)}${sum>0?` · 合计 <b>${fmtAmt(truncTo(sum,c.decimals),c.decimals)}</b> ${esc(c.name)}`:''}<br>${d.expire_hours} 小时内未领完的部分自动退回钱包`};
+ const changed=()=>{rpState.cur=$('rpCur').value;rpState.rid=newRequestID();refresh()};
+ document.querySelectorAll('[data-rptype]').forEach(b=>b.onclick=()=>{rpState.type=b.dataset.rptype;document.querySelectorAll('[data-rptype]').forEach(x=>x.classList.toggle('on',x===b));changed()});
+ document.querySelectorAll('[data-cover]').forEach(b=>b.onclick=()=>{rpState.cover=Number(b.dataset.cover);document.querySelectorAll('[data-cover]').forEach(x=>x.classList.toggle('on',x===b));rpState.rid=newRequestID()});
+ ['rpCur','rpAmount','rpCount','rpTarget','rpPassword','rpGreeting'].forEach(id=>$(id).oninput=changed);
+ $('rpSubmit').onclick=async()=>{const t=rpState.type,c=byCode[$('rpCur').value],amount=$('rpAmount').value.trim(),count=t==='exclusive'?1:parseInt($('rpCount').value);
+  if(!(Number(amount)>0)){toast('请输入红包金额');return}
+  if(t!=='exclusive'&&!(count>=1&&count<=d.max_count)){toast(`红包个数需在 1–${d.max_count} 之间`);return}
+  if(t==='exclusive'&&!$('rpTarget').value.trim()){toast('请填写领取人');return}
+  if(t==='password'&&!$('rpPassword').value.trim()){toast('请设置口令');return}
+  const sum=fmtAmt(truncTo(total(),c.decimals),c.decimals);
+  if(total()>Number(c.available)){toast(c.name+' 可用余额不足');return}
+  const pin=await payAuth(`发红包，共 ${sum} ${c.name}`);if(pin==null)return;
+  $('rpSubmit').disabled=true;
+  try{const r=await post('redpackets',{type:t,currency:c.code,amount,count,target:$('rpTarget').value.trim(),password:$('rpPassword').value.trim(),greeting:$('rpGreeting').value.trim(),cover_id:rpState.cover,request_id:rpState.rid},{'X-Pay-Password':pin});
+   rpState.rid='';haptic('success');packetSent(r,c,sum)}
+  catch(e){toast(e.message);$('rpSubmit').disabled=false}};
+ refresh()}
+// packetSent offers sharing the new packet: inline mode picks a chat right away; otherwise the
+// card waits in the private chat with the bot, which has the same share button.
+function packetSent(r,c,sum){
+ $('app').innerHTML=`<div class="card" style="text-align:center;padding:28px 16px"><div style="font-size:44px">🧧</div><h3 style="margin:8px 0 4px">红包已塞好</h3><div class="muted">共 ${esc(sum)} ${esc(c.name)} · ${r.count} 个</div><button class="btn block" id="rpShare" style="margin-top:18px">📤 发送到群聊/好友</button>${r.sent_to_chat?'<div class="muted small" style="margin-top:10px">红包卡片也已发到你和机器人的私聊，可以在那里转发。</div>':''}<button class="btn ghost block" style="margin-top:10px" onclick="route()">再发一个</button></div>`;
+ $('rpShare').onclick=()=>{try{tg.switchInlineQuery('hb '+r.code,['users','groups','supergroups','channels'])}catch(e){if(r.bot&&tg?.openTelegramLink)tg.openTelegramLink('https://t.me/'+r.bot);else toast('请到机器人私聊中转发红包')}}}
+
 // ---- Me ----
 async function mine(v){
  const [meInfo,mem,convs]=await Promise.all([api('me'),api('member').catch(()=>null),api('conversations').catch(()=>[])]);const unread=convs.reduce((n,c)=>n+c.buyer_unread,0);me=meInfo;shareInfo=me;if(stale(v))return;
@@ -532,9 +659,9 @@ async function mine(v){
  // Telegram passes the profile photo to Mini Apps when the user allows it; otherwise show an initial.
  const photo=tg?.initDataUnsafe?.user?.photo_url||'',initial=esc([...(me.name||'用户').trim()][0]||'用');
  const avatar=`<div class="me-av">${photo?`<img src="${esc(photo)}" alt="" onerror="this.parentNode.textContent='${initial}'">`:initial}</div>`;
- $('app').innerHTML=`<div class="status-head"><div class="row between" style="align-items:center"><div class="row" style="min-width:0;gap:12px">${avatar}<div style="min-width:0"><h2 style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(me.name||'用户')}</h2><div class="small" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${me.username?'@'+esc(me.username):''}</div></div></div><button class="small" style="flex:none;color:inherit;opacity:.9" onclick="location.hash='#/exchange'">换汇 ›</button></div><div class="me-bal">${(me.balances||[]).map(b=>`<div><div class="n">${curIcon(b)}${esc(b.name)}</div><div class="v" title="${esc(b.available)}">${fmtAmt(b.available,b.decimals)}</div>${Number(b.frozen)>0?`<div class="f">冻结 ${fmtAmt(b.frozen,b.decimals)}</div>`:''}</div>`).join('')}</div><div class="small" style="opacity:.75;margin-top:8px">商城使用 USDT-TRC20 付款；充值、提现请回到机器人菜单操作</div></div>
+ $('app').innerHTML=`<div class="status-head"><div class="row between" style="align-items:center"><div class="row" style="min-width:0;gap:12px">${avatar}<div style="min-width:0"><h2 style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(me.name||'用户')}</h2><div class="small" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${me.username?'@'+esc(me.username):''}</div></div></div><button class="small" style="flex:none;color:inherit;opacity:.9" onclick="location.hash='#/exchange'">换汇 ›</button></div><div class="me-bal">${(me.balances||[]).map(b=>`<div><div class="n">${curIcon(b)}${esc(b.name)}</div><div class="v" title="${esc(b.available)}">${fmtAmt(b.available,b.decimals)}</div>${Number(b.frozen)>0?`<div class="f">冻结 ${fmtAmt(b.frozen,b.decimals)}</div>`:''}</div>`).join('')}</div><div class="small" style="opacity:.75;margin-top:8px">商城使用 USDT-TRC20 付款</div></div>
  ${mem?`<div class="card"><div class="row between"><span class="bold">${mem.level?'💎 '+esc(mem.level.name)+'会员 · '+Math.round((1-Number(mem.level.rate))*100)+'% 折扣':'普通会员'}</span><span>积分 <b>${mem.points}</b></span></div><div class="muted small" style="margin-top:4px">累计消费 ${money(mem.spent)} USDT${mem.next?`，再消费 ${money((Number(mem.next.threshold)-Number(mem.spent)).toFixed(6))} USDT 升级${esc(mem.next.name)}`:''}${Number(mem.points_value)>0?` · ${Math.round(1/Number(mem.points_value))} 积分抵 1 USDT`:''}</div></div>`:''}
- <div class="card small muted">↗️ 在商品页点击分享发给好友，好友通过你的链接注册并下单，订单完成且售后期结束后你可获得推广佣金（以平台设置为准）。</div>
+ <div class="card wact">${[['#/deposit','💰','充值'],['#/withdraw','💸','提现'],['#/transfer','🔁','转账'],['#/redpacket','🧧','发红包']].map(([h,i,l])=>`<button onclick="location.hash='${h}'"><i>${i}</i><span>${l}</span></button>`).join('')}</div>
  <div class="card menu-grid${me.is_merchant?' even':''}">${entry('#/orders','📦','我的订单')}${entry('#/messages','💬','我的消息'+(unread?` <span class="tag red">${unread}</span>`:''))}${entry('#/aftersales','🧾','我的售后')}${entry('#/favorites','❤️','我的收藏')}${entry('#/history','🕘','浏览记录')}${entry('#/coupons','🎟','我的优惠券')}${entry('#/coupons/center','🎁','领券中心')}${entry('#/addresses','📍','收货地址')}${me.is_merchant?'':entry('#/apply','🏪','商家入驻','wide')}</div>`;
  if(tg?.close)$('app').insertAdjacentHTML('beforeend','<button class="btn ghost block" onclick="Telegram.WebApp.close()">返回机器人</button>')}
 

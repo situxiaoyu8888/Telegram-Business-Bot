@@ -18,6 +18,7 @@ import (
 	"telegram-business-bot/internal/model"
 	"telegram-business-bot/internal/paypass"
 	"telegram-business-bot/internal/ratelimit"
+	"telegram-business-bot/internal/redpacket"
 	"telegram-business-bot/internal/store"
 	"telegram-business-bot/internal/telegram"
 	"telegram-business-bot/internal/wallet"
@@ -42,6 +43,9 @@ type Handler struct {
 	tokens TokenSource
 	logger *zap.Logger
 	pay    *paypass.Service
+
+	packets *redpacket.Service
+	senders SenderSource
 
 	mu       sync.Mutex
 	cached   []business.BotToken
@@ -135,6 +139,7 @@ func (h *Handler) RegisterAPI(r *gin.Engine) {
 	api.POST("/favorites/:id", h.addFavorite)
 	api.DELETE("/favorites/:id", h.removeFavorite)
 	api.GET("/history", h.history)
+	h.registerWallet(api)
 	api.DELETE("/history", h.clearHistory)
 	api.GET("/pay-password", h.payPasswordStatus)
 	api.POST("/pay-password", h.throttle("rl:shop-paypass:", maxOrdersPerMinute), h.setPayPassword)

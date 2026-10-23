@@ -134,7 +134,7 @@ func New(cfg config.Config, logger *zap.Logger) (*App, error) {
 		staffIDs = append(staffIDs, id)
 	}
 	shopSvc := shop.New(st, walletSvc, shop.BotNotifier{Bots: bots, Staff: staffSender, ShopURL: cfg.ShopH5URL}, logger).WithStaff(staffIDs)
-	shopHandler := shop.NewHandler(shopSvc, st, bots, logger).WithPayPassword(payPass).WithBotUsernames(func(ctx context.Context, botID uint64) string {
+	shopHandler := shop.NewHandler(shopSvc, st, bots, logger).WithPayPassword(payPass).WithWallet(packets, bots.Sender).WithBotUsernames(func(ctx context.Context, botID uint64) string {
 		if botID == 0 {
 			name, _ := tg.Username(ctx)
 			return name

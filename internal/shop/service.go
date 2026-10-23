@@ -16,6 +16,7 @@ import (
 
 	"telegram-business-bot/internal/model"
 	"telegram-business-bot/internal/paypass"
+	"telegram-business-bot/internal/redpacket"
 	"telegram-business-bot/internal/store"
 	"telegram-business-bot/internal/wallet"
 )
@@ -82,7 +83,7 @@ func userErr(format string, args ...any) error { return UserError{fmt.Sprintf(fo
 func IsUserError(err error) bool {
 	var u UserError
 	var w wallet.UserError
-	return errors.As(err, &u) || errors.As(err, &w) || paypass.IsUserError(err)
+	return errors.As(err, &u) || errors.As(err, &w) || paypass.IsUserError(err) || redpacket.IsUserError(err)
 }
 
 // parseAmount accepts a non-negative USDT amount with at most 6 decimal places.
