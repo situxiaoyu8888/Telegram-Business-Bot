@@ -4,6 +4,7 @@ import (
 	"context"
 	_ "embed"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/url"
 	"sort"
@@ -416,10 +417,66 @@ func (h *Handler) deposits(c *gin.Context) {
 	c.JSON(http.StatusOK, rows)
 }
 
+// addressRow is a user's deposit address with who holds it, how many users share it, its pool
+// note and what the user deposited to it.
+type addressRow struct {
+	model.DepositAddress
+	walletUser
+	SharedWith    int64  `json:"shared_with"` // users holding this address now
+	PoolRemark    string `json:"pool_remark"`
+	DepositCount  int64  `json:"deposit_count"`
+	DepositAmount string `json:"deposit_amount"`
+	LastDepositAt string `json:"last_deposit_at"`
+}
+
 func (h *Handler) addresses(c *gin.Context) {
 	var rows []model.DepositAddress
 	h.st.DB.Order("id desc").Limit(500).Find(&rows)
-	c.JSON(http.StatusOK, rows)
+	ids, addrs := make([]uint64, 0, len(rows)), make([]string, 0, len(rows))
+	for _, r := range rows {
+		ids, addrs = append(ids, r.UserID), append(addrs, r.Address)
+	}
+	users := h.walletUsers(ids)
+	shared, remarks := map[string]int64{}, map[string]string{}
+	type deposits struct {
+		UserID  uint64
+		Address string
+		N       int64
+		Total   string
+		Last    string
+	}
+	stats := map[string]deposits{}
+	if len(addrs) > 0 {
+		var counts []struct {
+			Network, Address string
+			N                int64
+		}
+		h.st.DB.Model(&model.DepositAddress{}).Select("network, address, COUNT(*) AS n").Where("address IN ? AND status = 1", addrs).Group("network, address").Scan(&counts)
+		for _, x := range counts {
+			shared[x.Network+":"+x.Address] = x.N
+		}
+		var pool []model.DepositPoolAddress
+		h.st.DB.Select("network", "address", "remark").Where("address IN ?", addrs).Find(&pool)
+		for _, p := range pool {
+			remarks[p.Network+":"+p.Address] = p.Remark
+		}
+		var list []deposits
+		h.st.DB.Model(&model.DepositOrder{}).Select("user_id, address, COUNT(*) AS n, CAST(SUM(amount) AS CHAR) AS total, CAST(MAX(created_at) AS CHAR) AS last").
+			Where("address IN ? AND user_id IN ? AND status = 'credited'", addrs, ids).Group("user_id, address").Scan(&list)
+		for _, d := range list {
+			stats[fmt.Sprintf("%d:%s", d.UserID, d.Address)] = d
+		}
+	}
+	out := make([]addressRow, 0, len(rows))
+	for _, r := range rows {
+		d := stats[fmt.Sprintf("%d:%s", r.UserID, r.Address)]
+		total := d.Total
+		if total == "" {
+			total = "0"
+		}
+		out = append(out, addressRow{DepositAddress: r, walletUser: users[r.UserID], SharedWith: shared[r.Network+":"+r.Address], PoolRemark: remarks[r.Network+":"+r.Address], DepositCount: d.N, DepositAmount: total, LastDepositAt: d.Last})
+	}
+	c.JSON(http.StatusOK, out)
 }
 
 func (h *Handler) tickets(c *gin.Context) {

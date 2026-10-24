@@ -896,9 +896,9 @@ func (r *Router) sendDepositAddress(ctx context.Context, chatID int64, msgID int
 	captions := make([]string, len(list))
 	for i, a := range list {
 		if a.Network == "TRC20" {
-			captions[i] = "<b>USDT-TRC20</b>（到账后自动入账）\n<code>" + htmlEscape(a.Address) + "</code>\n⚠️ " + htmlEscape(r.menus.Config("deposit_notice", "仅支持 USDT TRC20"))
+			captions[i] = "<b>USDT-TRC20</b>（到账后自动入账）\n\n<code>" + htmlEscape(a.Address) + "</code>\n\n⚠️ " + htmlEscape(r.menus.Config("deposit_notice", "仅支持 USDT TRC20"))
 		} else {
-			captions[i] = "<b>USDT-ERC20</b>（到账后由客服确认入账）\n<code>" + htmlEscape(a.Address) + "</code>\n⚠️ 仅支持以太坊网络的 USDT（ERC20）"
+			captions[i] = "<b>USDT-ERC20</b>（到账后由客服确认入账）\n\n<code>" + htmlEscape(a.Address) + "</code>\n\n⚠️ 仅支持以太坊网络的 USDT（ERC20）"
 		}
 	}
 	kb := InlineKeyboardMarkup{InlineKeyboard: [][]InlineKeyboardButton{{btn("🔁 切换充值网络", "menu:deposit"), btn("🏠 返回首页", "home")}}}

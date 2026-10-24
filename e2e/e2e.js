@@ -691,6 +691,8 @@ async function toastText(page) { return page.$eval('#toast', e => e.hidden ? '' 
   for (const [net, addr] of [['TRC20', TRC], ['ERC20', ERC]]) {
     await nav(admin, 'address_pool'); await admin.click('#create'); await admin.waitForTimeout(400);
     if (net === 'ERC20') await pick(admin, 'poolNet', 'ERC20');
+    const ph = await admin.getAttribute('#poolAddrs', 'placeholder');
+    if (!(net === 'ERC20' ? /^0x 开头/.test(ph) : /^T 开头/.test(ph))) problems.push(`${net} pool placeholder wrong: ${ph}`);
     await admin.fill('#poolAddrs', addr); await submitModal(admin);
   }
   await admin.waitForTimeout(400); await shot(admin, '57-admin-address-pool');
@@ -704,6 +706,13 @@ async function toastText(page) { return page.$eval('#toast', e => e.hidden ? '' 
   await admin.waitForTimeout(500); await shot(admin, '57b-admin-addresses');
   if (sql(`select group_concat(concat(network,'=',address) order by network) from deposit_addresses where user_id=${uid}`) !== `ERC20=${ERC},TRC20=${TRC}`) problems.push('pool addresses not assigned');
   if ((await admin.$$('[data-action="rescan"]')).length !== 1) problems.push('rescan offered for a non-TRC20 address');
+  {
+    const addrId = sql(`select id from deposit_addresses where user_id=${uid} and network='TRC20'`);
+    await admin.click(`[data-action="detail"][data-id="${addrId}"]`); await admin.waitForTimeout(400); await shot(admin, '57b2-admin-address-detail');
+    const d = await admin.textContent('#modal');
+    if (!d.includes('充值地址详情') || !d.includes('入账方式') || !d.includes('@xiaoming') || !d.includes(TRC) || /状态1|user_id|scan_timestamp/.test(d)) problems.push('address detail not in Chinese: ' + d.slice(0, 160));
+    await admin.click('#closeModal'); await admin.waitForTimeout(300);
+  }
   // Assigning to all users gives everyone a random pool address, replacing theirs: with one TRC20
   // address in the pool, all users share it, so its deposits are claimed by transaction hash.
   const active = sql("select count(*) from telegram_users where status=1");

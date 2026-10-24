@@ -245,3 +245,12 @@ test('withdrawal fee percentage is entered in percent and shown with the fixed f
  assert.equal(h.run("feeLabel({withdraw_fee:'0',withdraw_fee_rate:'0.010000'})"),'1%');
  assert.equal(h.run("feeLabel({withdraw_fee:'2.5',withdraw_fee_rate:'0'})"),'2.5');
 });
+test('deposit address detail is in Chinese with the holder and how it is credited',()=>{
+ const h=harness();
+ const text=code=>h.run(code).map(([k,v])=>k+'：'+v).join('\n');
+ const one=text(`addressDetail({id:1,user_id:1,user_name:'小明',username:'xm',telegram_user_id:9001,network:'TRC20',address:'TT81',status:1,shared_with:1,deposit_count:2,deposit_amount:'15.5',scan_timestamp:1761210000000,created_at:'2026-10-23T09:41:00Z',updated_at:'2026-10-23T09:41:00Z'})`);
+ for(const t of ['小明 · @xm · TG 9001','USDT-TRC20（波场）','到账自动入账','仅该用户使用','使用中','2 笔 · 15.5 USDT','扫描起点'])assert.ok(one.includes(t),t);
+ assert.ok(!/状态：1|编号/.test(one));
+ const shared=text(`addressDetail({user_id:2,network:'TRC20',address:'TT81',status:1,shared_with:3,deposit_amount:'0',created_at:'2026-10-23T09:41:00Z'})`);
+ assert.ok(shared.includes('3 个用户共用')&&shared.includes('客服核对后入账')&&!shared.includes('最近入账'));
+});

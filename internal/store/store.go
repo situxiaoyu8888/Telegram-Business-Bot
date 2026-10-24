@@ -117,7 +117,7 @@ func New(mysqlDSN, redisAddr, redisPassword string, redisDB int) (*Store, error)
 		{Key: "shop_low_stock", Value: "5", Remark: "商城销售报表和每日待办中的低库存阈值"},
 		{Key: "shop_digest_hour", Value: "9", Remark: "每天几点（0–23）给商家和管理员发送待办提醒；-1 为关闭"},
 		{Key: "shop_ship_overdue_hours", Value: "24", Remark: "付款后超过多少小时未发货算作超时，计入每日待办"},
-		{Key: "shop_points_per_usdt", Value: "10", Remark: "商城每实付 1 USDT 获得的积分（订单完成且售后期结束后发放，0 为不发放）"},
+		{Key: "shop_points_per_usdt", Value: "10", Remark: "商城每实付 1 USDT 获得的积分（订单完成时发放，售后退款按比例扣回；0 为不发放）"},
 		{Key: "shop_points_value", Value: "0.01", Remark: "1 积分可抵扣的 USDT（0 为不能抵扣）"},
 		{Key: "shop_points_max_ratio", Value: "0.5", Remark: "积分最多抵扣订单金额的比例（0.5 = 50%）"},
 		{Key: "shop_member_levels", Value: "白银:100:0.98,黄金:500:0.95,钻石:2000:0.9", Remark: "会员等级，格式：名称:累计消费 USDT:折扣,…（0.95 = 95 折）；留空则不分等级"},
@@ -131,6 +131,11 @@ func New(mysqlDSN, redisAddr, redisPassword string, redisDB int) (*Store, error)
 		if err := db.Clauses(clause.OnConflict{DoNothing: true}).Create(&c).Error; err != nil {
 			return nil, err
 		}
+	}
+	// Points are now granted at completion: refresh the seeded description if nobody edited it.
+	if err := db.Model(&model.SystemConfig{}).Where("`key` = ? AND remark = ?", "shop_points_per_usdt", "商城每实付 1 USDT 获得的积分（订单完成且售后期结束后发放，0 为不发放）").
+		Update("remark", "商城每实付 1 USDT 获得的积分（订单完成时发放，售后退款按比例扣回；0 为不发放）").Error; err != nil {
+		return nil, err
 	}
 	// Currencies are seeded once each; rates and switches are then managed in the console.
 	for _, c := range DefaultCurrencies {
