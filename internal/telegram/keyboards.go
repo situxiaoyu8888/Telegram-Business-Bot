@@ -27,10 +27,31 @@ func BackHomeKeyboard() InlineKeyboardMarkup {
 }
 
 // WithdrawKeyboard offers the withdrawable currencies, two per row.
+// usdtNetworkNames label the two USDT wallets by network in the bot's deposit and withdrawal menus.
+var usdtNetworkNames = map[string]string{"USDT": "TRC20-USDT", "USDT_ERC20": "ERC20-USDT"}
+
+// DepositNetworkKeyboard lets the user pick the network to deposit USDT on.
+func DepositNetworkKeyboard() InlineKeyboardMarkup {
+	return InlineKeyboardMarkup{InlineKeyboard: [][]InlineKeyboardButton{
+		{btn("TRC20-USDT", "dep:net:TRC20"), btn("ERC20-USDT", "dep:net:ERC20")},
+		{btn("🏠 返回首页", "home")},
+	}}
+}
+
+// WithdrawKeyboard offers the withdrawable currencies: the USDT networks first, then the rest.
 func WithdrawKeyboard(currencies []model.WalletCurrency) InlineKeyboardMarkup {
 	var rows [][]InlineKeyboardButton
+	var usdt []InlineKeyboardButton
 	for _, c := range currencies {
-		if !c.Enabled || !c.Withdrawable {
+		if name, ok := usdtNetworkNames[c.Code]; ok && c.Enabled && c.Withdrawable {
+			usdt = append(usdt, btn(name, "withdraw:cur:"+c.Code))
+		}
+	}
+	if len(usdt) > 0 {
+		rows = append(rows, usdt)
+	}
+	for _, c := range currencies {
+		if _, ok := usdtNetworkNames[c.Code]; ok || !c.Enabled || !c.Withdrawable {
 			continue
 		}
 		b := btn(c.Name, "withdraw:cur:"+c.Code)

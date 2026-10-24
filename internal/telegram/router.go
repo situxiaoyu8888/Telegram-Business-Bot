@@ -338,6 +338,10 @@ func (r *Router) handleCallback(ctx context.Context, cb *CallbackQuery) {
 		r.startPayManage(ctx, cb.Message.Chat.ID, u)
 		return
 	}
+	if strings.HasPrefix(cb.Data, "dep:net:") {
+		r.sendDepositAddress(ctx, cb.Message.Chat.ID, cb.Message.MessageID, u, strings.TrimPrefix(cb.Data, "dep:net:"))
+		return
+	}
 	if cb.Data == "dep:claim" {
 		r.startDepositClaim(ctx, cb.Message.Chat.ID, u)
 		return
@@ -526,43 +530,14 @@ func (r *Router) dispatchMenu(ctx context.Context, cb *CallbackQuery, u *model.T
 			_ = r.menuResponse(ctx, chatID, msgID, "<b>💵 USDT 充值</b>\n\n尚未为你的账号分配充值地址，请联系管理员在后台绑定。", ptrKB(BackHomeKeyboard()))
 			return
 		}
-		claim := r.depositNeedsClaim(list)
-		var b strings.Builder
-		b.WriteString("<b>💵 USDT 充值</b>\n\n以下是平台为你分配的收款地址，入账后会通知你。")
-		if claim {
-			b.WriteString("\n转账后请点「🧾 提交交易哈希」，客服核对后入账。")
-		}
-		captions := make([]string, len(list))
-		for i, a := range list {
-			if a.Network == "TRC20" {
-				captions[i] = "<b>USDT-TRC20</b>（到账后自动入账）\n<code>" + htmlEscape(a.Address) + "</code>\n⚠️ " + htmlEscape(r.menus.Config("deposit_notice", "仅支持 USDT TRC20"))
-			} else {
-				captions[i] = "<b>USDT-ERC20</b>（到账后由客服确认入账）\n<code>" + htmlEscape(a.Address) + "</code>\n⚠️ 仅支持以太坊网络的 USDT（ERC20）"
-			}
-			b.WriteString("\n\n" + captions[i])
-		}
-		kb := BackHomeKeyboard()
-		if claim {
-			kb.InlineKeyboard = append([][]InlineKeyboardButton{{btn("🧾 提交交易哈希", "dep:claim")}}, kb.InlineKeyboard...)
-		}
-		_ = r.menuResponse(ctx, chatID, msgID, b.String(), &kb)
-		// A QR code per address, for scanning with a wallet app.
-		for i, a := range list {
-			png, err := qrcode.PNG(a.Address)
-			if err == nil {
-				err = r.client.UploadPhoto(ctx, chatID, png, "📷 扫码充值 · "+captions[i], nil)
-			}
-			if err != nil {
-				r.logger.Warn("send deposit QR code failed", zap.Error(err))
-			}
-		}
+		_ = r.menuResponse(ctx, chatID, msgID, "<b>💵 USDT 充值</b>\n\n请选择充值网络：\n• TRC20-USDT：波场网络，手续费低、到账快\n• ERC20-USDT：以太坊网络\n\n⚠️ 转账时请选择与地址相同的网络，转错网络无法找回。", ptrKB(DepositNetworkKeyboard()))
 	case "withdraw":
 		_ = r.sessions.Set(ctx, u.TelegramUserID, session.Session{Scene: "withdraw", Step: "select_network", Data: map[string]any{}})
 		list, err := r.wallet.Currencies(true)
 		if err != nil {
 			return
 		}
-		_ = r.menuResponse(ctx, chatID, msgID, "<b>💸 提现</b>\n\n请选择提现币种：", ptrKB(WithdrawKeyboard(list)))
+		_ = r.menuResponse(ctx, chatID, msgID, "<b>💸 提现</b>\n\n请选择提现网络：\n• TRC20-USDT：提到波场（TRON）地址\n• ERC20-USDT：提到以太坊地址\n\n⚠️ 请确认收款地址所在的网络，转错网络无法找回。", ptrKB(WithdrawKeyboard(list)))
 	case "records":
 		var rows []model.WalletTransaction
 		_ = r.store.DB.Where("user_id=?", u.ID).Order("id desc").Limit(10).Find(&rows).Error
@@ -901,4 +876,66 @@ func trimZeros(v string) string {
 		return v
 	}
 	return d.String()
+}
+
+// sendDepositAddress shows the user's deposit address on one network (TRC20 or ERC20): its QR
+// code with the address and the buttons in one message.
+func (r *Router) sendDepositAddress(ctx context.Context, chatID int64, msgID int, u *model.TelegramUser, network string) {
+	var list []model.DepositAddress
+	_ = r.store.DB.Where("user_id=? AND status=1 AND network = ?", u.ID, network).Find(&list).Error
+	label := map[string]string{"TRC20": "TRC20-USDT", "ERC20": "ERC20-USDT"}[network]
+	if len(list) == 0 {
+		_ = r.client.SendMessage(ctx, chatID, "<b>💵 "+label+" 充值</b>\n\n尚未为你的账号分配 "+label+" 充值地址，请联系客服或选择其他网络。", ptrKB(DepositNetworkKeyboard()))
+		return
+	}
+	claim := r.depositNeedsClaim(list)
+	head := "<b>💵 " + label + " 充值</b>\n\n以下是平台为你分配的收款地址，可扫码或复制地址转账，入账后会通知你。"
+	if claim {
+		head += "\n转账后请点「🧾 提交交易哈希」，客服核对后入账。"
+	}
+	captions := make([]string, len(list))
+	for i, a := range list {
+		if a.Network == "TRC20" {
+			captions[i] = "<b>USDT-TRC20</b>（到账后自动入账）\n<code>" + htmlEscape(a.Address) + "</code>\n⚠️ " + htmlEscape(r.menus.Config("deposit_notice", "仅支持 USDT TRC20"))
+		} else {
+			captions[i] = "<b>USDT-ERC20</b>（到账后由客服确认入账）\n<code>" + htmlEscape(a.Address) + "</code>\n⚠️ 仅支持以太坊网络的 USDT（ERC20）"
+		}
+	}
+	kb := InlineKeyboardMarkup{InlineKeyboard: [][]InlineKeyboardButton{{btn("🔁 切换充值网络", "menu:deposit"), btn("🏠 返回首页", "home")}}}
+	if claim {
+		kb.InlineKeyboard = append([][]InlineKeyboardButton{{btn("🧾 提交交易哈希", "dep:claim")}}, kb.InlineKeyboard...)
+	}
+	// One message per address: its QR code with the address as the caption; the first also
+	// carries the introduction and the last the buttons. Without QR codes it is one text.
+	sent := 0
+	for i, a := range list {
+		caption := captions[i]
+		if i == 0 {
+			caption = head + "\n\n" + caption
+		}
+		var markup *InlineKeyboardMarkup
+		if i == len(list)-1 {
+			markup = &kb
+		}
+		png, err := qrcode.PNG(a.Address)
+		if err == nil {
+			err = r.client.UploadPhoto(ctx, chatID, png, caption, markup)
+		}
+		if err != nil {
+			r.logger.Warn("send deposit QR code failed", zap.Error(err))
+			break
+		}
+		sent++
+	}
+	if sent == len(list) {
+		return
+	}
+	text := head // shown again only when no photo carried it
+	if sent > 0 {
+		text = "<b>💵 " + label + " 充值</b>"
+	}
+	for _, c := range captions[sent:] {
+		text += "\n\n" + c
+	}
+	_ = r.menuResponse(ctx, chatID, msgID, text, &kb)
 }

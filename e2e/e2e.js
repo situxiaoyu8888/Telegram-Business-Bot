@@ -714,11 +714,27 @@ async function toastText(page) { return page.$eval('#toast', e => e.hidden ? '' 
   if (sql(`select count(*) from deposit_addresses where network='TRC20' and address='${TRC}'`) !== active) problems.push('bulk assignment did not give every user the pool address');
   await nav(admin, 'address_pool'); await shot(admin, '57h-admin-pool-shared');
   if (!(await admin.textContent('#content')).includes(`已分配 ${active} 人`)) problems.push('pool does not count the users of a shared address');
-  await tap(xm, 'menu:deposit', { message_id: 1, chat: pchat }); await wait(1500);
-  const depositMsg = (await sentNow()).filter(m => m.chat_id === 9001 && /USDT 充值/.test(m.text || '')).pop();
-  if (!depositMsg || !depositMsg.text.includes(TRC) || !depositMsg.text.includes(ERC)) problems.push('bot deposit menu does not show both addresses');
-  const qrs = (await sentNow()).filter(m => m.method === 'sendPhoto' && m.chat_id === 9001 && m.photo?.upload && /扫码充值/.test(m.caption || ''));
-  if (qrs.length !== 2 || qrs.some(q => q.photo.bytes < 200)) problems.push('bot deposit menu did not send both QR codes: ' + qrs.length);
+  await tap(xm, 'menu:deposit', { message_id: 1, chat: pchat }); await wait(1200);
+  {
+    const choice = (await sentNow()).filter(m => m.chat_id === 9001 && /请选择充值网络/.test(m.text || '')).pop();
+    if (!choice || !/dep:net:TRC20/.test(JSON.stringify(choice.reply_markup)) || !/dep:net:ERC20/.test(JSON.stringify(choice.reply_markup))) problems.push('deposit menu does not offer TRC20-USDT and ERC20-USDT');
+  }
+  await tap(xm, 'dep:net:TRC20', { message_id: 1, chat: pchat }); await wait(1000);
+  await tap(xm, 'dep:net:ERC20', { message_id: 1, chat: pchat }); await wait(1200);
+  // One message per address: the QR code with the address (the first with the introduction, the
+  // last with the buttons); no separate text message.
+  {
+    const all = await sentNow();
+    const qrs = all.filter(m => m.method === 'sendPhoto' && m.chat_id === 9001 && m.photo?.upload && (m.caption || '').includes('USDT-')).slice(-2);
+    const captions = qrs.map(q => q.caption).join('\n');
+    if (qrs.length !== 2 || qrs.some(q => q.photo.bytes < 200) || !captions.includes(TRC) || !captions.includes(ERC)) problems.push('bot deposit menu did not send both QR codes with their addresses: ' + qrs.length);
+    if (!/TRC20-USDT 充值/.test(qrs[0]?.caption || '') || !/ERC20-USDT 充值/.test(qrs[1]?.caption || '') || qrs.some(q => !/dep:claim/.test(String(q.reply_markup || '')))) problems.push('deposit introduction or buttons not on the QR messages');
+    await tap(xm, 'menu:withdraw', { message_id: 1, chat: pchat }); await wait(1000);
+    const wd = (await sentNow()).filter(m => m.chat_id === 9001 && /请选择提现网络/.test(m.text || '')).pop();
+    const wdKb = JSON.stringify(wd?.reply_markup || '');
+    if (!wd || !wdKb.includes('TRC20-USDT') || !wdKb.includes('ERC20-USDT')) problems.push('withdraw menu does not offer TRC20-USDT and ERC20-USDT: ' + wdKb.slice(0, 200));
+    if (all.some(m => m.chat_id === 9001 && m.method !== 'sendPhoto' && /以下是平台为你分配的收款地址/.test(m.text || '') && m.mid > (qrs[0]?.mid || 0) - 3)) problems.push('deposit address still sent as a separate text message');
+  }
   await shopPage.click('.wact button:nth-child(1)'); await shopPage.waitForTimeout(800); await shot(shopPage, '56a-shop-deposit');
   const depText = await shopPage.textContent('#app');
   if (!depText.includes(TRC) || !depText.includes(ERC) || !depText.includes('USDT-ERC20')) problems.push('shop deposit page does not show both addresses');

@@ -2,6 +2,7 @@ package telegram
 
 import (
 	"context"
+	"strings"
 	"telegram-business-bot/internal/model"
 )
 
@@ -48,5 +49,10 @@ func (r *Router) menuResponse(ctx context.Context, chatID int64, msgID int, text
 	if msgID == 0 {
 		return r.client.SendMessage(ctx, chatID, text, kb)
 	}
-	return r.client.EditMessage(ctx, chatID, msgID, text, kb)
+	err := r.client.EditMessage(ctx, chatID, msgID, text, kb)
+	// A photo (e.g. a deposit QR code) has no text to edit: answer with a new message.
+	if err != nil && strings.Contains(err.Error(), "no text in the message") {
+		return r.client.SendMessage(ctx, chatID, text, kb)
+	}
+	return err
 }
